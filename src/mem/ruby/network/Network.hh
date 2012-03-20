@@ -95,6 +95,9 @@ class Network : public SimObject
     virtual void printConfig(std::ostream& out) const = 0;
     virtual void print(std::ostream& out) const = 0;
 
+    //Required to let Topaz be aware of ruby node mapping
+    virtual void setTopazMapping (SwitchID node0, SwitchID node1) {};
+
   protected:
     // Private copy constructor and assignment operator
     Network(const Network& obj);
