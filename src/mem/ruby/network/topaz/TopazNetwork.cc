@@ -109,10 +109,10 @@ TopazNetwork::TopazNetwork(const Params *p)
        for (int j = 0; j < m_virtual_networks; j++) {
             m_toNetQueues[node][j] = new
                     MessageBuffer(csprintf("toNet node %d j %d", node, j));
-            m_toNetQueues[node][j]->toNet();
+            m_toNetQueues[node][j]->setToNet();
             m_fromNetQueues[node][j] = new
                     MessageBuffer(csprintf("fromNet node %d j %d", node, j));
-             m_fromNetQueues[node][j]->fromNet();
+             m_fromNetQueues[node][j]->setFromNet();
         }
     }
     m_flitSize=p->topaz_flit_size;

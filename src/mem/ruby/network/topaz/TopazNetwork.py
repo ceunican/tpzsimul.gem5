@@ -36,10 +36,17 @@ class TopazNetwork(RubyNetwork):
     type = 'TopazNetwork'
     buffer_size = Param.Int(0,
         "default buffer size; 0 indicates infinite buffering");
-    endpoint_bandwidth = Param.Int(1000, "bandwidth adjustment factor");
-    adaptive_routing = Param.Bool(False, "enable adaptive routing");
-    topaz_init_file = Param.String("./TPZSimul__ini", "File that declares <simulation>.sgm, <network>.sgm and <router>.sgm");
-    topaz_network =Param.String (None, "TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ");
-    topaz_flit_size = Param.Int(0, "Number of bytes per physical router-to-router wire");
-    topaz_clock_ratio = Param.Int(1,"memory-network clock multiplier");
-    topaz_adaptive_interface_threshold = Param.Int(0,"Number of messages that has to be transmitted before to activate TOPAZ");
+    endpoint_bandwidth = Param.Int(1000,
+                      "bandwidth adjustment factor");
+    adaptive_routing = Param.Bool(False,
+                      "enable adaptive routing");
+    topaz_init_file = Param.String("./TPZSimul__ini",
+                      "File that declares <simulation>.sgm, <network>.sgm and <router>.sgm");
+    topaz_network =Param.String (None,
+                      "TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ");
+    topaz_flit_size = Param.Int(0,
+                      "Number of bytes per physical router-to-router wire");
+    topaz_clock_ratio = Param.Int(1,
+                      "memory-network clock multiplier");
+    topaz_adaptive_interface_threshold = Param.Int(0,
+                      "infligh patckets required to activate TOPAZ");

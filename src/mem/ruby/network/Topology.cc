@@ -257,11 +257,11 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
                          link_entry.direction, 
                          routing_table_entry,
                          isReconfiguration);
-        //REquired to make TOPAZ aware of ruby Mapping
-        //This should be done here in order to
-        //have the reay in Topology Builder
-        //I'm unable to circunvent this. It is the only
-        //change done in RUBY outside the network/topaz
+        //Required to make TOPAZ aware of ruby Mapping
+        //When topaz needs to inject (after ruby "interception")
+        //a message should be know what router is
+        //connected to the destination machineID. This function
+        //constructs the maping between Topaz routers and ruby machineIds
         net->setTopazMapping(dest-m_nodes, src);
     } else {
         assert((src >= 2 * m_nodes) && (dest >= 2 * m_nodes));
