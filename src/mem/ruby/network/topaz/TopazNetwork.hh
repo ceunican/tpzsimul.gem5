@@ -36,6 +36,7 @@
 
 #include "mem/ruby/common/Global.hh"
 #include "mem/ruby/network/Network.hh"
+#include "mem/ruby/slicc_interface/NetworkMessage.hh"
 #include "params/TopazNetwork.hh"
 #include "sim/sim_object.hh"
 
@@ -43,7 +44,6 @@
 //http://www.atc.unican.es/topaz/ and follow the guide
 #include <TPZSimulator.hpp>
 
-#include "mem/ruby/slicc_interface/NetworkMessage.hh"
 struct MessageTopaz{
     MsgPtr message;
     int    vnet;
@@ -78,7 +78,7 @@ class TopazNetwork : public Network
     void clearStats();
     void printConfig(std::ostream& out) const;
 
-    int getNumberOfNodes()const {return m_nodes;};
+    int getNumberOfNodes() {return m_nodes;};
     unsigned getProcRouterRatio() const	{  return m_processorClockRatio;}
     unsigned getFlitSize() const { return m_flitSize;}
     unsigned getUnifiy() { return m_unify; }
@@ -86,7 +86,7 @@ class TopazNetwork : public Network
     int getMessageSizeTopaz(MessageSizeType size_type) const;
     int getTriggerSwitch() const { return m_firstTrigger; }
     void setTriggerSwitch(int router) {	m_firstTrigger=router; }
-    bool inWarmup() { return m_in_warmup; }
+    const bool inWarmup() { return m_in_warmup; }
     bool useGemsNetwork(int vnet);
     void enableTopaz();
     void disableTopaz();
@@ -100,10 +100,10 @@ class TopazNetwork : public Network
     void increaseTotalMsg (int num) { m_totalNetMsg+=num; }
     int getTotalMsg () { return m_totalNetMsg; }
     int getTotalTopazMsg() { return m_totalTopazMsg; }
-    const unsigned numberOfMessages() { return m_number_messages; }
-    const unsigned numberOfOrderedMessages() { return m_number_ordered_messages; }
-    const unsigned numberOfTopazOrderedMessages() { return m_number_topaz_ordered_messages; }
-    const unsigned numberOfTopazMessages() { return m_number_topaz_messages; }
+    const int numberOfMessages() { return m_number_messages; }
+    const int numberOfOrderedMessages() { return m_number_ordered_messages; }
+    const int numberOfTopazOrderedMessages() { return m_number_topaz_ordered_messages; }
+    const int numberOfTopazMessages() { return m_number_topaz_messages; }
     void setTopazMapping (SwitchID node0, SwitchID node1);
     SwitchID getSwitch(int ext_node) { return m_forward_mapping[ext_node]; }
     NetDest getMachines(SwitchID sid) { return m_reverse_mapping[sid]; }
@@ -118,8 +118,8 @@ class TopazNetwork : public Network
     MessageBuffer* getFromNetQueue(NodeID id, bool ordered, int network_num, std::string vnet_type);
     virtual const std::vector<Throttle*>* getThrottles(NodeID id) const;
 
-    bool isVNetOrdered(int vnet) { return m_ordered[vnet]; }
-    bool validVirtualNetwork(int vnet) { return m_in_use[vnet]; }
+    const bool isVNetOrdered(int vnet) { return m_ordered[vnet]; }
+    const bool validVirtualNetwork(int vnet) { return m_in_use[vnet]; }
 
     int getNumNodes() {return m_nodes; }
 

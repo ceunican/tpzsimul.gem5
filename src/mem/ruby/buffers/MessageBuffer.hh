@@ -147,10 +147,10 @@ class MessageBuffer
     void setIncomingLink(int link_id) { m_input_link_id = link_id; }
     void setVnet(int net) { m_vnet_id = net; }
     //REquired by TOPAZ adaptive interface
-    bool isToNet() {return m_toNet;}
-    void toNet() { m_toNet = true; }
+    const bool isToNet() {return m_toNet;}
+    void setToNet() { m_toNet = true; }
     bool isFromNet() { return m_fromNet; }
-    void fromNet() { m_fromNet = true; }
+    const void setFromNet() { m_fromNet = true; }
 
   private:
     //added by SS

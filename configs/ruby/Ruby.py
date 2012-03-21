@@ -74,7 +74,8 @@ def define_options(parser):
 
     #TOPAZ options
     parser.add_option("--topaz-init-file", type = "string", default="./TPZSimul.ini",
-                       help="TOPAZ: File that declares <simulation>.sgm, <network>.sgm and <router>.sgm" )
+                       help="TOPAZ: File that declares <simulation>.sgm,"\
+                            " <network>.sgm and <router>.sgm" )
 
     parser.add_option("--topaz-network", type = "string", default=False,
                        help="TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ" )
@@ -86,7 +87,8 @@ def define_options(parser):
                       help="TOPAZ: memory-network clock multiplier")
 
     parser.add_option("--topaz-adaptive-interface-threshold",  type = "int", default=0,
-                       help="TOPAZ: Number of messages that has to be transmitted before to activate TOPAZ" )
+                       help="TOPAZ: Number of messages that has to be transmitted "\
+                             "before to activate TOPAZ" )
 
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
@@ -170,7 +172,7 @@ def create_system(options, system, piobus = None, dma_devices = []):
        network = NetworkClass(ruby_system = ruby, topology = net_topology,\
                               enable_fault_model=True, fault_model = fault_model)
     elif options.topaz_network:
-       #Garnet and Topaz are explusive
+       #Garnet and Topaz are incompatible
        assert (not(options.garnet_network !=None))
        network = NetworkClass(ruby_system = ruby, topology = net_topology, \
                               topaz_network = options.topaz_network,\
