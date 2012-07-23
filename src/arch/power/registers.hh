@@ -31,13 +31,17 @@
 #ifndef __ARCH_POWER_REGISTERS_HH__
 #define __ARCH_POWER_REGISTERS_HH__
 
-#include "arch/power/max_inst_regs.hh"
+#include "arch/power/generated/max_inst_regs.hh"
 #include "arch/power/miscregs.hh"
 
 namespace PowerISA {
 
 using PowerISAInst::MaxInstSrcRegs;
 using PowerISAInst::MaxInstDestRegs;
+
+// Power writes a misc register outside of the isa parser, so it can't
+// be detected by it. Manually add it here.
+const int MaxMiscDestRegs = PowerISAInst::MaxMiscDestRegs + 1;
 
 typedef uint8_t RegIndex;
 

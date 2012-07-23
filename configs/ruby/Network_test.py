@@ -31,6 +31,7 @@ import m5
 from m5.objects import *
 from m5.defines import buildEnv
 from m5.util import addToPath
+from Ruby import create_topology
 
 #
 # Note: the cache latency is only used by the sequencer on fast path hits
@@ -41,7 +42,7 @@ class Cache(RubyCache):
 def define_options(parser):
     return
 
-def create_system(options, system, piobus, dma_devices, ruby_system):
+def create_system(options, system, piobus, dma_ports, ruby_system):
     
     if buildEnv['PROTOCOL'] != 'Network_test':
         panic("This script requires the Network_test protocol to be built.")
@@ -52,7 +53,7 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
     # The Garnet tester protocol does not support fs nor dma
     #
     assert(piobus == None)
-    assert(dma_devices == [])
+    assert(dma_ports == [])
     
     #
     # The ruby network creation expects the list of nodes in the system to be
@@ -88,15 +89,13 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
         cpu_seq = RubySequencer(icache = cache,
                                 dcache = cache,
-                                physMemPort = system.physmem.port,
-                                physmem = system.physmem,
                                 using_network_tester = True,
                                 ruby_system = ruby_system)
 
         l1_cntrl.sequencer = cpu_seq
 
         if piobus != None:
-            cpu_seq.pio_port = piobus.port
+            cpu_seq.pio_port = piobus.slave
 
         exec("system.l1_cntrl%d = l1_cntrl" % i)
         #
@@ -107,8 +106,9 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
         cntrl_count += 1
 
-    phys_mem_size = long(system.physmem.range.second) - \
-                      long(system.physmem.range.first) + 1
+    phys_mem_size = 0
+    for mem in system.memories.unproxy(system):
+        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
     mem_module_size = phys_mem_size / options.num_dirs
 
     for i in xrange(options.num_dirs):
@@ -136,4 +136,6 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
     all_cntrls = l1_cntrl_nodes + dir_cntrl_nodes
 
-    return (cpu_sequencers, dir_cntrl_nodes, all_cntrls)
+    topology = create_topology(all_cntrls, options)
+
+    return (cpu_sequencers, dir_cntrl_nodes, topology)

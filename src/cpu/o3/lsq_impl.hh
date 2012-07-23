@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -111,7 +111,7 @@ LSQ<Impl>::LSQ(O3CPU *cpu_ptr, IEW *iew_ptr, DerivO3CPUParams *params)
     for (ThreadID tid = 0; tid < numThreads; tid++) {
         thread[tid].init(cpu, iew_ptr, params, this,
                          maxLQEntries, maxSQEntries, tid);
-        thread[tid].setDcachePort(cpu_ptr->getDcachePort());
+        thread[tid].setDcachePort(&cpu_ptr->getDataPort());
     }
 }
 
@@ -319,28 +319,30 @@ LSQ<Impl>::recvRetry()
 
 template <class Impl>
 bool
-LSQ<Impl>::recvTiming(PacketPtr pkt)
+LSQ<Impl>::recvTimingResp(PacketPtr pkt)
 {
     if (pkt->isError())
         DPRINTF(LSQ, "Got error packet back for address: %#X\n",
                 pkt->getAddr());
-    if (pkt->isResponse()) {
-        thread[pkt->req->threadId()].completeDataAccess(pkt);
-    } else {
-        DPRINTF(LSQ, "received pkt for addr:%#x %s\n", pkt->getAddr(),
-                pkt->cmdString());
-
-        // must be a snoop
-        if (pkt->isInvalidate()) {
-            DPRINTF(LSQ, "received invalidation for addr:%#x\n",
-                    pkt->getAddr());
-            for (ThreadID tid = 0; tid < numThreads; tid++) {
-                thread[tid].checkSnoop(pkt);
-            }
-        }
-        // to provide stronger consistency model
-    }
+    thread[pkt->req->threadId()].completeDataAccess(pkt);
     return true;
+}
+
+template <class Impl>
+void
+LSQ<Impl>::recvTimingSnoopReq(PacketPtr pkt)
+{
+    DPRINTF(LSQ, "received pkt for addr:%#x %s\n", pkt->getAddr(),
+            pkt->cmdString());
+
+    // must be a snoop
+    if (pkt->isInvalidate()) {
+        DPRINTF(LSQ, "received invalidation for addr:%#x\n",
+                pkt->getAddr());
+        for (ThreadID tid = 0; tid < numThreads; tid++) {
+            thread[tid].checkSnoop(pkt);
+        }
+    }
 }
 
 template<class Impl>

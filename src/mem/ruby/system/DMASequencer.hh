@@ -31,6 +31,7 @@
 
 #include <ostream>
 
+#include "mem/protocol/DMASequencerRequestType.hh"
 #include "mem/ruby/common/DataBlock.hh"
 #include "mem/ruby/system/RubyPort.hh"
 #include "params/DMASequencer.hh"
@@ -63,7 +64,7 @@ class DMASequencer : public RubyPort
     void dataCallback(const DataBlock & dblk);
     void ackCallback();
 
-    void printConfig(std::ostream & out);
+    void recordRequestType(DMASequencerRequestType requestType);
 
   private:
     void issueNext();

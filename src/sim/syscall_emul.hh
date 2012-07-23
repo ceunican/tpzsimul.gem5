@@ -121,18 +121,18 @@ class BaseBufferArg {
     //
     // copy data into simulator space (read from target memory)
     //
-    virtual bool copyIn(SETranslatingPortProxy* memproxy)
+    virtual bool copyIn(SETranslatingPortProxy &memproxy)
     {
-        memproxy->readBlob(addr, bufPtr, size);
+        memproxy.readBlob(addr, bufPtr, size);
         return true;    // no EFAULT detection for now
     }
 
     //
     // copy data out of simulator space (write to target memory)
     //
-    virtual bool copyOut(SETranslatingPortProxy* memproxy)
+    virtual bool copyOut(SETranslatingPortProxy &memproxy)
     {
-        memproxy->writeBlob(addr, bufPtr, size);
+        memproxy.writeBlob(addr, bufPtr, size);
         return true;    // no EFAULT detection for now
     }
 
@@ -334,6 +334,87 @@ SyscallReturn getegidFunc(SyscallDesc *desc, int num,
 SyscallReturn cloneFunc(SyscallDesc *desc, int num,
                                LiveProcess *p, ThreadContext *tc);
 
+/// Futex system call
+///  Implemented by Daniel Sanchez
+///  Used by printf's in multi-threaded apps
+template <class OS>
+SyscallReturn
+futexFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+          ThreadContext *tc)
+{
+    int index_uaddr = 0;
+    int index_op = 1;
+    int index_val = 2;
+    int index_timeout = 3;
+
+    uint64_t uaddr = process->getSyscallArg(tc, index_uaddr);
+    int op = process->getSyscallArg(tc, index_op);
+    int val = process->getSyscallArg(tc, index_val);
+    uint64_t timeout = process->getSyscallArg(tc, index_timeout);
+
+    std::map<uint64_t, std::list<ThreadContext *> * >
+        &futex_map = tc->getSystemPtr()->futexMap;
+
+    DPRINTF(SyscallVerbose, "In sys_futex: Address=%llx, op=%d, val=%d\n",
+            uaddr, op, val);
+
+
+    if (op == OS::TGT_FUTEX_WAIT) {
+        if (timeout != 0) {
+            warn("sys_futex: FUTEX_WAIT with non-null timeout unimplemented;"
+                 "we'll wait indefinitely");
+        }
+
+        uint8_t *buf = new uint8_t[sizeof(int)];
+        tc->getMemProxy().readBlob((Addr)uaddr, buf, (int)sizeof(int));
+        int mem_val = *((int *)buf);
+        delete buf;
+
+        if(val != mem_val) {
+            DPRINTF(SyscallVerbose, "sys_futex: FUTEX_WAKE, read: %d, "
+                                    "expected: %d\n", mem_val, val);
+            return -OS::TGT_EWOULDBLOCK;
+        }
+
+        // Queue the thread context
+        std::list<ThreadContext *> * tcWaitList;
+        if (futex_map.count(uaddr)) {
+            tcWaitList = futex_map.find(uaddr)->second;
+        } else {
+            tcWaitList = new std::list<ThreadContext *>();
+            futex_map.insert(std::pair< uint64_t,
+                            std::list<ThreadContext *> * >(uaddr, tcWaitList));
+        }
+        tcWaitList->push_back(tc);
+        DPRINTF(SyscallVerbose, "sys_futex: FUTEX_WAIT, suspending calling "
+                                "thread context\n");
+        tc->suspend();
+        return 0;
+    } else if (op == OS::TGT_FUTEX_WAKE){
+        int wokenUp = 0;
+        std::list<ThreadContext *> * tcWaitList;
+        if (futex_map.count(uaddr)) {
+            tcWaitList = futex_map.find(uaddr)->second;
+            while (tcWaitList->size() > 0 && wokenUp < val) {
+                tcWaitList->front()->activate();
+                tcWaitList->pop_front();
+                wokenUp++;
+            }
+            if(tcWaitList->empty()) {
+                futex_map.erase(uaddr);
+                delete tcWaitList;
+            }
+        }
+        DPRINTF(SyscallVerbose, "sys_futex: FUTEX_WAKE, activated %d waiting "
+                                "thread contexts\n", wokenUp);
+        return wokenUp;
+    } else {
+        warn("sys_futex: op %d is not implemented, just returning...");
+        return 0;
+    }
+
+}
+
 
 /// Pseudo Funcs  - These functions use a different return convension,
 /// returning a second value in a register other than the normal return register
@@ -464,7 +545,7 @@ convertStat64Buf(target_stat &tgt, host_stat64 *host, bool fakeTTY = false)
 //Here are a couple convenience functions
 template<class OS>
 static void
-copyOutStatBuf(SETranslatingPortProxy* mem, Addr addr,
+copyOutStatBuf(SETranslatingPortProxy &mem, Addr addr,
         hst_stat *host, bool fakeTTY = false)
 {
     typedef TypedBufferArg<typename OS::tgt_stat> tgt_stat_buf;
@@ -475,7 +556,7 @@ copyOutStatBuf(SETranslatingPortProxy* mem, Addr addr,
 
 template<class OS>
 static void
-copyOutStat64Buf(SETranslatingPortProxy* mem, Addr addr,
+copyOutStat64Buf(SETranslatingPortProxy &mem, Addr addr,
         hst_stat64 *host, bool fakeTTY = false)
 {
     typedef TypedBufferArg<typename OS::tgt_stat64> tgt_stat_buf;
@@ -530,7 +611,7 @@ openFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index)))
         return -EFAULT;
 
@@ -608,7 +689,7 @@ chmodFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -714,7 +795,7 @@ statFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -744,7 +825,7 @@ stat64Func(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index)))
         return -EFAULT;
     Addr bufPtr = process->getSyscallArg(tc, index);
@@ -809,7 +890,7 @@ lstatFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -838,7 +919,7 @@ lstat64Func(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -899,7 +980,7 @@ statfsFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -958,19 +1039,19 @@ writevFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
         return -EBADF;
     }
 
-    SETranslatingPortProxy *p = tc->getMemProxy();
+    SETranslatingPortProxy &p = tc->getMemProxy();
     uint64_t tiov_base = process->getSyscallArg(tc, index);
     size_t count = process->getSyscallArg(tc, index);
     struct iovec hiov[count];
     for (size_t i = 0; i < count; ++i) {
         typename OS::tgt_iovec tiov;
 
-        p->readBlob(tiov_base + i*sizeof(typename OS::tgt_iovec),
-                    (uint8_t*)&tiov, sizeof(typename OS::tgt_iovec));
+        p.readBlob(tiov_base + i*sizeof(typename OS::tgt_iovec),
+                   (uint8_t*)&tiov, sizeof(typename OS::tgt_iovec));
         hiov[i].iov_len = TheISA::gtoh(tiov.iov_len);
         hiov[i].iov_base = new char [hiov[i].iov_len];
-        p->readBlob(TheISA::gtoh(tiov.iov_base), (uint8_t *)hiov[i].iov_base,
-                    hiov[i].iov_len);
+        p.readBlob(TheISA::gtoh(tiov.iov_base), (uint8_t *)hiov[i].iov_base,
+                   hiov[i].iov_len);
     }
 
     int result = writev(process->sim_fd(fd), hiov, count);
@@ -1003,6 +1084,9 @@ mmapFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
     int flags = p->getSyscallArg(tc, index);
     int tgt_fd = p->getSyscallArg(tc, index);
     // int offset = p->getSyscallArg(tc, index);
+
+    if (length > 0x100000000ULL)
+        warn("mmap length argument %#x is unreasonably large.\n", length);
 
     if (!(flags & OS::TGT_MAP_ANONYMOUS)) {
         Process::FdMap *fd_map = p->sim_fd_obj(tgt_fd);
@@ -1136,7 +1220,7 @@ utimesFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     std::string path;
 
     int index = 0;
-    if (!tc->getMemProxy()->tryReadString(path,
+    if (!tc->getMemProxy().tryReadString(path,
                 process->getSyscallArg(tc, index))) {
         return -EFAULT;
     }
@@ -1255,8 +1339,8 @@ timeFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     if(taddr != 0) {
         typename OS::time_t t = sec;
         t = TheISA::htog(t);
-        SETranslatingPortProxy *p = tc->getMemProxy();
-        p->writeBlob(taddr, (uint8_t*)&t, (int)sizeof(typename OS::time_t));
+        SETranslatingPortProxy &p = tc->getMemProxy();
+        p.writeBlob(taddr, (uint8_t*)&t, (int)sizeof(typename OS::time_t));
     }
     return sec;
 }

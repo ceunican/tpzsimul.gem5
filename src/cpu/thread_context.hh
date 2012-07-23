@@ -50,17 +50,17 @@
 #include "arch/types.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 
 // @todo: Figure out a more architecture independent way to obtain the ITB and
 // DTB pointers.
 namespace TheISA
 {
+    class Decoder;
     class TLB;
 }
 class BaseCPU;
+class CheckerCPU;
 class Checkpoint;
-class Decoder;
 class EndQuiesceEvent;
 class SETranslatingPortProxy;
 class FSTranslatingPortProxy;
@@ -70,8 +70,8 @@ class System;
 namespace TheISA {
     namespace Kernel {
         class Statistics;
-    };
-};
+    }
+}
 
 /**
  * ThreadContext is the external interface to all thread state for
@@ -133,19 +133,17 @@ class ThreadContext
 
     virtual TheISA::TLB *getDTBPtr() = 0;
 
-#if USE_CHECKER
-    virtual BaseCPU *getCheckerCpuPtr() = 0;
-#endif
+    virtual CheckerCPU *getCheckerCpuPtr() = 0;
 
-    virtual Decoder *getDecoderPtr() = 0;
+    virtual TheISA::Decoder *getDecoderPtr() = 0;
 
     virtual System *getSystemPtr() = 0;
 
     virtual TheISA::Kernel::Statistics *getKernelStats() = 0;
 
-    virtual PortProxy* getPhysProxy() = 0;
+    virtual PortProxy &getPhysProxy() = 0;
 
-    virtual FSTranslatingPortProxy* getVirtProxy() = 0;
+    virtual FSTranslatingPortProxy &getVirtProxy() = 0;
 
     /**
      * Initialise the physical and virtual port proxies and tie them to
@@ -155,7 +153,7 @@ class ThreadContext
      */
     virtual void initMemProxies(ThreadContext *tc) = 0;
 
-    virtual SETranslatingPortProxy *getMemProxy() = 0;
+    virtual SETranslatingPortProxy &getMemProxy() = 0;
 
     virtual Process *getProcessPtr() = 0;
 
@@ -215,9 +213,7 @@ class ThreadContext
 
     virtual void pcState(const TheISA::PCState &val) = 0;
 
-#if USE_CHECKER
     virtual void pcStateNoRecord(const TheISA::PCState &val) = 0;
-#endif
 
     virtual Addr instAddr() = 0;
 
@@ -308,24 +304,22 @@ class ProxyThreadContext : public ThreadContext
 
     TheISA::TLB *getDTBPtr() { return actualTC->getDTBPtr(); }
 
-#if USE_CHECKER
-    BaseCPU *getCheckerCpuPtr() { return actualTC->getCheckerCpuPtr(); }
-#endif
+    CheckerCPU *getCheckerCpuPtr() { return actualTC->getCheckerCpuPtr(); }
 
-    Decoder *getDecoderPtr() { return actualTC->getDecoderPtr(); }
+    TheISA::Decoder *getDecoderPtr() { return actualTC->getDecoderPtr(); }
 
     System *getSystemPtr() { return actualTC->getSystemPtr(); }
 
     TheISA::Kernel::Statistics *getKernelStats()
     { return actualTC->getKernelStats(); }
 
-    PortProxy* getPhysProxy() { return actualTC->getPhysProxy(); }
+    PortProxy &getPhysProxy() { return actualTC->getPhysProxy(); }
 
-    FSTranslatingPortProxy* getVirtProxy() { return actualTC->getVirtProxy(); }
+    FSTranslatingPortProxy &getVirtProxy() { return actualTC->getVirtProxy(); }
 
     void initMemProxies(ThreadContext *tc) { actualTC->initMemProxies(tc); }
 
-    SETranslatingPortProxy* getMemProxy() { return actualTC->getMemProxy(); }
+    SETranslatingPortProxy &getMemProxy() { return actualTC->getMemProxy(); }
 
     Process *getProcessPtr() { return actualTC->getProcessPtr(); }
 
@@ -392,9 +386,7 @@ class ProxyThreadContext : public ThreadContext
 
     void pcState(const TheISA::PCState &val) { actualTC->pcState(val); }
 
-#if USE_CHECKER
     void pcStateNoRecord(const TheISA::PCState &val) { actualTC->pcState(val); }
-#endif
 
     Addr instAddr() { return actualTC->instAddr(); }
     Addr nextInstAddr() { return actualTC->nextInstAddr(); }

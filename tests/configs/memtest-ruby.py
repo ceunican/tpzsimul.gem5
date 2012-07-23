@@ -39,17 +39,16 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 addToPath(config_root+'/configs/common')
 addToPath(config_root+'/configs/ruby')
+addToPath(config_root+'/configs/topologies')
 
 import Ruby
+import Options
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
-#
 # Add the ruby specific and protocol specific options
-#
 Ruby.define_options(parser)
-
-execfile(os.path.join(config_root, "configs/common", "Options.py"))
 
 (options, args) = parser.parse_args()
 
@@ -79,8 +78,9 @@ options.num_cpus = nb_cores
  
 # system simulated
 system = System(cpu = cpus,
-                funcmem = PhysicalMemory(),
-                physmem = PhysicalMemory())
+                funcmem = SimpleMemory(in_addr_map = False),
+                funcbus = NoncoherentBus(),
+                physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
@@ -91,8 +91,8 @@ for (i, ruby_port) in enumerate(system.ruby._cpu_ruby_ports):
      # Tie the cpu test and functional ports to the ruby cpu ports and
      # physmem, respectively
      #
-     cpus[i].test = ruby_port.port
-     cpus[i].functional = system.funcmem.port
+     cpus[i].test = ruby_port.slave
+     cpus[i].functional = system.funcbus.slave
      
      #
      # Since the memtester is incredibly bursty, increase the deadlock
@@ -105,6 +105,9 @@ for (i, ruby_port) in enumerate(system.ruby._cpu_ruby_ports):
      # the tester.
      #
      ruby_port.access_phys_mem = False
+
+# connect reference memory to funcbus
+system.funcmem.port = system.funcbus.master
 
 # -----------------------
 # run simulation

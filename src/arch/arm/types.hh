@@ -48,7 +48,7 @@
 #include "base/hashmap.hh"
 #include "base/misc.hh"
 #include "base/types.hh"
-#include "debug/Predecoder.hh"
+#include "debug/Decoder.hh"
 
 namespace ArmISA
 {
@@ -332,8 +332,8 @@ namespace ArmISA
         advance()
         {
             Base::advance();
-            npc(pc() + (thumb() ? 2 : 4));
             flags = nextFlags;
+            npc(pc() + (thumb() ? 2 : 4));
 
             if (_nextItstate) {
                 _itstate = _nextItstate;
@@ -342,7 +342,7 @@ namespace ArmISA
                 ITSTATE it = _itstate;
                 uint8_t cond_mask = it.mask;
                 uint8_t thumb_cond = it.cond;
-                DPRINTF(Predecoder, "Advancing ITSTATE from %#x,%#x.\n",
+                DPRINTF(Decoder, "Advancing ITSTATE from %#x,%#x.\n",
                         thumb_cond, cond_mask);
                 cond_mask <<= 1;
                 uint8_t new_bit = bits(cond_mask, 4);
@@ -351,7 +351,7 @@ namespace ArmISA
                     thumb_cond = 0;
                 else
                     replaceBits(thumb_cond, 0, new_bit);
-                DPRINTF(Predecoder, "Advancing ITSTATE to %#x,%#x.\n",
+                DPRINTF(Decoder, "Advancing ITSTATE to %#x,%#x.\n",
                         thumb_cond, cond_mask);
                 it.mask = cond_mask;
                 it.cond = thumb_cond;
@@ -540,13 +540,13 @@ namespace ArmISA
 
 } // namespace ArmISA
 
-namespace __hash_namespace {
+__hash_namespace_begin
     template<>
     struct hash<ArmISA::ExtMachInst> : public hash<uint32_t> {
         size_t operator()(const ArmISA::ExtMachInst &emi) const {
             return hash<uint32_t>::operator()((uint32_t)emi);
         };
     };
-}
+__hash_namespace_end
 
 #endif

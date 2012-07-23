@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -45,7 +45,8 @@
 
 #include "arch/kernel_stats.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
+#include "cpu/checker/cpu.hh"
+#include "cpu/checker/thread_context.hh"
 #include "cpu/o3/cpu.hh"
 #include "cpu/o3/isa_specific.hh"
 #include "cpu/o3/thread_context.hh"
@@ -62,11 +63,6 @@
 #include "sim/process.hh"
 #include "sim/stat_control.hh"
 #include "sim/system.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#include "cpu/checker/thread_context.hh"
-#endif
 
 #if THE_ISA == ALPHA_ISA
 #include "arch/alpha/osfpal.hh"
@@ -91,16 +87,13 @@ BaseO3CPU::regStats()
 
 template<class Impl>
 bool
-FullO3CPU<Impl>::IcachePort::recvTiming(PacketPtr pkt)
+FullO3CPU<Impl>::IcachePort::recvTimingResp(PacketPtr pkt)
 {
     DPRINTF(O3CPU, "Fetch unit received timing\n");
-    if (pkt->isResponse()) {
-        // We shouldn't ever get a block in ownership state
-        assert(!(pkt->memInhibitAsserted() && !pkt->sharedAsserted()));
+    // We shouldn't ever get a block in ownership state
+    assert(!(pkt->memInhibitAsserted() && !pkt->sharedAsserted()));
+    fetch->processCacheCompletion(pkt);
 
-        fetch->processCacheCompletion(pkt);
-    }
-    //else Snooped a coherence request, just return
     return true;
 }
 
@@ -113,9 +106,16 @@ FullO3CPU<Impl>::IcachePort::recvRetry()
 
 template <class Impl>
 bool
-FullO3CPU<Impl>::DcachePort::recvTiming(PacketPtr pkt)
+FullO3CPU<Impl>::DcachePort::recvTimingResp(PacketPtr pkt)
 {
-    return lsq->recvTiming(pkt);
+    return lsq->recvTimingResp(pkt);
+}
+
+template <class Impl>
+void
+FullO3CPU<Impl>::DcachePort::recvTimingSnoopReq(PacketPtr pkt)
+{
+    lsq->recvTimingSnoopReq(pkt);
 }
 
 template <class Impl>
@@ -263,7 +263,6 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
         _status = Idle;
     }
 
-#if USE_CHECKER
     if (params->checker) {
         BaseCPU *temp_checker = params->checker;
         checker = dynamic_cast<Checker<Impl> *>(temp_checker);
@@ -272,7 +271,6 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
     } else {
         checker = NULL;
     }
-#endif // USE_CHECKER
 
     if (!FullSystem) {
         thread.resize(numThreads);
@@ -438,12 +436,10 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
 
         // If we're using a checker, then the TC should be the
         // CheckerThreadContext.
-#if USE_CHECKER
         if (params->checker) {
             tc = new CheckerThreadContext<O3ThreadContext<Impl> >(
                 o3_tc, this->checker);
         }
-#endif
 
         o3_tc->cpu = (typename Impl::O3CPU *)(this);
         assert(o3_tc->cpu);
@@ -458,6 +454,12 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
 
         // Add the TC to the CPU's list of TC's.
         this->threadContexts.push_back(tc);
+    }
+
+    // FullO3CPU always requires an interrupt controller.
+    if (!params->defer_registration && !interrupts) {
+        fatal("FullO3CPU %s has no interrupt controller.\n"
+              "Ensure createInterruptController() is called.\n", name());
     }
 
     for (ThreadID tid = 0; tid < this->numThreads; tid++)
@@ -505,6 +507,11 @@ FullO3CPU<Impl>::regStats()
         .init(numThreads)
         .name(name() + ".committedInsts")
         .desc("Number of Instructions Simulated");
+
+    committedOps
+        .init(numThreads)
+        .name(name() + ".committedOps")
+        .desc("Number of Ops (including micro ops) Simulated");
 
     totalCommittedInsts
         .name(name() + ".committedInsts_total")
@@ -573,18 +580,6 @@ FullO3CPU<Impl>::regStats()
 }
 
 template <class Impl>
-Port *
-FullO3CPU<Impl>::getPort(const std::string &if_name, int idx)
-{
-    if (if_name == "dcache_port")
-        return &dcachePort;
-    else if (if_name == "icache_port")
-        return &icachePort;
-    else
-        panic("No Such Port\n");
-}
-
-template <class Impl>
 void
 FullO3CPU<Impl>::tick()
 {
@@ -648,10 +643,13 @@ FullO3CPU<Impl>::init()
 {
     BaseCPU::init();
 
-    // Set inSyscall so that the CPU doesn't squash when initially
-    // setting up registers.
-    for (ThreadID tid = 0; tid < numThreads; ++tid)
+    for (ThreadID tid = 0; tid < numThreads; ++tid) {
+        // Set inSyscall so that the CPU doesn't squash when initially
+        // setting up registers.
         thread[tid]->inSyscall = true;
+        // Initialise the ThreadContext's memory proxies
+        thread[tid]->initMemProxies(thread[tid]->getTC());
+    }
 
     // this CPU could still be unconnected if we are restoring from a
     // checkpoint and this CPU is to be switched in, thus we can only
@@ -660,12 +658,10 @@ FullO3CPU<Impl>::init()
     if (icachePort.isConnected())
         fetch.setIcache();
 
-    if (FullSystem) {
+    if (FullSystem && !params()->defer_registration) {
         for (ThreadID tid = 0; tid < numThreads; tid++) {
             ThreadContext *src_tc = threadContexts[tid];
             TheISA::initCPU(src_tc, src_tc->contextId());
-            // Initialise the ThreadContext's memory proxies
-            thread[tid]->initMemProxies(thread[tid]->getTC());
         }
     }
 
@@ -718,13 +714,26 @@ FullO3CPU<Impl>::deactivateThread(ThreadID tid)
 
 template <class Impl>
 Counter
-FullO3CPU<Impl>::totalInstructions() const
+FullO3CPU<Impl>::totalInsts() const
 {
     Counter total(0);
 
     ThreadID size = thread.size();
     for (ThreadID i = 0; i < size; i++)
         total += thread[i]->numInst;
+
+    return total;
+}
+
+template <class Impl>
+Counter
+FullO3CPU<Impl>::totalOps() const
+{
+    Counter total(0);
+
+    ThreadID size = thread.size();
+    for (ThreadID i = 0; i < size; i++)
+        total += thread[i]->numOp;
 
     return total;
 }
@@ -1195,10 +1204,10 @@ FullO3CPU<Impl>::switchOut()
     }
 
     _status = SwitchedOut;
-#if USE_CHECKER
+
     if (checker)
         checker->switchOut();
-#endif
+
     if (tickEvent.scheduled())
         tickEvent.squash();
 }
@@ -1458,13 +1467,19 @@ FullO3CPU<Impl>::addInst(DynInstPtr &inst)
 
 template <class Impl>
 void
-FullO3CPU<Impl>::instDone(ThreadID tid)
+FullO3CPU<Impl>::instDone(ThreadID tid, DynInstPtr &inst)
 {
     // Keep an instruction count.
-    thread[tid]->numInst++;
-    thread[tid]->numInsts++;
-    committedInsts[tid]++;
-    totalCommittedInsts++;
+    if (!inst->isMicroop() || inst->isLastMicroop()) {
+        thread[tid]->numInst++;
+        thread[tid]->numInsts++;
+        committedInsts[tid]++;
+        totalCommittedInsts++;
+    }
+    thread[tid]->numOp++;
+    thread[tid]->numOps++;
+    committedOps[tid]++;
+
     system->totalNumInsts++;
     // Check for instruction-count-based events.
     comInstEventQueue[tid]->serviceEvents(thread[tid]->numInst);

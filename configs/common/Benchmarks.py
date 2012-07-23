@@ -58,9 +58,9 @@ class SysConfig:
         elif buildEnv['TARGET_ISA'] == 'arm':
             return env.get('LINUX_IMAGE', disk('linux-arm-ael.img'))
         else:
-            print "Don't know what default disk image to use for ISA %s" % \
+            print "Don't know what default disk image to use for %s ISA" % \
                 buildEnv['TARGET_ISA']
-            sys.exit(1)
+            exit(1)
 
 # Benchmarks are defined as a key in a dict which is a list of SysConfigs
 # The first defined machine is the test system, the others are driving systems
@@ -111,10 +111,14 @@ Benchmarks = {
     'ValStreamCopy':    [SysConfig('micro_streamcopy.rcS', '512MB')],
 
     'MutexTest':        [SysConfig('mutex-test.rcS', '128MB')],
-    'ArmAndroid':       [SysConfig('null.rcS', '256MB',
-                     'ARMv7a-Gingerbread-Android.SMP.mouse.nolock.clean.img)')],
-    'bbench':           [SysConfig('bbench.rcS', '256MB',
-                            'ARMv7a-Gingerbread-Android.SMP.mouse.nolock.img')]
+    'ArmAndroid-GB':    [SysConfig('null.rcS', '256MB',
+                    'ARMv7a-Gingerbread-Android.SMP.mouse.nolock.clean.img')],
+    'bbench-gb':        [SysConfig('bbench-gb.rcS', '256MB',
+                          'ARMv7a-Gingerbread-Android.SMP.mouse.nolock.img')],
+    'ArmAndroid-ICS':   [SysConfig('null.rcS', '256MB',
+                            'ARMv7a-ICS-Android.SMP.nolock.clean.img')],
+    'bbench-ics':       [SysConfig('bbench-ics.rcS', '256MB',
+                            'ARMv7a-ICS-Android.SMP.nolock.img')]
 }
 
 benchs = Benchmarks.keys()

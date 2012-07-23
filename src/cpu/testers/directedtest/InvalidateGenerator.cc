@@ -52,13 +52,13 @@ InvalidateGenerator::~InvalidateGenerator()
 bool
 InvalidateGenerator::initiate()
 {
-    RubyDirectedTester::CpuPort* port;
+    MasterPort* port;
     Request::Flags flags;
     PacketPtr pkt;
     Packet::Command cmd;
 
     // For simplicity, requests are assumed to be 1 byte-sized
-    Request *req = new Request(m_address, 1, flags);
+    Request *req = new Request(m_address, 1, flags, masterId);
 
     //
     // Based on the current state, issue a load or a store
@@ -66,15 +66,13 @@ InvalidateGenerator::initiate()
     if (m_status == InvalidateGeneratorStatus_Load_Waiting) {
         DPRINTF(DirectedTest, "initiating read\n");
         cmd = MemCmd::ReadReq;
-        port = safe_cast<RubyDirectedTester::CpuPort*>(m_directed_tester->
-                                               getCpuPort(m_active_read_node));
-        pkt = new Packet(req, cmd, m_active_read_node);
+        port = m_directed_tester->getCpuPort(m_active_read_node);
+        pkt = new Packet(req, cmd);
     } else if (m_status == InvalidateGeneratorStatus_Inv_Waiting) {
         DPRINTF(DirectedTest, "initiating invalidating write\n");
         cmd = MemCmd::WriteReq;
-        port = safe_cast<RubyDirectedTester::CpuPort*>(m_directed_tester->
-                                               getCpuPort(m_active_inv_node));
-        pkt = new Packet(req, cmd, m_active_inv_node);
+        port = m_directed_tester->getCpuPort(m_active_inv_node);
+        pkt = new Packet(req, cmd);
     } else {
         panic("initiate was unexpectedly called\n");
     }
@@ -82,7 +80,7 @@ InvalidateGenerator::initiate()
     *dummyData = 0;
     pkt->dataDynamic(dummyData);
 
-    if (port->sendTiming(pkt)) {
+    if (port->sendTimingReq(pkt)) {
         DPRINTF(DirectedTest, "initiating request - successful\n");
         if (m_status == InvalidateGeneratorStatus_Load_Waiting) {
             m_status = InvalidateGeneratorStatus_Load_Pending;

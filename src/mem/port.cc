@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2002-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -26,22 +38,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Steve Reinhardt
+ *          Andreas Hansson
+ *          William Wang
  */
 
 /**
  * @file
  * Port object definitions.
  */
-#include <cstring>
-
-#include "base/chunk_generator.hh"
 #include "base/trace.hh"
-#include "debug/Config.hh"
 #include "mem/mem_object.hh"
 #include "mem/port.hh"
 
-Port::Port(const std::string &_name, MemObject *_owner)
-    : portName(_name), peer(NULL), owner(_owner)
+Port::Port(const std::string &_name, MemObject& _owner, PortID _id)
+    : portName(_name), id(_id), owner(_owner)
 {
 }
 
@@ -49,67 +59,171 @@ Port::~Port()
 {
 }
 
-void
-Port::setPeer(Port *port)
+/**
+ * Master port
+ */
+MasterPort::MasterPort(const std::string& name, MemObject* owner, PortID _id)
+    : Port(name, *owner, _id), _slavePort(NULL)
 {
-    DPRINTF(Config, "setting peer to %s\n", port->name());
+}
 
-    peer = port;
+MasterPort::~MasterPort()
+{
+}
+
+SlavePort&
+MasterPort::getSlavePort() const
+{
+    if(_slavePort == NULL)
+        panic("Cannot getSlavePort on master port %s that is not connected\n",
+              name());
+
+    return *_slavePort;
 }
 
 void
-Port::setOwner(MemObject *_owner)
+MasterPort::bind(SlavePort& slave_port)
 {
-    owner = _owner;
+    // master port keeps track of the slave port
+    _slavePort = &slave_port;
+
+    // slave port also keeps track of master port
+    _slavePort->bind(*this);
+}
+
+bool
+MasterPort::isConnected() const
+{
+    return _slavePort != NULL;
+}
+
+unsigned
+MasterPort::peerBlockSize() const
+{
+    return _slavePort->deviceBlockSize();
+}
+
+AddrRangeList
+MasterPort::getAddrRanges() const
+{
+    return _slavePort->getAddrRanges();
+}
+
+Tick
+MasterPort::sendAtomic(PacketPtr pkt)
+{
+    assert(pkt->isRequest());
+    return _slavePort->recvAtomic(pkt);
 }
 
 void
-Port::blobHelper(Addr addr, uint8_t *p, int size, MemCmd cmd)
+MasterPort::sendFunctional(PacketPtr pkt)
 {
-    Request req;
+    assert(pkt->isRequest());
+    return _slavePort->recvFunctional(pkt);
+}
 
-    for (ChunkGenerator gen(addr, size, peerBlockSize());
-         !gen.done(); gen.next()) {
-        req.setPhys(gen.addr(), gen.size(), 0);
-        Packet pkt(&req, cmd, Packet::Broadcast);
-        pkt.dataStatic(p);
-        sendFunctional(&pkt);
-        p += gen.size();
-    }
+bool
+MasterPort::sendTimingReq(PacketPtr pkt)
+{
+    assert(pkt->isRequest());
+    return _slavePort->recvTimingReq(pkt);
+}
+
+bool
+MasterPort::sendTimingSnoopResp(PacketPtr pkt)
+{
+    assert(pkt->isResponse());
+    return _slavePort->recvTimingSnoopResp(pkt);
 }
 
 void
-Port::writeBlob(Addr addr, uint8_t *p, int size)
+MasterPort::sendRetry()
 {
-    blobHelper(addr, p, size, MemCmd::WriteReq);
+    _slavePort->recvRetry();
 }
 
 void
-Port::readBlob(Addr addr, uint8_t *p, int size)
+MasterPort::printAddr(Addr a)
 {
-    blobHelper(addr, p, size, MemCmd::ReadReq);
-}
-
-void
-Port::memsetBlob(Addr addr, uint8_t val, int size)
-{
-    // quick and dirty...
-    uint8_t *buf = new uint8_t[size];
-
-    std::memset(buf, val, size);
-    blobHelper(addr, buf, size, MemCmd::WriteReq);
-
-    delete [] buf;
-}
-
-
-void
-Port::printAddr(Addr a)
-{
-    Request req(a, 1, 0);
-    Packet pkt(&req, MemCmd::PrintReq, Packet::Broadcast);
+    Request req(a, 1, 0, Request::funcMasterId);
+    Packet pkt(&req, MemCmd::PrintReq);
     Packet::PrintReqState prs(std::cerr);
     pkt.senderState = &prs;
 
     sendFunctional(&pkt);
+}
+
+/**
+ * Slave port
+ */
+SlavePort::SlavePort(const std::string& name, MemObject* owner, PortID id)
+    : Port(name, *owner, id), _masterPort(NULL)
+{
+}
+
+SlavePort::~SlavePort()
+{
+}
+
+void
+SlavePort::bind(MasterPort& master_port)
+{
+    _masterPort = &master_port;
+}
+
+MasterPort&
+SlavePort::getMasterPort() const
+{
+    if (_masterPort == NULL)
+        panic("Cannot getMasterPort on slave port %s that is not connected\n",
+              name());
+
+    return *_masterPort;
+}
+
+unsigned
+SlavePort::peerBlockSize() const
+{
+    return _masterPort->deviceBlockSize();
+}
+
+bool
+SlavePort::isConnected() const
+{
+    return _masterPort != NULL;
+}
+
+Tick
+SlavePort::sendAtomicSnoop(PacketPtr pkt)
+{
+    assert(pkt->isRequest());
+    return _masterPort->recvAtomicSnoop(pkt);
+}
+
+void
+SlavePort::sendFunctionalSnoop(PacketPtr pkt)
+{
+    assert(pkt->isRequest());
+    return _masterPort->recvFunctionalSnoop(pkt);
+}
+
+bool
+SlavePort::sendTimingResp(PacketPtr pkt)
+{
+    assert(pkt->isResponse());
+    return _masterPort->recvTimingResp(pkt);
+}
+
+void
+SlavePort::sendTimingSnoopReq(PacketPtr pkt)
+{
+    assert(pkt->isRequest());
+    _masterPort->recvTimingSnoopReq(pkt);
+}
+
+void
+SlavePort::sendRetry()
+{
+    _masterPort->recvRetry();
 }

@@ -316,6 +316,7 @@ class Pl111: public AmbaDmaDevice
         return dynamic_cast<const Params *>(_params);
     }
     Pl111(const Params *p);
+    ~Pl111();
 
     virtual Tick read(PacketPtr pkt);
     virtual Tick write(PacketPtr pkt);
@@ -328,7 +329,7 @@ class Pl111: public AmbaDmaDevice
      *
      * @return a list of non-overlapping address ranges
      */
-    AddrRangeList getAddrRanges();
+    AddrRangeList getAddrRanges() const;
 };
 
 #endif

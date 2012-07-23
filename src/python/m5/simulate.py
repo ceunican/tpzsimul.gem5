@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2005 The Regents of The University of Michigan
 # Copyright (c) 2010 Advanced Micro Devices, Inc.
 # All rights reserved.
@@ -39,6 +51,8 @@ import stats
 import SimObject
 import ticks
 import objects
+from m5.util.dot_writer import do_dot
+
 from util import fatal
 from util import attrdict
 
@@ -82,6 +96,7 @@ def instantiate(ckpt_dir=None):
         except ImportError:
             pass
 
+    do_dot(root, options.outdir, options.dot_config)
 
     # Initialize the global statistics
     stats.initSimStats()
@@ -111,16 +126,6 @@ def instantiate(ckpt_dir=None):
 
     # Reset to put the stats in a consistent state.
     stats.reset()
-
-def doDot(root):
-    dot = pydot.Dot()
-    instance.outputDot(dot)
-    dot.orientation = "portrait"
-    dot.size = "8.5,11"
-    dot.ranksep="equally"
-    dot.rank="samerank"
-    dot.write("config.dot")
-    dot.write_ps("config.ps")
 
 need_resume = []
 need_startup = True

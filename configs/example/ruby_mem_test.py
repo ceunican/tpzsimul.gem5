@@ -35,7 +35,9 @@ from m5.util import addToPath
 import os, optparse, sys
 addToPath('../common')
 addToPath('../ruby')
+addToPath('../topologies')
 
+import Options
 import Ruby
 
 # Get paths we might need.  It's expected this file is in m5/configs/example.
@@ -44,6 +46,7 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
 parser.add_option("-l", "--maxloads", metavar="N", default=0,
                   help="Stop after N loads")
@@ -103,8 +106,9 @@ cpus = [ MemTest(atomic = False,
          for i in xrange(options.num_cpus) ]
 
 system = System(cpu = cpus,
-                funcmem = PhysicalMemory(),
-                physmem = PhysicalMemory())
+                funcmem = SimpleMemory(in_addr_map = False),
+                funcbus = NoncoherentBus(),
+                physmem = SimpleMemory())
 
 if options.num_dmas > 0:
     dmas = [ MemTest(atomic = False,
@@ -113,13 +117,17 @@ if options.num_dmas > 0:
                      percent_functional = 0,
                      percent_uncacheable = 0,
                      progress_interval = options.progress,
-                     warn_on_failure = options.warn_on_failure) \
+                     suppress_func_warnings =
+                                        not options.suppress_func_warnings) \
              for i in xrange(options.num_dmas) ]
     system.dma_devices = dmas
 else:
     dmas = []
 
-Ruby.create_system(options, system, dma_devices = dmas)
+dma_ports = []
+for (i, dma) in enumerate(dmas):
+    dma_ports.append(dma.test)
+Ruby.create_system(options, system, dma_ports = dma_ports)
 
 #
 # The tester is most effective when randomization is turned on and
@@ -133,8 +141,8 @@ for (i, cpu) in enumerate(cpus):
     #
     # Tie the cpu memtester ports to the correct system ports
     #
-    cpu.test = system.ruby._cpu_ruby_ports[i].port
-    cpu.functional = system.funcmem.port
+    cpu.test = system.ruby._cpu_ruby_ports[i].slave
+    cpu.functional = system.funcbus.slave
 
     #
     # Since the memtester is incredibly bursty, increase the deadlock
@@ -153,7 +161,10 @@ for (i, dma) in enumerate(dmas):
     # Tie the dma memtester ports to the correct functional port
     # Note that the test port has already been connected to the dma_sequencer
     #
-    dma.functional = system.funcmem.port
+    dma.functional = system.funcbus.slave
+
+# connect reference memory to funcbus
+system.funcbus.master = system.funcmem.port
 
 # -----------------------
 # run simulation

@@ -50,7 +50,7 @@ class CowIdeDisk(IdeDisk):
     def childImage(self, ci):
         self.image.child.image_file = ci
 
-class MemBus(Bus):
+class MemBus(CoherentBus):
     badaddr_responder = BadAddr()
     default = Self.badaddr_responder.pio
 
@@ -67,28 +67,28 @@ def makeLinuxAlphaSystem(mem_mode, mdesc = None):
         # generic system
         mdesc = SysConfig()
     self.readfile = mdesc.script()
-    self.iobus = Bus(bus_id=0)
-    self.membus = MemBus(bus_id=1)
+    self.iobus = NoncoherentBus()
+    self.membus = MemBus()
     # By default the bridge responds to all addresses above the I/O
     # base address (including the PCI config space)
     self.bridge = Bridge(delay='50ns', nack_delay='4ns',
                          ranges = [AddrRange(IO_address_space_base, Addr.max)])
-    self.physmem = PhysicalMemory(range = AddrRange(mdesc.mem()))
-    self.bridge.master = self.iobus.port
-    self.bridge.slave = self.membus.port
-    self.physmem.port = self.membus.port
+    self.physmem = SimpleMemory(range = AddrRange(mdesc.mem()))
+    self.bridge.master = self.iobus.slave
+    self.bridge.slave = self.membus.master
+    self.physmem.port = self.membus.master
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
     self.disk0.childImage(mdesc.disk())
     self.disk2.childImage(disk('linux-bigswap2.img'))
     self.tsunami = BaseTsunami()
     self.tsunami.attachIO(self.iobus)
-    self.tsunami.ide.pio = self.iobus.port
-    self.tsunami.ide.config = self.iobus.port
-    self.tsunami.ide.dma = self.iobus.port
-    self.tsunami.ethernet.pio = self.iobus.port
-    self.tsunami.ethernet.config = self.iobus.port
-    self.tsunami.ethernet.dma = self.iobus.port
+    self.tsunami.ide.pio = self.iobus.master
+    self.tsunami.ide.config = self.iobus.master
+    self.tsunami.ide.dma = self.iobus.slave
+    self.tsunami.ethernet.pio = self.iobus.master
+    self.tsunami.ethernet.config = self.iobus.master
+    self.tsunami.ethernet.dma = self.iobus.slave
     self.simple_disk = SimpleDisk(disk=RawDiskImage(image_file = mdesc.disk(),
                                                read_only = True))
     self.intrctrl = IntrControl()
@@ -99,7 +99,7 @@ def makeLinuxAlphaSystem(mem_mode, mdesc = None):
     self.console = binary('console')
     self.boot_osflags = 'root=/dev/hda1 console=ttyS0'
 
-    self.system_port = self.membus.port
+    self.system_port = self.membus.slave
 
     return self
 
@@ -109,7 +109,7 @@ def makeLinuxAlphaRubySystem(mem_mode, mdesc = None):
         ide = IdeController(disks=[Parent.disk0, Parent.disk2],
                             pci_func=0, pci_dev=0, pci_bus=0)
         
-    physmem = PhysicalMemory(range = AddrRange(mdesc.mem()))
+    physmem = SimpleMemory(range = AddrRange(mdesc.mem()))
     self = LinuxAlphaSystem(physmem = physmem)
     if not mdesc:
         # generic system
@@ -117,14 +117,14 @@ def makeLinuxAlphaRubySystem(mem_mode, mdesc = None):
     self.readfile = mdesc.script()
 
     # Create pio bus to connect all device pio ports to rubymem's pio port
-    self.piobus = Bus(bus_id=0)
+    self.piobus = NoncoherentBus()
 
     #
     # Pio functional accesses from devices need direct access to memory
     # RubyPort currently does support functional accesses.  Therefore provide
     # the piobus a direct connection to physical memory
     #
-    self.piobus.port = physmem.port
+    self.piobus.master = physmem.port
 
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
@@ -132,18 +132,16 @@ def makeLinuxAlphaRubySystem(mem_mode, mdesc = None):
     self.disk2.childImage(disk('linux-bigswap2.img'))
     self.tsunami = BaseTsunami()
     self.tsunami.attachIO(self.piobus)
-    self.tsunami.ide.pio = self.piobus.port
-    self.tsunami.ide.config = self.piobus.port
-    self.tsunami.ide.dma = self.piobus.port
-    self.tsunami.ethernet.pio = self.piobus.port
-    self.tsunami.ethernet.config = self.piobus.port
-    self.tsunami.ethernet.dma = self.piobus.port
+    self.tsunami.ide.pio = self.piobus.master
+    self.tsunami.ide.config = self.piobus.master
+    self.tsunami.ethernet.pio = self.piobus.master
+    self.tsunami.ethernet.config = self.piobus.master
 
     #
     # Store the dma devices for later connection to dma ruby ports.
     # Append an underscore to dma_devices to avoid the SimObjectVector check.
     #
-    self._dma_devices = [self.tsunami.ide, self.tsunami.ethernet]
+    self._dma_ports = [self.tsunami.ide.dma, self.tsunami.ethernet.dma]
 
     self.simple_disk = SimpleDisk(disk=RawDiskImage(image_file = mdesc.disk(),
                                                read_only = True))
@@ -174,26 +172,28 @@ def makeSparcSystem(mem_mode, mdesc = None):
         # generic system
         mdesc = SysConfig()
     self.readfile = mdesc.script()
-    self.iobus = Bus(bus_id=0)
-    self.membus = MemBus(bus_id=1)
+    self.iobus = NoncoherentBus()
+    self.membus = MemBus()
     self.bridge = Bridge(delay='50ns', nack_delay='4ns')
     self.t1000 = T1000()
     self.t1000.attachOnChipIO(self.membus)
     self.t1000.attachIO(self.iobus)
-    self.physmem = PhysicalMemory(range = AddrRange(Addr('1MB'), size = '64MB'), zero = True)
-    self.physmem2 = PhysicalMemory(range = AddrRange(Addr('2GB'), size ='256MB'), zero = True)
-    self.bridge.master = self.iobus.port
-    self.bridge.slave = self.membus.port
-    self.physmem.port = self.membus.port
-    self.physmem2.port = self.membus.port
-    self.rom.port = self.membus.port
-    self.nvram.port = self.membus.port
-    self.hypervisor_desc.port = self.membus.port
-    self.partition_desc.port = self.membus.port
+    self.physmem = SimpleMemory(range = AddrRange(Addr('1MB'), size = '64MB'),
+                                zero = True)
+    self.physmem2 = SimpleMemory(range = AddrRange(Addr('2GB'), size ='256MB'),
+                                 zero = True)
+    self.bridge.master = self.iobus.slave
+    self.bridge.slave = self.membus.master
+    self.physmem.port = self.membus.master
+    self.physmem2.port = self.membus.master
+    self.rom.port = self.membus.master
+    self.nvram.port = self.membus.master
+    self.hypervisor_desc.port = self.membus.master
+    self.partition_desc.port = self.membus.master
     self.intrctrl = IntrControl()
     self.disk0 = CowMmDisk()
     self.disk0.childImage(disk('disk.s10hw2'))
-    self.disk0.pio = self.iobus.port
+    self.disk0.pio = self.iobus.master
 
     # The puart0 and hvuart are placed on the IO bus, so create ranges
     # for them. The remaining IO range is rather fragmented, so poke
@@ -220,7 +220,7 @@ def makeSparcSystem(mem_mode, mdesc = None):
     self.hypervisor_desc_bin = binary('1up-hv.bin')
     self.partition_desc_bin = binary('1up-md.bin')
 
-    self.system_port = self.membus.port
+    self.system_port = self.membus.slave
 
     return self
 
@@ -237,12 +237,12 @@ def makeArmSystem(mem_mode, machine_type, mdesc = None, bare_metal=False):
         mdesc = SysConfig()
 
     self.readfile = mdesc.script()
-    self.iobus = Bus(bus_id=0)
-    self.membus = MemBus(bus_id=1)
+    self.iobus = NoncoherentBus()
+    self.membus = MemBus()
     self.membus.badaddr_responder.warn_access = "warn"
     self.bridge = Bridge(delay='50ns', nack_delay='4ns')
-    self.bridge.master = self.iobus.port
-    self.bridge.slave = self.membus.port
+    self.bridge.master = self.iobus.slave
+    self.bridge.slave = self.membus.master
 
     self.mem_mode = mem_mode
 
@@ -252,6 +252,9 @@ def makeArmSystem(mem_mode, machine_type, mdesc = None, bare_metal=False):
         self.realview = RealViewEB()
     elif machine_type == "VExpress_ELT":
         self.realview = VExpress_ELT()
+    elif machine_type == "VExpress_EMM":
+        self.realview = VExpress_EMM()
+        self.load_addr_mask = 0xffffffff
     else:
         print "Unknown Machine Type"
         sys.exit(1)
@@ -268,26 +271,25 @@ def makeArmSystem(mem_mode, machine_type, mdesc = None, bare_metal=False):
     if bare_metal:
         # EOT character on UART will end the simulation
         self.realview.uart.end_on_eot = True
-        self.physmem = PhysicalMemory(range = AddrRange(Addr(mdesc.mem())),
-                                      zero = True)
+        self.physmem = SimpleMemory(range = AddrRange(Addr(mdesc.mem())),
+                                    zero = True)
     else:
         self.kernel = binary('vmlinux.arm.smp.fb.2.6.38.8')
         self.machine_type = machine_type
-        if convert.toMemorySize(mdesc.mem()) > convert.toMemorySize('256MB'):
-            print "The currently implemented ARM platforms only easily support 256MB of DRAM"
-            print "It might be possible to get some more by using 256MB@0x30000000, but this"
-            print "is untested and may require some heroics"
+        if convert.toMemorySize(mdesc.mem()) > int(self.realview.max_mem_size):
+            print "The currently selected ARM platforms doesn't support"
+            print " the amount of DRAM you've selected. Please try"
+            print " another platform"
+            sys.exit(1)
 
         boot_flags = 'earlyprintk console=ttyAMA0 lpj=19988480 norandmaps ' + \
                      'rw loglevel=8 mem=%s root=/dev/sda1' % mdesc.mem()
 
-        self.physmem = PhysicalMemory(range = AddrRange(Addr(mdesc.mem())),
-                                      zero = True)
-        self.nvmem = PhysicalMemory(range = AddrRange(Addr('2GB'),
-                                    size = '64MB'), zero = True)
-        self.nvmem.port = self.membus.port
-        self.boot_loader = binary('boot.arm')
-        self.boot_loader_mem = self.nvmem
+        self.physmem = SimpleMemory(range =
+                                    AddrRange(self.realview.mem_start_addr,
+                                              size = mdesc.mem()),
+                                    conf_table_reported = True)
+        self.realview.setupBootLoader(self.membus, self, binary)
         self.gic_cpu_addr = self.realview.gic.cpu_addr
         self.flags_addr = self.realview.realview_io.pio_addr + 0x30
 
@@ -295,14 +297,14 @@ def makeArmSystem(mem_mode, machine_type, mdesc = None, bare_metal=False):
             boot_flags += " init=/init "
         self.boot_osflags = boot_flags
 
-    self.physmem.port = self.membus.port
+    self.physmem.port = self.membus.master
     self.realview.attachOnChipIO(self.membus, self.bridge)
     self.realview.attachIO(self.iobus)
     self.intrctrl = IntrControl()
     self.terminal = Terminal()
     self.vncserver = VncServer()
 
-    self.system_port = self.membus.port
+    self.system_port = self.membus.slave
 
     return self
 
@@ -318,25 +320,25 @@ def makeLinuxMipsSystem(mem_mode, mdesc = None):
         # generic system
         mdesc = SysConfig()
     self.readfile = mdesc.script()
-    self.iobus = Bus(bus_id=0)
-    self.membus = MemBus(bus_id=1)
+    self.iobus = NoncoherentBus()
+    self.membus = MemBus()
     self.bridge = Bridge(delay='50ns', nack_delay='4ns')
-    self.physmem = PhysicalMemory(range = AddrRange('1GB'))
-    self.bridge.master = self.iobus.port
-    self.bridge.slave = self.membus.port
-    self.physmem.port = self.membus.port
+    self.physmem = SimpleMemory(range = AddrRange('1GB'))
+    self.bridge.master = self.iobus.slave
+    self.bridge.slave = self.membus.master
+    self.physmem.port = self.membus.master
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
     self.disk0.childImage(mdesc.disk())
     self.disk2.childImage(disk('linux-bigswap2.img'))
     self.malta = BaseMalta()
     self.malta.attachIO(self.iobus)
-    self.malta.ide.pio = self.iobus.port
-    self.malta.ide.config = self.iobus.port
-    self.malta.ide.dma = self.iobus.port
-    self.malta.ethernet.pio = self.iobus.port
-    self.malta.ethernet.config = self.iobus.port
-    self.malta.ethernet.dma = self.iobus.port
+    self.malta.ide.pio = self.iobus.master
+    self.malta.ide.config = self.iobus.master
+    self.malta.ide.dma = self.iobus.slave
+    self.malta.ethernet.pio = self.iobus.master
+    self.malta.ethernet.config = self.iobus.master
+    self.malta.ethernet.dma = self.iobus.slave
     self.simple_disk = SimpleDisk(disk=RawDiskImage(image_file = mdesc.disk(),
                                                read_only = True))
     self.intrctrl = IntrControl()
@@ -346,7 +348,7 @@ def makeLinuxMipsSystem(mem_mode, mdesc = None):
     self.console = binary('mips/console')
     self.boot_osflags = 'root=/dev/hda1 console=ttyS0'
 
-    self.system_port = self.membus.port
+    self.system_port = self.membus.slave
 
     return self
 
@@ -354,21 +356,21 @@ def x86IOAddress(port):
     IO_address_space_base = 0x8000000000000000
     return IO_address_space_base + port
 
-def connectX86ClassicSystem(x86_sys):
+def connectX86ClassicSystem(x86_sys, numCPUs):
     # Constants similar to x86_traits.hh
     IO_address_space_base = 0x8000000000000000
     pci_config_address_space_base = 0xc000000000000000
     interrupts_address_space_base = 0xa000000000000000
     APIC_range_size = 1 << 12;
 
-    x86_sys.membus = MemBus(bus_id=1)
-    x86_sys.physmem.port = x86_sys.membus.port
+    x86_sys.membus = MemBus()
+    x86_sys.physmem.port = x86_sys.membus.master
 
     # North Bridge
-    x86_sys.iobus = Bus(bus_id=0)
+    x86_sys.iobus = NoncoherentBus()
     x86_sys.bridge = Bridge(delay='50ns', nack_delay='4ns')
-    x86_sys.bridge.master = x86_sys.iobus.port
-    x86_sys.bridge.slave = x86_sys.membus.port
+    x86_sys.bridge.master = x86_sys.iobus.slave
+    x86_sys.bridge.slave = x86_sys.membus.master
     # Allow the bridge to pass through the IO APIC (two pages),
     # everything in the IO address range up to the local APIC, and
     # then the entire PCI address space and beyond
@@ -385,30 +387,33 @@ def connectX86ClassicSystem(x86_sys):
 
     # Create a bridge from the IO bus to the memory bus to allow access to
     # the local APIC (two pages)
-    x86_sys.iobridge = Bridge(delay='50ns', nack_delay='4ns')
-    x86_sys.iobridge.slave = x86_sys.iobus.port
-    x86_sys.iobridge.master = x86_sys.membus.port
-    x86_sys.iobridge.ranges = [AddrRange(interrupts_address_space_base,
-                                         interrupts_address_space_base +
-                                         APIC_range_size - 1)]
+    x86_sys.apicbridge = Bridge(delay='50ns', nack_delay='4ns')
+    x86_sys.apicbridge.slave = x86_sys.iobus.master
+    x86_sys.apicbridge.master = x86_sys.membus.slave
+    x86_sys.apicbridge.ranges = [AddrRange(interrupts_address_space_base,
+                                           interrupts_address_space_base +
+                                           numCPUs * APIC_range_size
+                                           - 1)]
 
     # connect the io bus
     x86_sys.pc.attachIO(x86_sys.iobus)
 
-    x86_sys.system_port = x86_sys.membus.port
+    x86_sys.system_port = x86_sys.membus.slave
 
 def connectX86RubySystem(x86_sys):
     # North Bridge
-    x86_sys.piobus = Bus(bus_id=0)
+    x86_sys.piobus = NoncoherentBus()
 
     #
     # Pio functional accesses from devices need direct access to memory
     # RubyPort currently does support functional accesses.  Therefore provide
     # the piobus a direct connection to physical memory
     #
-    x86_sys.piobus.port = x86_sys.physmem.port
-
-    x86_sys.pc.attachIO(x86_sys.piobus)
+    x86_sys.piobus.master = x86_sys.physmem.port
+    # add the ide to the list of dma devices that later need to attach to
+    # dma controllers
+    x86_sys._dma_ports = [x86_sys.pc.south_bridge.ide.dma]
+    x86_sys.pc.attachIO(x86_sys.piobus, x86_sys._dma_ports)
 
 
 def makeX86System(mem_mode, numCPUs = 1, mdesc = None, self = None, Ruby = False):
@@ -423,7 +428,7 @@ def makeX86System(mem_mode, numCPUs = 1, mdesc = None, self = None, Ruby = False
     self.mem_mode = mem_mode
 
     # Physical memory
-    self.physmem = PhysicalMemory(range = AddrRange(mdesc.mem()))
+    self.physmem = SimpleMemory(range = AddrRange(mdesc.mem()))
 
     # Platform
     self.pc = Pc()
@@ -431,11 +436,8 @@ def makeX86System(mem_mode, numCPUs = 1, mdesc = None, self = None, Ruby = False
     # Create and connect the busses required by each memory system
     if Ruby:
         connectX86RubySystem(self)
-        # add the ide to the list of dma devices that later need to attach to
-        # dma controllers
-        self._dma_devices = [self.pc.south_bridge.ide]
     else:
-        connectX86ClassicSystem(self)
+        connectX86ClassicSystem(self, numCPUs)
 
     self.intrctrl = IntrControl()
 
@@ -509,23 +511,6 @@ def makeX86System(mem_mode, numCPUs = 1, mdesc = None, self = None, Ruby = False
     self.intel_mp_table.base_entries = base_entries
     self.intel_mp_table.ext_entries = ext_entries
 
-def setWorkCountOptions(system, options):
-    if options.work_item_id != None:
-        system.work_item_id = options.work_item_id
-    if options.work_begin_cpu_id_exit != None:
-        system.work_begin_cpu_id_exit = options.work_begin_cpu_id_exit
-    if options.work_end_exit_count != None:
-        system.work_end_exit_count = options.work_end_exit_count
-    if options.work_end_checkpoint_count != None:
-        system.work_end_ckpt_count = options.work_end_checkpoint_count
-    if options.work_begin_exit_count != None:
-        system.work_begin_exit_count = options.work_begin_exit_count
-    if options.work_begin_checkpoint_count != None:
-        system.work_begin_ckpt_count = options.work_begin_checkpoint_count
-    if options.work_cpus_checkpoint_count != None:
-        system.work_cpus_ckpt_count = options.work_cpus_checkpoint_count
-
-
 def makeLinuxX86System(mem_mode, numCPUs = 1, mdesc = None, Ruby = False):
     self = LinuxX86System()
 
@@ -574,73 +559,3 @@ def makeDualRoot(full_system, testSystem, driveSystem, dumpfile):
         self.etherlink.dump = Parent.etherdump
 
     return self
-
-def setMipsOptions(TestCPUClass):
-        #CP0 Configuration
-        TestCPUClass.CoreParams.CP0_PRId_CompanyOptions = 0
-        TestCPUClass.CoreParams.CP0_PRId_CompanyID = 1
-        TestCPUClass.CoreParams.CP0_PRId_ProcessorID = 147
-        TestCPUClass.CoreParams.CP0_PRId_Revision = 0
-
-        #CP0 Interrupt Control
-        TestCPUClass.CoreParams.CP0_IntCtl_IPTI = 7
-        TestCPUClass.CoreParams.CP0_IntCtl_IPPCI = 7
-
-        # Config Register
-        #TestCPUClass.CoreParams.CP0_Config_K23 = 0 # Since TLB
-        #TestCPUClass.CoreParams.CP0_Config_KU = 0 # Since TLB
-        TestCPUClass.CoreParams.CP0_Config_BE = 0 # Little Endian
-        TestCPUClass.CoreParams.CP0_Config_AR = 1 # Architecture Revision 2
-        TestCPUClass.CoreParams.CP0_Config_AT = 0 # MIPS32
-        TestCPUClass.CoreParams.CP0_Config_MT = 1 # TLB MMU
-        #TestCPUClass.CoreParams.CP0_Config_K0 = 2 # Uncached
-
-        #Config 1 Register
-        TestCPUClass.CoreParams.CP0_Config1_M = 1 # Config2 Implemented
-        TestCPUClass.CoreParams.CP0_Config1_MMU = 63 # TLB Size
-        # ***VERY IMPORTANT***
-        # Remember to modify CP0_Config1 according to cache specs
-        # Examine file ../common/Cache.py
-        TestCPUClass.CoreParams.CP0_Config1_IS = 1 # I-Cache Sets Per Way, 16KB cache, i.e., 1 (128)
-        TestCPUClass.CoreParams.CP0_Config1_IL = 5 # I-Cache Line Size, default in Cache.py is 64, i.e 5
-        TestCPUClass.CoreParams.CP0_Config1_IA = 1 # I-Cache Associativity, default in Cache.py is 2, i.e, a value of 1
-        TestCPUClass.CoreParams.CP0_Config1_DS = 2 # D-Cache Sets Per Way (see below), 32KB cache, i.e., 2
-        TestCPUClass.CoreParams.CP0_Config1_DL = 5 # D-Cache Line Size, default is 64, i.e., 5
-        TestCPUClass.CoreParams.CP0_Config1_DA = 1 # D-Cache Associativity, default is 2, i.e. 1
-        TestCPUClass.CoreParams.CP0_Config1_C2 = 0 # Coprocessor 2 not implemented(?)
-        TestCPUClass.CoreParams.CP0_Config1_MD = 0 # MDMX ASE not implemented in Mips32
-        TestCPUClass.CoreParams.CP0_Config1_PC = 1 # Performance Counters Implemented
-        TestCPUClass.CoreParams.CP0_Config1_WR = 0 # Watch Registers Implemented
-        TestCPUClass.CoreParams.CP0_Config1_CA = 0 # Mips16e NOT implemented
-        TestCPUClass.CoreParams.CP0_Config1_EP = 0 # EJTag Not Implemented
-        TestCPUClass.CoreParams.CP0_Config1_FP = 0 # FPU Implemented
-
-        #Config 2 Register
-        TestCPUClass.CoreParams.CP0_Config2_M = 1 # Config3 Implemented
-        TestCPUClass.CoreParams.CP0_Config2_TU = 0 # Tertiary Cache Control
-        TestCPUClass.CoreParams.CP0_Config2_TS = 0 # Tertiary Cache Sets Per Way
-        TestCPUClass.CoreParams.CP0_Config2_TL = 0 # Tertiary Cache Line Size
-        TestCPUClass.CoreParams.CP0_Config2_TA = 0 # Tertiary Cache Associativity
-        TestCPUClass.CoreParams.CP0_Config2_SU = 0 # Secondary Cache Control
-        TestCPUClass.CoreParams.CP0_Config2_SS = 0 # Secondary Cache Sets Per Way
-        TestCPUClass.CoreParams.CP0_Config2_SL = 0 # Secondary Cache Line Size
-        TestCPUClass.CoreParams.CP0_Config2_SA = 0 # Secondary Cache Associativity
-
-
-        #Config 3 Register
-        TestCPUClass.CoreParams.CP0_Config3_M = 0 # Config4 Not Implemented
-        TestCPUClass.CoreParams.CP0_Config3_DSPP = 1 # DSP ASE Present
-        TestCPUClass.CoreParams.CP0_Config3_LPA = 0 # Large Physical Addresses Not supported in Mips32
-        TestCPUClass.CoreParams.CP0_Config3_VEIC = 0 # EIC Supported
-        TestCPUClass.CoreParams.CP0_Config3_VInt = 0 # Vectored Interrupts Implemented
-        TestCPUClass.CoreParams.CP0_Config3_SP = 0 # Small Pages Supported (PageGrain reg. exists)
-        TestCPUClass.CoreParams.CP0_Config3_MT = 0 # MT Not present
-        TestCPUClass.CoreParams.CP0_Config3_SM = 0 # SmartMIPS ASE Not implemented
-        TestCPUClass.CoreParams.CP0_Config3_TL = 0 # TraceLogic Not implemented
-
-        #SRS Ctl - HSS
-        TestCPUClass.CoreParams.CP0_SrsCtl_HSS = 3 # Four shadow register sets implemented
-
-
-        #TestCPUClass.CoreParams.tlb = TLB()
-        #TestCPUClass.CoreParams.UnifiedTLB = 1

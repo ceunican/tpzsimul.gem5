@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2011 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2004-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -166,12 +178,11 @@ BPredUnit<Impl>::predict(DynInstPtr &inst, TheISA::PCState &pc, ThreadID tid)
         BPUncond(bp_history);
     } else {
         ++condPredicted;
-
         pred_taken = BPLookup(pc.instAddr(), bp_history);
 
-        DPRINTF(Fetch, "BranchPred: [tid:%i]: Branch predictor predicted %i "
-                "for PC %s\n",
-                tid, pred_taken, inst->pcState());
+        DPRINTF(Fetch, "BranchPred:[tid:%i]: [sn:%i] Branch predictor"
+                " predicted %i for PC %s\n",
+                tid, inst->seqNum,  pred_taken, inst->pcState());
     }
 
     DPRINTF(Fetch, "BranchPred: [tid:%i]: [sn:%i] Creating prediction history "
@@ -185,7 +196,7 @@ BPredUnit<Impl>::predict(DynInstPtr &inst, TheISA::PCState &pc, ThreadID tid)
     if (pred_taken) {
         if (inst->isReturn()) {
             ++usedRAS;
-
+            predict_record.wasReturn = true;
             // If it's a function return call, then look up the address
             // in the RAS.
             TheISA::PCState rasTop = RAS[tid].top();
@@ -208,7 +219,7 @@ BPredUnit<Impl>::predict(DynInstPtr &inst, TheISA::PCState &pc, ThreadID tid)
 
             if (inst->isCall()) {
                 RAS[tid].push(pc);
-
+                predict_record.pushedRAS = true;
                 // Record that it was a call so that the top RAS entry can
                 // be popped off if the speculation is incorrect.
                 predict_record.wasCall = true;
@@ -220,6 +231,7 @@ BPredUnit<Impl>::predict(DynInstPtr &inst, TheISA::PCState &pc, ThreadID tid)
 
             if (BTB.valid(pc.instAddr(), tid)) {
                 ++BTBHits;
+                predict_record.validBTB = true;
 
                 // If it's not a return, use the BTB to get the target addr.
                 target = BTB.lookup(pc.instAddr(), tid);
@@ -231,11 +243,26 @@ BPredUnit<Impl>::predict(DynInstPtr &inst, TheISA::PCState &pc, ThreadID tid)
                 DPRINTF(Fetch, "BranchPred: [tid:%i]: BTB doesn't have a "
                         "valid entry.\n",tid);
                 pred_taken = false;
+                // The Direction of the branch predictor is altered because the
+                // BTB did not have an entry
+                // The predictor needs to be updated accordingly
+                if (!inst->isCall() && !inst->isReturn()) {
+                      BPBTBUpdate(pc.instAddr(), bp_history);
+                      DPRINTF(Fetch, "BranchPred: [tid:%i]:[sn:%i] BPBTBUpdate"
+                              " called for %s\n",
+                              tid, inst->seqNum, inst->pcState());
+                } else if (inst->isCall() && !inst->isUncondCtrl()) {
+                      RAS[tid].pop();
+                      predict_record.pushedRAS = false;
+                }
                 TheISA::advancePC(target, inst->staticInst);
             }
 
         }
     } else {
+        if (inst->isReturn()) {
+           predict_record.wasReturn = true;
+        }
         TheISA::advancePC(target, inst->staticInst);
     }
 
@@ -261,7 +288,7 @@ BPredUnit<Impl>::update(const InstSeqNum &done_sn, ThreadID tid)
         // Update the branch predictor with the correct results.
         BPUpdate(predHist[tid].back().pc,
                  predHist[tid].back().predTaken,
-                 predHist[tid].back().bpHistory);
+                 predHist[tid].back().bpHistory, false);
 
         predHist[tid].pop_back();
     }
@@ -282,12 +309,13 @@ BPredUnit<Impl>::squash(const InstSeqNum &squashed_sn, ThreadID tid)
 
             RAS[tid].restore(pred_hist.front().RASIndex,
                              pred_hist.front().RASTarget);
-        } else if (pred_hist.front().wasCall) {
-            DPRINTF(Fetch, "BranchPred: [tid:%i]: Removing speculative entry "
-                    "added to the RAS.\n",tid);
-
-            RAS[tid].pop();
-        }
+        } else if(pred_hist.front().wasCall && pred_hist.front().pushedRAS) {
+                 // Was a call but predicated false. Pop RAS here
+                 DPRINTF(Fetch, "BranchPred: [tid: %i] Squashing"
+                         "  Call [sn:%i] PC: %s Popping RAS\n", tid,
+                         pred_hist.front().seqNum, pred_hist.front().pc);
+                 RAS[tid].pop();
+           }
 
         // This call should delete the bpHistory.
         BPSquash(pred_hist.front().bpHistory);
@@ -356,16 +384,47 @@ BPredUnit<Impl>::squash(const InstSeqNum &squashed_sn,
         }
 
         BPUpdate((*hist_it).pc, actually_taken,
-                 pred_hist.front().bpHistory);
+                 pred_hist.front().bpHistory, true);
+        if (actually_taken) {
+            if (hist_it->wasReturn && !hist_it->usedRAS) {
+                 DPRINTF(Fetch, "BranchPred: [tid: %i] Incorrectly predicted"
+                           "  return [sn:%i] PC: %s\n", tid, hist_it->seqNum,
+                            hist_it->pc);
+                 RAS[tid].pop();
+            }
+           DPRINTF(Fetch,"BranchPred: [tid: %i] BTB Update called for [sn:%i]"
+                            " PC: %s\n", tid,hist_it->seqNum, hist_it->pc);
 
-        BTB.update((*hist_it).pc, corrTarget, tid);
 
-        DPRINTF(Fetch, "BranchPred: [tid:%i]: Removing history for [sn:%i] "
-                "PC %s.\n", tid, (*hist_it).seqNum, (*hist_it).pc);
+            BTB.update((*hist_it).pc, corrTarget, tid);
+
+        } else {
+           //Actually not Taken
+           if (hist_it->usedRAS) {
+                DPRINTF(Fetch,"BranchPred: [tid: %i] Incorrectly predicted"
+                           "  return [sn:%i] PC: %s Restoring RAS\n", tid,
+                           hist_it->seqNum, hist_it->pc);
+                DPRINTF(Fetch, "BranchPred: [tid:%i]: Restoring top of RAS"
+                               " to: %i, target: %s.\n", tid,
+                              hist_it->RASIndex, hist_it->RASTarget);
+                RAS[tid].restore(hist_it->RASIndex, hist_it->RASTarget);
+
+           } else if (hist_it->wasCall && hist_it->pushedRAS) {
+                 //Was a Call but predicated false. Pop RAS here
+                 DPRINTF(Fetch, "BranchPred: [tid: %i] Incorrectly predicted"
+                           "  Call [sn:%i] PC: %s Popping RAS\n", tid,
+                           hist_it->seqNum, hist_it->pc);
+                 RAS[tid].pop();
+           }
+        }
+        DPRINTF(Fetch, "BranchPred: [tid:%i]: Removing history for [sn:%i]"
+                       " PC %s  Actually Taken: %i\n", tid, hist_it->seqNum,
+                       hist_it->pc, actually_taken);
 
         pred_hist.erase(hist_it);
 
-        DPRINTF(Fetch, "[tid:%i]: predHist.size(): %i\n", tid, predHist[tid].size());
+        DPRINTF(Fetch, "[tid:%i]: predHist.size(): %i\n", tid,
+                                         predHist[tid].size());
     }
 }
 
@@ -407,12 +466,26 @@ BPredUnit<Impl>::BPLookup(Addr instPC, void * &bp_history)
 
 template <class Impl>
 void
-BPredUnit<Impl>::BPUpdate(Addr instPC, bool taken, void *bp_history)
+BPredUnit<Impl>::BPBTBUpdate(Addr instPC, void * &bp_history)
+{
+    if (predictor == Local) {
+        return localBP->BTBUpdate(instPC, bp_history);
+    } else if (predictor == Tournament) {
+        return tournamentBP->BTBUpdate(instPC, bp_history);
+    } else {
+        panic("Predictor type is unexpected value!");
+    }
+}
+
+template <class Impl>
+void
+BPredUnit<Impl>::BPUpdate(Addr instPC, bool taken, void *bp_history,
+                 bool squashed)
 {
     if (predictor == Local) {
         localBP->update(instPC, taken, bp_history);
     } else if (predictor == Tournament) {
-        tournamentBP->update(instPC, taken, bp_history);
+        tournamentBP->update(instPC, taken, bp_history, squashed);
     } else {
         panic("Predictor type is unexpected value!");
     }

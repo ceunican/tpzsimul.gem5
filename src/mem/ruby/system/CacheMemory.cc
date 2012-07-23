@@ -28,6 +28,9 @@
 
 #include "base/intmath.hh"
 #include "debug/RubyCache.hh"
+#include "debug/RubyCacheTrace.hh"
+#include "debug/RubyResourceStalls.hh"
+#include "debug/RubyStats.hh"
 #include "mem/protocol/AccessPermission.hh"
 #include "mem/ruby/system/CacheMemory.hh"
 #include "mem/ruby/system/System.hh"
@@ -49,7 +52,9 @@ RubyCacheParams::create()
 }
 
 CacheMemory::CacheMemory(const Params *p)
-    : SimObject(p)
+    : SimObject(p),
+    dataArray(p->dataArrayBanks, p->dataAccessLatency, p->start_index_bit),
+    tagArray(p->tagArrayBanks, p->tagAccessLatency, p->start_index_bit)
 {
     m_cache_size = p->size;
     m_latency = p->latency;
@@ -58,6 +63,7 @@ CacheMemory::CacheMemory(const Params *p)
     m_profiler_ptr = new CacheProfiler(name());
     m_start_index_bit = p->start_index_bit;
     m_is_instruction_only_cache = p->is_icache;
+    m_resource_stalls = p->resourceStalls;
 }
 
 void
@@ -97,31 +103,6 @@ CacheMemory::~CacheMemory()
             delete m_cache[i][j];
         }
     }
-}
-
-void
-CacheMemory::printConfig(ostream& out)
-{
-    int block_size = RubySystem::getBlockSizeBytes();
-
-    out << "Cache config: " << m_cache_name << endl;
-    out << "  cache_associativity: " << m_cache_assoc << endl;
-    out << "  num_cache_sets_bits: " << m_cache_num_set_bits << endl;
-    const int cache_num_sets = 1 << m_cache_num_set_bits;
-    out << "  num_cache_sets: " << cache_num_sets << endl;
-    out << "  cache_set_size_bytes: " << cache_num_sets * block_size << endl;
-    out << "  cache_set_size_Kbytes: "
-        << double(cache_num_sets * block_size) / (1<<10) << endl;
-    out << "  cache_set_size_Mbytes: "
-        << double(cache_num_sets * block_size) / (1<<20) << endl;
-    out << "  cache_size_bytes: "
-        << cache_num_sets * block_size * m_cache_assoc << endl;
-    out << "  cache_size_Kbytes: "
-        << double(cache_num_sets * block_size * m_cache_assoc) / (1<<10)
-        << endl;
-    out << "  cache_size_Mbytes: "
-        << double(cache_num_sets * block_size * m_cache_assoc) / (1<<20)
-        << endl;
 }
 
 // convert a Address to its location in the cache
@@ -339,12 +320,12 @@ CacheMemory::lookup(const Address& address) const
 void
 CacheMemory::setMRU(const Address& address)
 {
-    Index cacheSet;
+    Index cacheSet = addressToCacheSet(address);
+    int loc = findTagInSet(cacheSet, address);
 
-    cacheSet = addressToCacheSet(address);
-    m_replacementPolicy_ptr->
-        touch(cacheSet, findTagInSet(cacheSet, address),
-              g_eventQueue_ptr->getTime());
+    if(loc != -1)
+        m_replacementPolicy_ptr->
+             touch(cacheSet, loc, g_eventQueue_ptr->getTime());
 }
 
 void
@@ -398,7 +379,7 @@ CacheMemory::recordCacheContents(int cntrl, CacheRecorder* tr) const
         }
     }
 
-    DPRINTF(RubyCache, "%s: %lli blocks of %lli total blocks"
+    DPRINTF(RubyCacheTrace, "%s: %lli blocks of %lli total blocks"
             "recorded %.2f%% \n", name().c_str(), warmedUpBlocks,
             (uint64)m_cache_num_sets * (uint64)m_cache_assoc,
             (float(warmedUpBlocks)/float(totalBlocks))*100.0);
@@ -473,5 +454,90 @@ CacheMemory::isLocked(const Address& address, int context)
     DPRINTF(RubyCache, "Testing Lock for addr: %llx cur %d con %d\n",
             address, m_cache[cacheSet][loc]->m_locked, context);
     return m_cache[cacheSet][loc]->m_locked == context;
+}
+
+void
+CacheMemory::recordRequestType(CacheRequestType requestType) {
+    DPRINTF(RubyStats, "Recorded statistic: %s\n",
+            CacheRequestType_to_string(requestType));
+    switch(requestType) {
+    case CacheRequestType_DataArrayRead:
+        numDataArrayReads++;
+        return;
+    case CacheRequestType_DataArrayWrite:
+        numDataArrayWrites++;
+        return;
+    case CacheRequestType_TagArrayRead:
+        numTagArrayReads++;
+        return;
+    case CacheRequestType_TagArrayWrite:
+        numTagArrayWrites++;
+        return;
+    default:
+        warn("CacheMemory access_type not found: %s",
+             CacheRequestType_to_string(requestType));
+    }
+}
+
+void
+CacheMemory::regStats() {
+    using namespace Stats;
+
+    numDataArrayReads
+        .name(name() + ".num_data_array_reads")
+        .desc("number of data array reads")
+        ;
+
+    numDataArrayWrites
+        .name(name() + ".num_data_array_writes")
+        .desc("number of data array writes")
+        ;
+
+    numTagArrayReads
+        .name(name() + ".num_tag_array_reads")
+        .desc("number of tag array reads")
+        ;
+
+    numTagArrayWrites
+        .name(name() + ".num_tag_array_writes")
+        .desc("number of tag array writes")
+        ;
+
+    numTagArrayStalls
+        .name(name() + ".num_tag_array_stalls")
+        .desc("number of stalls caused by tag array")
+        ;
+
+    numDataArrayStalls
+        .name(name() + ".num_data_array_stalls")
+        .desc("number of stalls caused by data array")
+        ;
+}
+
+bool
+CacheMemory::checkResourceAvailable(CacheResourceType res, Address addr)
+{
+    if (!m_resource_stalls) {
+        return true;
+    }
+
+    if (res == CacheResourceType_TagArray) {
+        if (tagArray.tryAccess(addressToCacheSet(addr))) return true;
+        else {
+            DPRINTF(RubyResourceStalls, "Tag array stall on addr %s in set %d\n", addr, addressToCacheSet(addr));
+            numTagArrayStalls++;
+            return false;
+        }
+    } else if (res == CacheResourceType_DataArray) {
+        if (dataArray.tryAccess(addressToCacheSet(addr))) return true;
+        else {
+            DPRINTF(RubyResourceStalls, "Data array stall on addr %s in set %d\n", addr, addressToCacheSet(addr));
+            numDataArrayStalls++;
+            return false;
+        }
+    } else {
+        assert(false);
+        return true;
+    }
 }
 

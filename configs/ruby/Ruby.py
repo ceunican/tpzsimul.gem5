@@ -45,6 +45,9 @@ from m5.objects import *
 from m5.defines import buildEnv
 
 def define_options(parser):
+    # By default, ruby uses the simple timing cpu
+    parser.set_defaults(cpu_type="timing")
+
     # ruby network options
     parser.add_option("--topology", type="string", default="Crossbar",
                  help="check src/mem/ruby/network/topologies for complete set")
@@ -94,7 +97,17 @@ def define_options(parser):
     exec "import %s" % protocol
     eval("%s.define_options(parser)" % protocol)
 
-def create_system(options, system, piobus = None, dma_devices = []):
+def create_topology(controllers, options):
+    """ Called from create_system in configs/ruby/<protocol>.py
+        Must return an object which is a subclass of BaseTopology
+        found in configs/topologies/BaseTopology.py
+        This is a wrapper for the legacy topologies.
+    """
+    exec "import %s as Topo" % options.topology
+    topology = eval("Topo.%s(controllers)" % options.topology)
+    return topology
+
+def create_system(options, system, piobus = None, dma_ports = []):
 
     system.ruby = RubySystem(clock = options.clock,
                              stats_filename = options.ruby_stats,
@@ -104,9 +117,8 @@ def create_system(options, system, piobus = None, dma_devices = []):
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
     try:
-        (cpu_sequencers, dir_cntrls, all_cntrls) = \
-             eval("%s.create_system(options, system, piobus, \
-                                    dma_devices, ruby)" \
+        (cpu_sequencers, dir_cntrls, topology) = \
+             eval("%s.create_system(options, system, piobus, dma_ports, ruby)"
                   % protocol)
     except:
         print "Error: could not create sytem for ruby protocol %s" % protocol
@@ -115,16 +127,13 @@ def create_system(options, system, piobus = None, dma_devices = []):
     # Create a port proxy for connecting the system port. This is
     # independent of the protocol and kept in the protocol-agnostic
     # part (i.e. here).
-    sys_port_proxy = RubyPortProxy(version = 0,
-                                   physMemPort = system.physmem.port,
-                                   physmem = system.physmem,
-                                   ruby_system = ruby)
+    sys_port_proxy = RubyPortProxy(ruby_system = ruby)
     # Give the system port proxy a SimObject parent without creating a
     # full-fledged controller
     system.sys_port_proxy = sys_port_proxy
 
     # Connect the system port for loading of binaries etc
-    system.system_port = system.sys_port_proxy.port
+    system.system_port = system.sys_port_proxy.slave
 
 
     #
@@ -152,17 +161,17 @@ def create_system(options, system, piobus = None, dma_devices = []):
         class RouterClass(BasicRouter): pass
     
     #
-    # Important: the topology must be created before the network and after the
-    # controllers.
+    # Important: the topology must be instantiated before the network and after
+    # the controllers. Hence the separation between topology definition and
+    # instantiation. TopologyCreator is in src/mem/ruby/network/topologies/.
     #
-    exec "import %s" % options.topology
+    from TopologyCreator import instantiateTopology
     try:
-        net_topology = eval("%s.makeTopology(all_cntrls, options, \
-                                             IntLinkClass, ExtLinkClass, \
-                                             RouterClass)" \
-                            % options.topology)
+        net_topology = instantiateTopology(topology, options, \
+                                           IntLinkClass, ExtLinkClass, \
+                                           RouterClass)
     except:
-        print "Error: could not create topology %s" % options.topology
+        print "Error: could not make topology %s" % options.topology
         raise
 
 
@@ -210,9 +219,10 @@ def create_system(options, system, piobus = None, dma_devices = []):
         total_mem_size.value += dir_cntrl.directory.size.value
         dir_cntrl.directory.numa_high_bit = numa_bit
         
-    physmem_size = long(system.physmem.range.second) - \
-                     long(system.physmem.range.first) + 1
-    assert(total_mem_size.value == physmem_size)
+    phys_mem_size = 0
+    for mem in system.memories.unproxy(system):
+        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
+    assert(total_mem_size.value == phys_mem_size)
 
     ruby_profiler = RubyProfiler(ruby_system = ruby,
                                  num_of_sequencers = len(cpu_sequencers))

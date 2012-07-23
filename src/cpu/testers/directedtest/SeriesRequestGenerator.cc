@@ -52,14 +52,12 @@ SeriesRequestGenerator::initiate()
     DPRINTF(DirectedTest, "initiating request\n");
     assert(m_status == SeriesRequestGeneratorStatus_Thinking);
 
-    RubyDirectedTester::CpuPort* port =
-        safe_cast<RubyDirectedTester::CpuPort*>(m_directed_tester->
-                                              getCpuPort(m_active_node));
+    MasterPort* port = m_directed_tester->getCpuPort(m_active_node);
 
     Request::Flags flags;
 
     // For simplicity, requests are assumed to be 1 byte-sized
-    Request *req = new Request(m_address, 1, flags);
+    Request *req = new Request(m_address, 1, flags, masterId);
 
     Packet::Command cmd;
     if (m_issue_writes) {
@@ -67,12 +65,12 @@ SeriesRequestGenerator::initiate()
     } else {
         cmd = MemCmd::ReadReq;
     }
-    PacketPtr pkt = new Packet(req, cmd, m_active_node);
+    PacketPtr pkt = new Packet(req, cmd);
     uint8_t* dummyData = new uint8_t;
     *dummyData = 0;
     pkt->dataDynamic(dummyData);
 
-    if (port->sendTiming(pkt)) {
+    if (port->sendTimingReq(pkt)) {
         DPRINTF(DirectedTest, "initiating request - successful\n");
         m_status = SeriesRequestGeneratorStatus_Request_Pending;
         return true;

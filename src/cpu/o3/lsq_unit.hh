@@ -37,12 +37,10 @@
 #include <map>
 #include <queue>
 
-#include "arch/faults.hh"
 #include "arch/generic/debugfaults.hh"
 #include "arch/isa_traits.hh"
 #include "arch/locked_mem.hh"
 #include "arch/mmapped_ipr.hh"
-#include "base/fast_alloc.hh"
 #include "base/hashmap.hh"
 #include "config/the_isa.hh"
 #include "cpu/inst_seq.hh"
@@ -50,6 +48,7 @@
 #include "debug/LSQUnit.hh"
 #include "mem/packet.hh"
 #include "mem/port.hh"
+#include "sim/fault_fwd.hh"
 
 struct DerivO3CPUParams;
 
@@ -90,7 +89,7 @@ class LSQUnit {
     void regStats();
 
     /** Sets the pointer to the dcache port. */
-    void setDcachePort(Port *dcache_port);
+    void setDcachePort(MasterPort *dcache_port);
 
     /** Switches out LSQ unit. */
     void switchOut();
@@ -268,36 +267,36 @@ class LSQUnit {
     LSQ *lsq;
 
     /** Pointer to the dcache port.  Used only for sending. */
-    Port *dcachePort;
+    MasterPort *dcachePort;
 
     /** Derived class to hold any sender state the LSQ needs. */
-    class LSQSenderState : public Packet::SenderState, public FastAlloc
+    class LSQSenderState : public Packet::SenderState
     {
       public:
         /** Default constructor. */
         LSQSenderState()
-            : noWB(false), isSplit(false), pktToSend(false), outstanding(1),
-              mainPkt(NULL), pendingPacket(NULL)
-        { }
+            : mainPkt(NULL), pendingPacket(NULL), outstanding(1),
+              noWB(false), isSplit(false), pktToSend(false)
+          { }
 
         /** Instruction who initiated the access to memory. */
         DynInstPtr inst;
+        /** The main packet from a split load, used during writeback. */
+        PacketPtr mainPkt;
+        /** A second packet from a split store that needs sending. */
+        PacketPtr pendingPacket;
+        /** The LQ/SQ index of the instruction. */
+        uint8_t idx;
+        /** Number of outstanding packets to complete. */
+        uint8_t outstanding;
         /** Whether or not it is a load. */
         bool isLoad;
-        /** The LQ/SQ index of the instruction. */
-        int idx;
         /** Whether or not the instruction will need to writeback. */
         bool noWB;
         /** Whether or not this access is split in two. */
         bool isSplit;
         /** Whether or not there is a packet that needs sending. */
         bool pktToSend;
-        /** Number of outstanding packets to complete. */
-        int outstanding;
-        /** The main packet from a split load, used during writeback. */
-        PacketPtr mainPkt;
-        /** A second packet from a split store that needs sending. */
-        PacketPtr pendingPacket;
 
         /** Completes a packet and returns whether the access is finished. */
         inline bool complete() { return --outstanding == 0; }
@@ -343,7 +342,8 @@ class LSQUnit {
         {
             std::memset(data, 0, sizeof(data));
         }
-
+        /** The store data. */
+        char data[16];
         /** The store instruction. */
         DynInstPtr inst;
         /** The request for the store. */
@@ -352,9 +352,7 @@ class LSQUnit {
         RequestPtr sreqLow;
         RequestPtr sreqHigh;
         /** The size of the store. */
-        int size;
-        /** The store data. */
-        char data[16];
+        uint8_t size;
         /** Whether or not the store is split into two requests. */
         bool isSplit;
         /** Whether or not the store can writeback. */
@@ -594,9 +592,9 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
         // Disable recording the result temporarily.  Writing to misc
         // regs normally updates the result, but this is not the
         // desired behavior when handling store conditionals.
-        load_inst->recordResult = false;
+        load_inst->recordResult(false);
         TheISA::handleLockedRead(load_inst.get(), req);
-        load_inst->recordResult = true;
+        load_inst->recordResult(true);
     }
 
     if (req->isMmappedIpr()) {
@@ -605,18 +603,15 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
 
         ThreadContext *thread = cpu->tcBase(lsqID);
         Tick delay;
-        PacketPtr data_pkt =
-            new Packet(req, MemCmd::ReadReq, Packet::Broadcast);
+        PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
 
         if (!TheISA::HasUnalignedMemAcc || !sreqLow) {
             data_pkt->dataStatic(load_inst->memData);
             delay = TheISA::handleIprRead(thread, data_pkt);
         } else {
             assert(sreqLow->isMmappedIpr() && sreqHigh->isMmappedIpr());
-            PacketPtr fst_data_pkt =
-                new Packet(sreqLow, MemCmd::ReadReq, Packet::Broadcast);
-            PacketPtr snd_data_pkt =
-                new Packet(sreqHigh, MemCmd::ReadReq, Packet::Broadcast);
+            PacketPtr fst_data_pkt = new Packet(sreqLow, MemCmd::ReadReq);
+            PacketPtr snd_data_pkt = new Packet(sreqHigh, MemCmd::ReadReq);
 
             fst_data_pkt->dataStatic(load_inst->memData);
             snd_data_pkt->dataStatic(load_inst->memData + sreqLow->getSize());
@@ -655,7 +650,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
         else if (storeQueue[store_idx].inst->uncacheable())
             continue;
 
-        assert(storeQueue[store_idx].inst->effAddrValid);
+        assert(storeQueue[store_idx].inst->effAddrValid());
 
         // Check if the store data is within the lower and upper bounds of
         // addresses that the request needs.
@@ -689,8 +684,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
                     "addr %#x, data %#x\n",
                     store_idx, req->getVaddr(), data);
 
-            PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq,
-                                            Packet::Broadcast);
+            PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
             data_pkt->dataStatic(load_inst->memData);
 
             WritebackEvent *wb = new WritebackEvent(load_inst, data_pkt, this);
@@ -772,7 +766,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
     if (!lsq->cacheBlocked()) {
         MemCmd command =
             req->isLLSC() ? MemCmd::LoadLockedReq : MemCmd::ReadReq;
-        PacketPtr data_pkt = new Packet(req, command, Packet::Broadcast);
+        PacketPtr data_pkt = new Packet(req, command);
         PacketPtr fst_data_pkt = NULL;
         PacketPtr snd_data_pkt = NULL;
 
@@ -791,8 +785,8 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
         } else {
 
             // Create the split packets.
-            fst_data_pkt = new Packet(sreqLow, command, Packet::Broadcast);
-            snd_data_pkt = new Packet(sreqHigh, command, Packet::Broadcast);
+            fst_data_pkt = new Packet(sreqLow, command);
+            snd_data_pkt = new Packet(sreqHigh, command);
 
             fst_data_pkt->dataStatic(load_inst->memData);
             snd_data_pkt->dataStatic(load_inst->memData + sreqLow->getSize());
@@ -805,7 +799,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
             state->mainPkt = data_pkt;
         }
 
-        if (!dcachePort->sendTiming(fst_data_pkt)) {
+        if (!dcachePort->sendTimingReq(fst_data_pkt)) {
             // Delete state and data packet because a load retry
             // initiates a pipeline restart; it does not retry.
             delete state;
@@ -834,7 +828,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
             // The first packet will return in completeDataAccess and be
             // handled there.
             ++usedPorts;
-            if (!dcachePort->sendTiming(snd_data_pkt)) {
+            if (!dcachePort->sendTimingReq(snd_data_pkt)) {
 
                 // The main packet will be deleted in completeDataAccess.
                 delete snd_data_pkt->req;

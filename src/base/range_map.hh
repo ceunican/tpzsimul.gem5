@@ -32,9 +32,16 @@
 #define __BASE_RANGE_MAP_HH__
 
 #include <map>
+#include <utility>
 
 #include "base/range.hh"
 
+/**
+ * The range_map uses an STL map to implement an interval tree. The
+ * type of both the key (range) and the value are template
+ * parameters. It can, for example, be used for address decoding,
+ * using a range of addresses to map to ports.
+ */
 template <class T,class V>
 class range_map
 {
@@ -44,9 +51,34 @@ class range_map
 
   public:
     typedef typename RangeMap::iterator iterator;
+    typedef typename RangeMap::const_iterator const_iterator;
 
     template <class U>
-    const iterator
+    const_iterator
+    find(const Range<U> &r) const
+    {
+        const_iterator i;
+
+        i = tree.upper_bound(r);
+
+        if (i == tree.begin()) {
+            if (i->first.start <= r.end && i->first.end >= r.start)
+                return i;
+            else
+                // Nothing could match, so return end()
+                return tree.end();
+        }
+
+        --i;
+
+        if (i->first.start <= r.end && i->first.end >= r.start)
+            return i;
+
+        return tree.end();
+    }
+
+    template <class U>
+    iterator
     find(const Range<U> &r)
     {
         iterator i;
@@ -61,7 +93,7 @@ class range_map
                 return tree.end();
         }
 
-        i--;
+        --i;
 
         if (i->first.start <= r.end && i->first.end >= r.start)
             return i;
@@ -70,7 +102,14 @@ class range_map
     }
 
     template <class U>
-    const iterator
+    const_iterator
+    find(const U &r) const
+    {
+        return find(RangeSize(r, 1));
+    }
+
+    template <class U>
+    iterator
     find(const U &r)
     {
         return find(RangeSize(r, 1));
@@ -87,7 +126,6 @@ class range_map
         return false;
     }
 
-
     template <class U,class W>
     iterator
     insert(const Range<U> &r, const W d)
@@ -95,7 +133,7 @@ class range_map
         if (intersect(r))
             return tree.end();
 
-        return tree.insert(std::make_pair<Range<T>,V>(r, d)).first;
+        return tree.insert(std::make_pair(r, d)).first;
     }
 
     size_t
@@ -122,10 +160,22 @@ class range_map
         tree.erase(tree.begin(), tree.end());
     }
 
+    const_iterator
+    begin() const
+    {
+        return tree.begin();
+    }
+
     iterator
     begin()
     {
         return tree.begin();
+    }
+
+    const_iterator
+    end() const
+    {
+        return tree.end();
     }
 
     iterator
@@ -135,13 +185,13 @@ class range_map
     }
 
     size_t
-    size()
+    size() const
     {
         return tree.size();
     }
 
     bool
-    empty()
+    empty() const
     {
         return tree.empty();
     }

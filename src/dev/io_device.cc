@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -29,17 +41,15 @@
  *          Nathan Binkert
  */
 
-#include "base/chunk_generator.hh"
 #include "base/trace.hh"
 #include "debug/BusAddrRanges.hh"
-#include "debug/DMA.hh"
 #include "dev/io_device.hh"
 #include "sim/system.hh"
 
-PioPort::PioPort(PioDevice *dev, System *s, std::string pname)
-    : SimpleTimingPort(dev->name() + pname, dev), device(dev)
-{ }
-
+PioPort::PioPort(PioDevice *dev)
+    : SimpleTimingPort(dev->name() + ".pio", dev), device(dev)
+{
+}
 
 Tick
 PioPort::recvAtomic(PacketPtr pkt)
@@ -48,48 +58,41 @@ PioPort::recvAtomic(PacketPtr pkt)
 }
 
 AddrRangeList
-PioPort::getAddrRanges()
+PioPort::getAddrRanges() const
 {
     return device->getAddrRanges();
 }
 
-
 PioDevice::PioDevice(const Params *p)
-    : MemObject(p), sys(p->system), pioPort(NULL)
+    : MemObject(p), sys(p->system), pioPort(this)
 {}
 
 PioDevice::~PioDevice()
 {
-    if (pioPort)
-        delete pioPort;
 }
 
 void
 PioDevice::init()
 {
-    if (!pioPort)
+    if (!pioPort.isConnected())
         panic("Pio port of %s not connected to anything!", name());
-    pioPort->sendRangeChange();
+    pioPort.sendRangeChange();
 }
 
-Port *
-PioDevice::getPort(const std::string &if_name, int idx)
+SlavePort &
+PioDevice::getSlavePort(const std::string &if_name, int idx)
 {
     if (if_name == "pio") {
-        if (pioPort != NULL)
-            fatal("%s: pio port already connected to %s",
-                  name(), pioPort->getPeer()->name());
-        pioPort = new PioPort(this, sys);
         return pioPort;
     }
-    return NULL;
+    return MemObject::getSlavePort(if_name, idx);
 }
 
 unsigned int
 PioDevice::drain(Event *de)
 {
     unsigned int count;
-    count = pioPort->drain(de);
+    count = pioPort.drain(de);
     if (count)
         changeState(Draining);
     else
@@ -103,7 +106,7 @@ BasicPioDevice::BasicPioDevice(const Params *p)
 {}
 
 AddrRangeList
-BasicPioDevice::getAddrRanges()
+BasicPioDevice::getAddrRanges() const
 {
     assert(pioSize != 0);
     AddrRangeList ranges;
@@ -111,273 +114,3 @@ BasicPioDevice::getAddrRanges()
     ranges.push_back(RangeSize(pioAddr, pioSize));
     return ranges;
 }
-
-
-DmaPort::DmaPort(MemObject *dev, System *s, Tick min_backoff, Tick max_backoff,
-                 bool recv_snoops)
-    : Port(dev->name() + "-dmaport", dev), device(dev), sys(s),
-      pendingCount(0), actionInProgress(0), drainEvent(NULL),
-      backoffTime(0), minBackoffDelay(min_backoff),
-      maxBackoffDelay(max_backoff), inRetry(false), recvSnoops(recv_snoops),
-      backoffEvent(this)
-{ }
-
-bool
-DmaPort::recvTiming(PacketPtr pkt)
-{
-    if (pkt->wasNacked()) {
-        DPRINTF(DMA, "Received nacked %s addr %#x\n",
-                pkt->cmdString(), pkt->getAddr());
-
-        if (backoffTime < minBackoffDelay)
-            backoffTime = minBackoffDelay;
-        else if (backoffTime < maxBackoffDelay)
-            backoffTime <<= 1;
-
-        device->reschedule(backoffEvent, curTick() + backoffTime, true);
-
-        DPRINTF(DMA, "Backoff time set to %d ticks\n", backoffTime);
-
-        pkt->reinitNacked();
-        queueDma(pkt, true);
-    } else if (pkt->isRequest() && recvSnoops) {
-        return true; 
-    } else if (pkt->senderState) {
-        DmaReqState *state;
-        backoffTime >>= 2;
-
-        DPRINTF(DMA, "Received response %s addr %#x size %#x\n",
-                pkt->cmdString(), pkt->getAddr(), pkt->req->getSize());
-        state = dynamic_cast<DmaReqState*>(pkt->senderState);
-        pendingCount--;
-
-        assert(pendingCount >= 0);
-        assert(state);
-
-        // We shouldn't ever get a block in ownership state
-        assert(!(pkt->memInhibitAsserted() && !pkt->sharedAsserted()));
-
-        state->numBytes += pkt->req->getSize();
-        assert(state->totBytes >= state->numBytes);
-        if (state->totBytes == state->numBytes) {
-            if (state->completionEvent) {
-                if (state->delay)
-                    device->schedule(state->completionEvent,
-                                     curTick() + state->delay);
-                else
-                    state->completionEvent->process();
-            }
-            delete state;
-        }
-        delete pkt->req;
-        delete pkt;
-
-        if (pendingCount == 0 && drainEvent) {
-            drainEvent->process();
-            drainEvent = NULL;
-        }
-    }  else {
-        panic("Got packet without sender state... huh?\n");
-    }
-
-    return true;
-}
-
-DmaDevice::DmaDevice(const Params *p)
-    : PioDevice(p), dmaPort(NULL)
-{ }
-
-
-unsigned int
-DmaDevice::drain(Event *de)
-{
-    unsigned int count;
-    count = pioPort->drain(de) + dmaPort->drain(de);
-    if (count)
-        changeState(Draining);
-    else
-        changeState(Drained);
-    return count;
-}
-
-unsigned int
-DmaPort::drain(Event *de)
-{
-    if (pendingCount == 0)
-        return 0;
-    drainEvent = de;
-    return 1;
-}
-
-
-void
-DmaPort::recvRetry()
-{
-    assert(transmitList.size());
-    bool result = true;
-    do {
-        PacketPtr pkt = transmitList.front();
-        DPRINTF(DMA, "Retry on %s addr %#x\n",
-                pkt->cmdString(), pkt->getAddr());
-        result = sendTiming(pkt);
-        if (result) {
-            DPRINTF(DMA, "-- Done\n");
-            transmitList.pop_front();
-            inRetry = false;
-        } else {
-            inRetry = true;
-            DPRINTF(DMA, "-- Failed, queued\n");
-        }
-    } while (!backoffTime &&  result && transmitList.size());
-
-    if (transmitList.size() && backoffTime && !inRetry) {
-        DPRINTF(DMA, "Scheduling backoff for %d\n", curTick()+backoffTime);
-        if (!backoffEvent.scheduled())
-            device->schedule(backoffEvent, backoffTime + curTick());
-    }
-    DPRINTF(DMA, "TransmitList: %d, backoffTime: %d inRetry: %d es: %d\n",
-            transmitList.size(), backoffTime, inRetry,
-            backoffEvent.scheduled());
-}
-
-
-void
-DmaPort::dmaAction(Packet::Command cmd, Addr addr, int size, Event *event,
-                   uint8_t *data, Tick delay, Request::Flags flag)
-{
-    assert(device->getState() == SimObject::Running);
-
-    DmaReqState *reqState = new DmaReqState(event, this, size, delay);
-
-
-    DPRINTF(DMA, "Starting DMA for addr: %#x size: %d sched: %d\n", addr, size,
-            event ? event->scheduled() : -1 );
-    for (ChunkGenerator gen(addr, size, peerBlockSize());
-         !gen.done(); gen.next()) {
-            Request *req = new Request(gen.addr(), gen.size(), flag);
-            PacketPtr pkt = new Packet(req, cmd, Packet::Broadcast);
-
-            // Increment the data pointer on a write
-            if (data)
-                pkt->dataStatic(data + gen.complete());
-
-            pkt->senderState = reqState;
-
-            assert(pendingCount >= 0);
-            pendingCount++;
-            DPRINTF(DMA, "--Queuing DMA for addr: %#x size: %d\n", gen.addr(),
-                    gen.size());
-            queueDma(pkt);
-    }
-
-}
-
-void
-DmaPort::queueDma(PacketPtr pkt, bool front)
-{
-
-    if (front)
-        transmitList.push_front(pkt);
-    else
-        transmitList.push_back(pkt);
-    sendDma();
-}
-
-
-void
-DmaPort::sendDma()
-{
-    // some kind of selction between access methods
-    // more work is going to have to be done to make
-    // switching actually work
-    assert(transmitList.size());
-    PacketPtr pkt = transmitList.front();
-
-    Enums::MemoryMode state = sys->getMemoryMode();
-    if (state == Enums::timing) {
-        if (backoffEvent.scheduled() || inRetry) {
-            DPRINTF(DMA, "Can't send immediately, waiting for retry or backoff timer\n");
-            return;
-        }
-
-        DPRINTF(DMA, "Attempting to send %s addr %#x\n",
-                pkt->cmdString(), pkt->getAddr());
-
-        bool result;
-        do {
-            result = sendTiming(pkt);
-            if (result) {
-                transmitList.pop_front();
-                DPRINTF(DMA, "-- Done\n");
-            } else {
-                inRetry = true;
-                DPRINTF(DMA, "-- Failed: queued\n");
-            }
-        } while (result && !backoffTime && transmitList.size());
-
-        if (transmitList.size() && backoffTime && !inRetry &&
-                !backoffEvent.scheduled()) {
-            DPRINTF(DMA, "-- Scheduling backoff timer for %d\n",
-                    backoffTime+curTick());
-            device->schedule(backoffEvent, backoffTime + curTick());
-        }
-    } else if (state == Enums::atomic) {
-        transmitList.pop_front();
-
-        Tick lat;
-        DPRINTF(DMA, "--Sending  DMA for addr: %#x size: %d\n",
-                pkt->req->getPaddr(), pkt->req->getSize());
-        lat = sendAtomic(pkt);
-        assert(pkt->senderState);
-        DmaReqState *state = dynamic_cast<DmaReqState*>(pkt->senderState);
-        assert(state);
-        state->numBytes += pkt->req->getSize();
-
-        DPRINTF(DMA, "--Received response for  DMA for addr: %#x size: %d nb: %d, tot: %d sched %d\n",
-                pkt->req->getPaddr(), pkt->req->getSize(), state->numBytes,
-                state->totBytes,
-                state->completionEvent ? state->completionEvent->scheduled() : 0 );
-
-        if (state->totBytes == state->numBytes) {
-            if (state->completionEvent) {
-                assert(!state->completionEvent->scheduled());
-                device->schedule(state->completionEvent,
-                                 curTick() + lat + state->delay);
-            }
-            delete state;
-            delete pkt->req;
-        }
-        pendingCount--;
-        assert(pendingCount >= 0);
-        delete pkt;
-
-        if (pendingCount == 0 && drainEvent) {
-            drainEvent->process();
-            drainEvent = NULL;
-        }
-
-   } else
-       panic("Unknown memory command state.");
-}
-
-DmaDevice::~DmaDevice()
-{
-    if (dmaPort)
-        delete dmaPort;
-}
-
-
-Port *
-DmaDevice::getPort(const std::string &if_name, int idx)
-{
-    if (if_name == "dma") {
-        if (dmaPort != NULL)
-            fatal("%s: dma port already connected to %s",
-                  name(), dmaPort->getPeer()->name());
-        dmaPort = new DmaPort(this, sys, params()->min_backoff_delay,
-                              params()->max_backoff_delay);
-        return dmaPort;
-    }
-    return PioDevice::getPort(if_name, idx);
-}
-

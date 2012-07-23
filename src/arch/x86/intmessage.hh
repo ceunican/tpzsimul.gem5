@@ -80,8 +80,9 @@ namespace X86ISA
     prepIntRequest(const uint8_t id, Addr offset, Addr size)
     {
         RequestPtr req = new Request(x86InterruptAddress(id, offset),
-                                     size, Request::UNCACHEABLE);
-        PacketPtr pkt = new Packet(req, MemCmd::MessageReq, Packet::Broadcast);
+                                     size, Request::UNCACHEABLE,
+                                     Request::intMasterId);
+        PacketPtr pkt = new Packet(req, MemCmd::MessageReq);
         pkt->allocate();
         return pkt;
     }

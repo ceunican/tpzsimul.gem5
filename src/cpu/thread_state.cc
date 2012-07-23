@@ -43,7 +43,7 @@
 #include "sim/system.hh"
 
 ThreadState::ThreadState(BaseCPU *cpu, ThreadID _tid, Process *_process)
-    : numInst(0), numLoad(0), _status(ThreadContext::Halted),
+    : numInst(0), numOp(0), numLoad(0), _status(ThreadContext::Halted),
       baseCpu(cpu), _threadId(_tid), lastActivate(0), lastSuspend(0),
       profile(NULL), profileNode(NULL), profilePC(0), quiesceEvent(NULL),
       kernelStats(NULL), process(_process), physProxy(NULL), virtProxy(NULL),
@@ -101,14 +101,49 @@ ThreadState::unserialize(Checkpoint *cp, const std::string &section)
 void
 ThreadState::initMemProxies(ThreadContext *tc)
 {
-    // Note that this only refers to the port on the CPU side and can
-    // safely be done at init() time even if the CPU is not connected
-    // (i.e. due to restoring from a checkpoint and later switching
-    // in.
-    if (physProxy == NULL)
-        physProxy = new PortProxy(*baseCpu->getPort("dcache_port"));
-    if (virtProxy == NULL)
+    // The port proxies only refer to the data port on the CPU side
+    // and can safely be done at init() time even if the CPU is not
+    // connected, i.e. when restoring from a checkpoint and later
+    // switching the CPU in.
+    if (FullSystem) {
+        assert(physProxy == NULL);
+        // This cannot be done in the constructor as the thread state
+        // itself is created in the base cpu constructor and the
+        // getDataPort is a virtual function
+        physProxy = new PortProxy(baseCpu->getDataPort());
+
+        assert(virtProxy == NULL);
         virtProxy = new FSTranslatingPortProxy(tc);
+    } else {
+        assert(proxy == NULL);
+        proxy = new SETranslatingPortProxy(baseCpu->getDataPort(),
+                                           process,
+                                           SETranslatingPortProxy::NextPage);
+    }
+}
+
+PortProxy &
+ThreadState::getPhysProxy()
+{
+    assert(FullSystem);
+    assert(physProxy != NULL);
+    return *physProxy;
+}
+
+FSTranslatingPortProxy &
+ThreadState::getVirtProxy()
+{
+    assert(FullSystem);
+    assert(virtProxy != NULL);
+    return *virtProxy;
+}
+
+SETranslatingPortProxy &
+ThreadState::getMemProxy()
+{
+    assert(!FullSystem);
+    assert(proxy != NULL);
+    return *proxy;
 }
 
 void
@@ -123,18 +158,4 @@ ThreadState::profileSample()
 {
     if (profile)
         profile->sample(profileNode, profilePC);
-}
-
-SETranslatingPortProxy *
-ThreadState::getMemProxy()
-{
-    if (proxy != NULL)
-        return proxy;
-
-    /* Use this port proxy to for syscall emulation writes to memory. */
-    proxy = new SETranslatingPortProxy(*process->system->getSystemPort(),
-                                       process,
-                                       SETranslatingPortProxy::NextPage);
-
-    return proxy;
 }

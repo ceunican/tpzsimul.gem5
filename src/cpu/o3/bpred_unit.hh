@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2011 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2004-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -137,6 +149,16 @@ class BPredUnit
      */
     bool BPLookup(Addr instPC, void * &bp_history);
 
+     /**
+     * If a branch is not taken, because the BTB address is invalid or missing,
+     * this function sets the appropriate counter in the global and local
+     * predictors to not taken.
+     * @param inst_PC The PC to look up the local predictor.
+     * @param bp_history Pointer that will be set to an object that
+     * has the branch predictor state associated with the lookup.
+     */
+    void BPBTBUpdate(Addr instPC, void * &bp_history);
+
     /**
      * Looks up a given PC in the BTB to see if a matching entry exists.
      * @param inst_PC The PC to look up.
@@ -159,9 +181,11 @@ class BPredUnit
      * @param taken Whether the branch was taken or not taken.
      * @param bp_history Pointer to the branch predictor state that is
      * associated with the branch lookup that is being updated.
+     * @param squashed Set to true when this function is called during a
+     * squash operation.
      * @todo Make this update flexible enough to handle a global predictor.
      */
-    void BPUpdate(Addr instPC, bool taken, void *bp_history);
+    void BPUpdate(Addr instPC, bool taken, void *bp_history, bool squashed);
 
     /**
      * Updates the BTB with the target of a branch.
@@ -182,9 +206,9 @@ class BPredUnit
         PredictorHistory(const InstSeqNum &seq_num, Addr instPC,
                          bool pred_taken, void *bp_history,
                          ThreadID _tid)
-            : seqNum(seq_num), pc(instPC), RASTarget(0), RASIndex(0),
-              tid(_tid), predTaken(pred_taken), usedRAS(0),
-              wasCall(0), bpHistory(bp_history)
+            : seqNum(seq_num), pc(instPC), bpHistory(bp_history), RASTarget(0),
+              RASIndex(0), tid(_tid), predTaken(pred_taken), usedRAS(0), pushedRAS(0),
+              wasCall(0), wasReturn(0), validBTB(0)
         {}
 
         bool operator==(const PredictorHistory &entry) const {
@@ -196,6 +220,12 @@ class BPredUnit
 
         /** The PC associated with the sequence number. */
         Addr pc;
+
+        /** Pointer to the history object passed back from the branch
+         * predictor.  It is used to update or restore state of the
+         * branch predictor.
+         */
+        void *bpHistory;
 
         /** The RAS target (only valid if a return). */
         TheISA::PCState RASTarget;
@@ -212,14 +242,16 @@ class BPredUnit
         /** Whether or not the RAS was used. */
         bool usedRAS;
 
+        /* Wether or not the RAS was pushed */
+        bool pushedRAS;
+
         /** Whether or not the instruction was a call. */
         bool wasCall;
 
-        /** Pointer to the history object passed back from the branch
-         * predictor.  It is used to update or restore state of the
-         * branch predictor.
-         */
-        void *bpHistory;
+        /** Whether or not the instruction was a return. */
+        bool wasReturn;
+        /** Whether or not the instruction had a valid BTB entry. */
+        bool validBTB;
     };
 
     typedef std::list<PredictorHistory> History;

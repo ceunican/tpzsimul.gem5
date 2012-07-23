@@ -65,12 +65,12 @@ RealViewCtrl::read(PacketPtr pkt)
         break;
       case Clock24:
         Tick clk;
-        clk = (Tick)(curTick() / (24 * SimClock::Int::us));
+        clk = SimClock::Float::MHz * curTick() * 24;
         pkt->set((uint32_t)(clk));
         break;
       case Clock100:
         Tick clk100;
-        clk100 = (Tick)(curTick() / (100 * SimClock::Int::us));
+        clk100 = SimClock::Float::MHz * curTick() * 100;
         pkt->set((uint32_t)(clk100));
         break;
       case Flash:
@@ -102,6 +102,9 @@ RealViewCtrl::read(PacketPtr pkt)
         break;
       case IdReg:
         pkt->set<uint32_t>(params()->idreg);
+        break;
+      case CfgStat:
+        pkt->set<uint32_t>(1);
         break;
       default:
         warn("Tried to read RealView I/O at offset %#x that doesn't exist\n",

@@ -58,6 +58,7 @@ output decoder {{
 #include <fenv.h>
 #endif
 
+#include "arch/power/decoder.hh"
 #include "arch/power/faults.hh"
 #include "arch/power/isa_traits.hh"
 #include "arch/power/utility.hh"
@@ -66,7 +67,6 @@ output decoder {{
 #include "cpu/thread_context.hh"
 
 using namespace PowerISA;
-using std::isnan;
 }};
 
 output exec {{
@@ -87,6 +87,5 @@ output exec {{
 #include "sim/sim_exit.hh"
 
 using namespace PowerISA;
-using std::isnan;
 }};
 

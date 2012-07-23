@@ -45,6 +45,7 @@
 #include "arch/locked_mem.hh"
 #include "base/str.hh"
 #include "config/the_isa.hh"
+#include "cpu/checker/cpu.hh"
 #include "cpu/o3/lsq.hh"
 #include "cpu/o3/lsq_unit.hh"
 #include "debug/Activity.hh"
@@ -52,10 +53,6 @@
 #include "debug/LSQUnit.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
 
 template<class Impl>
 LSQUnit<Impl>::WritebackEvent::WritebackEvent(DynInstPtr &_inst, PacketPtr _pkt,
@@ -242,7 +239,7 @@ LSQUnit<Impl>::regStats()
 
 template<class Impl>
 void
-LSQUnit<Impl>::setDcachePort(Port *dcache_port)
+LSQUnit<Impl>::setDcachePort(MasterPort *dcache_port)
 {
     dcachePort = dcache_port;
 }
@@ -468,7 +465,7 @@ LSQUnit<Impl>::checkSnoop(PacketPtr pkt)
     while (load_idx != loadTail) {
         DynInstPtr ld_inst = loadQueue[load_idx];
 
-        if (!ld_inst->effAddrValid || ld_inst->uncacheable()) {
+        if (!ld_inst->effAddrValid() || ld_inst->uncacheable()) {
             incrLdIdx(load_idx);
             continue;
         }
@@ -478,7 +475,7 @@ LSQUnit<Impl>::checkSnoop(PacketPtr pkt)
                     ld_inst->seqNum, load_addr, invalidate_addr);
 
         if (load_addr == invalidate_addr) {
-            if (ld_inst->possibleLoadViolation) {
+            if (ld_inst->possibleLoadViolation()) {
                 DPRINTF(LSQUnit, "Conflicting load at addr %#x [sn:%lli]\n",
                         ld_inst->physEffAddr, pkt->getAddr(), ld_inst->seqNum);
 
@@ -488,7 +485,7 @@ LSQUnit<Impl>::checkSnoop(PacketPtr pkt)
                 // If a older load checks this and it's true
                 // then we might have missed the snoop
                 // in which case we need to invalidate to be sure
-                ld_inst->hitExternalSnoop = true;
+                ld_inst->hitExternalSnoop(true);
             }
         }
         incrLdIdx(load_idx);
@@ -510,7 +507,7 @@ LSQUnit<Impl>::checkViolations(int load_idx, DynInstPtr &inst)
      */
     while (load_idx != loadTail) {
         DynInstPtr ld_inst = loadQueue[load_idx];
-        if (!ld_inst->effAddrValid || ld_inst->uncacheable()) {
+        if (!ld_inst->effAddrValid() || ld_inst->uncacheable()) {
             incrLdIdx(load_idx);
             continue;
         }
@@ -524,7 +521,7 @@ LSQUnit<Impl>::checkViolations(int load_idx, DynInstPtr &inst)
                 // If this load is to the same block as an external snoop
                 // invalidate that we've observed then the load needs to be
                 // squashed as it could have newer data
-                if (ld_inst->hitExternalSnoop) {
+                if (ld_inst->hitExternalSnoop()) {
                     if (!memDepViolator ||
                             ld_inst->seqNum < memDepViolator->seqNum) {
                         DPRINTF(LSQUnit, "Detected fault with inst [sn:%lli] "
@@ -543,7 +540,7 @@ LSQUnit<Impl>::checkViolations(int load_idx, DynInstPtr &inst)
 
                 // Otherwise, mark the load has a possible load violation
                 // and if we see a snoop before it's commited, we need to squash
-                ld_inst->possibleLoadViolation = true;
+                ld_inst->possibleLoadViolation(true);
                 DPRINTF(LSQUnit, "Found possible load violaiton at addr: %#x"
                         " between instructions [sn:%lli] and [sn:%lli]\n",
                         inst_eff_addr1, inst->seqNum, ld_inst->seqNum);
@@ -613,7 +610,7 @@ LSQUnit<Impl>::executeLoad(DynInstPtr &inst)
         iewStage->instToCommit(inst);
         iewStage->activityThisCycle();
     } else if (!loadBlocked()) {
-        assert(inst->effAddrValid);
+        assert(inst->effAddrValid());
         int load_idx = inst->lqIdx;
         incrLdIdx(load_idx);
 
@@ -826,13 +823,13 @@ LSQUnit<Impl>::writebackStores()
         if (!TheISA::HasUnalignedMemAcc || !storeQueue[storeWBIdx].isSplit) {
 
             // Build a single data packet if the store isn't split.
-            data_pkt = new Packet(req, command, Packet::Broadcast);
+            data_pkt = new Packet(req, command);
             data_pkt->dataStatic(inst->memData);
             data_pkt->senderState = state;
         } else {
             // Create two packets if the store is split in two.
-            data_pkt = new Packet(sreqLow, command, Packet::Broadcast);
-            snd_data_pkt = new Packet(sreqHigh, command, Packet::Broadcast);
+            data_pkt = new Packet(sreqLow, command);
+            snd_data_pkt = new Packet(sreqHigh, command);
 
             data_pkt->dataStatic(inst->memData);
             snd_data_pkt->dataStatic(inst->memData + sreqLow->getSize());
@@ -860,9 +857,9 @@ LSQUnit<Impl>::writebackStores()
             // Disable recording the result temporarily.  Writing to
             // misc regs normally updates the result, but this is not
             // the desired behavior when handling store conditionals.
-            inst->recordResult = false;
+            inst->recordResult(false);
             bool success = TheISA::handleLockedWrite(inst.get(), req);
-            inst->recordResult = true;
+            inst->recordResult(true);
 
             if (!success) {
                 // Instantly complete this store.
@@ -871,11 +868,12 @@ LSQUnit<Impl>::writebackStores()
                         inst->seqNum);
                 WritebackEvent *wb = new WritebackEvent(inst, data_pkt, this);
                 cpu->schedule(wb, curTick() + 1);
-#if USE_CHECKER
-                // Make sure to set the LLSC data for verification
-                inst->reqToVerify->setExtraData(0);
-                inst->completeAcc(data_pkt);
-#endif
+                if (cpu->checker) {
+                    // Make sure to set the LLSC data for verification
+                    // if checker is loaded
+                    inst->reqToVerify->setExtraData(0);
+                    inst->completeAcc(data_pkt);
+                }
                 completeStore(storeWBIdx);
                 incrStIdx(storeWBIdx);
                 continue;
@@ -1083,11 +1081,10 @@ LSQUnit<Impl>::storePostSend(PacketPtr pkt)
         // only works so long as the checker doesn't try to
         // verify the value in memory for stores.
         storeQueue[storeWBIdx].inst->setCompleted();
-#if USE_CHECKER
+
         if (cpu->checker) {
             cpu->checker->verify(storeQueue[storeWBIdx].inst);
         }
-#endif
     }
 
     if (needsTSO) {
@@ -1174,18 +1171,16 @@ LSQUnit<Impl>::completeStore(int store_idx)
     // Tell the checker we've completed this instruction.  Some stores
     // may get reported twice to the checker, but the checker can
     // handle that case.
-#if USE_CHECKER
     if (cpu->checker) {
         cpu->checker->verify(storeQueue[store_idx].inst);
     }
-#endif
 }
 
 template <class Impl>
 bool
 LSQUnit<Impl>::sendStore(PacketPtr data_pkt)
 {
-    if (!dcachePort->sendTiming(data_pkt)) {
+    if (!dcachePort->sendTimingReq(data_pkt)) {
         // Need to handle becoming blocked on a store.
         isStoreBlocked = true;
         ++lsqCacheBlocked;
@@ -1208,7 +1203,7 @@ LSQUnit<Impl>::recvRetry()
         LSQSenderState *state =
             dynamic_cast<LSQSenderState *>(retryPkt->senderState);
 
-        if (dcachePort->sendTiming(retryPkt)) {
+        if (dcachePort->sendTimingReq(retryPkt)) {
             // Don't finish the store unless this is the last packet.
             if (!TheISA::HasUnalignedMemAcc || !state->pktToSend ||
                     state->pendingPacket == retryPkt) {

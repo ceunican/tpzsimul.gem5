@@ -36,6 +36,7 @@
 #include "debug/MemoryAccess.hh"
 #include "debug/ProtocolTrace.hh"
 #include "debug/RubySequencer.hh"
+#include "debug/RubyStats.hh"
 #include "mem/protocol/PrefetchBit.hh"
 #include "mem/protocol/RubyAccessMode.hh"
 #include "mem/ruby/buffers/MessageBuffer.hh"
@@ -65,10 +66,6 @@ Sequencer::Sequencer(const Params *p)
     m_load_waiting_on_load_cycles = 0;
 
     m_outstanding_count = 0;
-
-    m_deadlock_threshold = 0;
-    m_instCache_ptr = NULL;
-    m_dataCache_ptr = NULL;
 
     m_instCache_ptr = p->icache;
     m_dataCache_ptr = p->dcache;
@@ -204,16 +201,6 @@ Sequencer::printProgress(ostream& out) const
 #endif
 }
 
-void
-Sequencer::printConfig(ostream& out) const
-{
-    out << "Seqeuncer config: " << m_name << endl
-        << "  controller: " << m_controller->getName() << endl
-        << "  version: " << m_version << endl
-        << "  max_outstanding_requests: " << m_max_outstanding_requests << endl
-        << "  deadlock_threshold: " << m_deadlock_threshold << endl;
-}
-
 // Insert the request on the correct request table.  Return true if
 // the entry was already present.
 RequestStatus
@@ -224,7 +211,9 @@ Sequencer::insertRequest(PacketPtr pkt, RubyRequestType request_type)
 
     // See if we should schedule a deadlock check
     if (deadlockCheckEvent.scheduled() == false) {
-        schedule(deadlockCheckEvent, m_deadlock_threshold + curTick());
+        schedule(deadlockCheckEvent,
+                 m_deadlock_threshold * g_eventQueue_ptr->getClock()
+                 + curTick());
     }
 
     Address line_addr(pkt->getAddr());
@@ -482,11 +471,9 @@ Sequencer::hitCallback(SequencerRequest* srequest,
 
     // Set this cache entry to the most recently used
     if (type == RubyRequestType_IFETCH) {
-        if (m_instCache_ptr->isTagPresent(request_line_address))
-            m_instCache_ptr->setMRU(request_line_address);
+        m_instCache_ptr->setMRU(request_line_address);
     } else {
-        if (m_dataCache_ptr->isTagPresent(request_line_address))
-            m_dataCache_ptr->setMRU(request_line_address);
+        m_dataCache_ptr->setMRU(request_line_address);
     }
 
     assert(g_eventQueue_ptr->getTime() >= issued_time);
@@ -733,6 +720,13 @@ Sequencer::checkCoherence(const Address& addr)
     g_system_ptr->checkGlobalCoherenceInvariant(addr);
 #endif
 }
+
+void
+Sequencer::recordRequestType(SequencerRequestType requestType) {
+    DPRINTF(RubyStats, "Recorded statistic: %s\n",
+            SequencerRequestType_to_string(requestType));
+}
+
 
 void
 Sequencer::evictionCallback(const Address& address)

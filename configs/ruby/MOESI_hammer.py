@@ -31,6 +31,7 @@ import math
 import m5
 from m5.objects import *
 from m5.defines import buildEnv
+from Ruby import create_topology
 
 #
 # Note: the L1 Cache latency is only used by the sequencer on fast path hits
@@ -58,7 +59,7 @@ def define_options(parser):
     parser.add_option("--dir-on", action="store_true",
           help="Hammer: enable Full-bit Directory")
 
-def create_system(options, system, piobus, dma_devices, ruby_system):
+def create_system(options, system, piobus, dma_ports, ruby_system):
 
     if buildEnv['PROTOCOL'] != 'MOESI_hammer':
         panic("This script requires the MOESI_hammer protocol to be built.")
@@ -111,14 +112,12 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
         cpu_seq = RubySequencer(version = i,
                                 icache = l1i_cache,
                                 dcache = l1d_cache,
-                                physMemPort = system.physmem.port,
-                                physmem = system.physmem,
                                 ruby_system = ruby_system)
 
         l1_cntrl.sequencer = cpu_seq
 
         if piobus != None:
-            cpu_seq.pio_port = piobus.port
+            cpu_seq.pio_port = piobus.slave
 
         if options.recycle_latency:
             l1_cntrl.recycle_latency = options.recycle_latency
@@ -132,8 +131,9 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
         cntrl_count += 1
 
-    phys_mem_size = long(system.physmem.range.second) - \
-                      long(system.physmem.range.first) + 1
+    phys_mem_size = 0
+    for mem in system.memories.unproxy(system):
+        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
     mem_module_size = phys_mem_size / options.num_dirs
 
     #
@@ -197,13 +197,11 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
         cntrl_count += 1
 
-    for i, dma_device in enumerate(dma_devices):
+    for i, dma_port in enumerate(dma_ports):
         #
         # Create the Ruby objects associated with the dma controller
         #
         dma_seq = DMASequencer(version = i,
-                               physMemPort = system.physmem.port,
-                               physmem = system.physmem,
                                ruby_system = ruby_system)
         
         dma_cntrl = DMA_Controller(version = i,
@@ -212,10 +210,7 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
                                    ruby_system = ruby_system)
 
         exec("system.dma_cntrl%d = dma_cntrl" % i)
-        if dma_device.type == 'MemTest':
-            exec("system.dma_cntrl%d.dma_sequencer.port = dma_device.test" % i)
-        else:
-            exec("system.dma_cntrl%d.dma_sequencer.port = dma_device.dma" % i)
+        exec("system.dma_cntrl%d.dma_sequencer.slave = dma_port" % i)
         dma_cntrl_nodes.append(dma_cntrl)
 
         if options.recycle_latency:
@@ -225,4 +220,6 @@ def create_system(options, system, piobus, dma_devices, ruby_system):
 
     all_cntrls = l1_cntrl_nodes + dir_cntrl_nodes + dma_cntrl_nodes
 
-    return (cpu_sequencers, dir_cntrl_nodes, all_cntrls)
+    topology = create_topology(all_cntrls, options)
+
+    return (cpu_sequencers, dir_cntrl_nodes, topology)

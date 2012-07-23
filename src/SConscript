@@ -237,7 +237,7 @@ class UnitTest(object):
     '''Create a UnitTest'''
 
     all = []
-    def __init__(self, target, *sources):
+    def __init__(self, target, *sources, **kwargs):
         '''Specify the target name and any sources.  Sources that are
         not SourceFiles are evalued with Source().  All files are
         guarded with a guard of the same name as the UnitTest
@@ -252,6 +252,7 @@ class UnitTest(object):
 
         self.sources = srcs
         self.target = target
+        self.main = kwargs.get('main', False)
         UnitTest.all.append(self)
 
 # Children should have access
@@ -353,6 +354,7 @@ def makeTheISA(source, target, env):
 
 #define THE_ISA ${{define(target_isa)}}
 #define TheISA ${{namespace(target_isa)}}
+#define THE_ISA_STR "${{target_isa}}"
 
 #endif // __CONFIG_THE_ISA_HH__''')
 
@@ -791,7 +793,7 @@ def embedPyFile(target, source, env):
 
 namespace {
 
-const char data_${sym}[] = {
+const uint8_t data_${sym}[] = {
 ''')
     code.indent()
     step = 16
@@ -852,7 +854,7 @@ def makeEnv(label, objsfx, strip = False, **kwargs):
         swig_env.Append(CCFLAGS='-Wno-sign-compare')
         swig_env.Append(CCFLAGS='-Wno-parentheses')
         swig_env.Append(CCFLAGS='-Wno-unused-label')
-        if compareVersions(env['GCC_VERSION'], '4.6.0') != -1:
+        if compareVersions(env['GCC_VERSION'], '4.6') >= 0:
             swig_env.Append(CCFLAGS='-Wno-unused-but-set-variable')
     if env['CLANG']:
         swig_env.Append(CCFLAGS=['-Wno-unused-label'])
@@ -906,8 +908,10 @@ def makeEnv(label, objsfx, strip = False, **kwargs):
         flags = { test.target : True }
         test_sources = Source.get(**flags)
         test_objs = [ make_obj(s, static=True) for s in test_sources ]
+        if test.main:
+            test_objs += main_objs
         testname = "unittest/%s.%s" % (test.target, label)
-        new_env.Program(testname, main_objs + test_objs + static_objs)
+        new_env.Program(testname, test_objs + static_objs)
 
     progname = exename
     if strip:
@@ -931,7 +935,7 @@ def makeEnv(label, objsfx, strip = False, **kwargs):
 
 # Debug binary
 ccflags = {}
-if env['GCC'] or env['CLANG']:
+if env['GCC']:
     if sys.platform == 'sunos5':
         ccflags['debug'] = '-gstabs+'
     else:
@@ -949,28 +953,61 @@ elif env['ICC']:
     ccflags['opt'] = '-g -O'
     ccflags['fast'] = '-fast'
     ccflags['prof'] = '-fast -g -pg'
+elif env['CLANG']:
+    ccflags['debug'] = '-g -O0'
+    ccflags['opt'] = '-g -O3'
+    ccflags['fast'] = '-O3'
+    ccflags['prof'] = '-O3 -g -pg'
 else:
     print 'Unknown compiler, please fix compiler options'
     Exit(1)
 
-makeEnv('debug', '.do',
-        CCFLAGS = Split(ccflags['debug']),
-        CPPDEFINES = ['DEBUG', 'TRACING_ON=1'])
+
+# To speed things up, we only instantiate the build environments we
+# need.  We try to identify the needed environment for each target; if
+# we can't, we fall back on instantiating all the environments just to
+# be safe.
+target_types = ['debug', 'opt', 'fast', 'prof']
+obj2target = {'do': 'debug', 'o': 'opt', 'fo': 'fast', 'po': 'prof'}
+
+def identifyTarget(t):
+    ext = t.split('.')[-1]
+    if ext in target_types:
+        return ext
+    if obj2target.has_key(ext):
+        return obj2target[ext]
+    match = re.search(r'/tests/([^/]+)/', t)
+    if match and match.group(1) in target_types:
+        return match.group(1)
+    return 'all'
+
+needed_envs = [identifyTarget(target) for target in BUILD_TARGETS]
+if 'all' in needed_envs:
+    needed_envs += target_types
+
+# Debug binary
+if 'debug' in needed_envs:
+    makeEnv('debug', '.do',
+            CCFLAGS = Split(ccflags['debug']),
+            CPPDEFINES = ['DEBUG', 'TRACING_ON=1'])
 
 # Optimized binary
-makeEnv('opt', '.o',
-        CCFLAGS = Split(ccflags['opt']),
-        CPPDEFINES = ['TRACING_ON=1'])
+if 'opt' in needed_envs:
+    makeEnv('opt', '.o',
+            CCFLAGS = Split(ccflags['opt']),
+            CPPDEFINES = ['TRACING_ON=1'])
 
 # "Fast" binary
-makeEnv('fast', '.fo', strip = True,
-        CCFLAGS = Split(ccflags['fast']),
-        CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'])
+if 'fast' in needed_envs:
+    makeEnv('fast', '.fo', strip = True,
+            CCFLAGS = Split(ccflags['fast']),
+            CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'])
 
 # Profiled binary
-makeEnv('prof', '.po',
-        CCFLAGS = Split(ccflags['prof']),
-        CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'],
-        LINKFLAGS = '-pg')
+if 'prof' in needed_envs:
+    makeEnv('prof', '.po',
+            CCFLAGS = Split(ccflags['prof']),
+            CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'],
+            LINKFLAGS = '-pg')
 
 Return('envList')

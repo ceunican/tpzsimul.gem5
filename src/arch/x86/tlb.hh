@@ -46,6 +46,7 @@
 
 #include "arch/x86/regs/segment.hh"
 #include "arch/x86/pagetable.hh"
+#include "base/trie.hh"
 #include "mem/mem_object.hh"
 #include "mem/request.hh"
 #include "params/X86TLB.hh"
@@ -103,6 +104,9 @@ namespace X86ISA
         EntryList freeList;
         EntryList entryList;
 
+        TlbEntryTrie trie;
+        uint64_t lruSeq;
+
         Fault translateInt(RequestPtr req, ThreadContext *tc);
 
         Fault translate(RequestPtr req, ThreadContext *tc,
@@ -111,15 +115,39 @@ namespace X86ISA
 
       public:
 
+        void evictLRU();
+
+        uint64_t
+        nextSeq()
+        {
+            return ++lruSeq;
+        }
+
         Fault translateAtomic(RequestPtr req, ThreadContext *tc, Mode mode);
         void translateTiming(RequestPtr req, ThreadContext *tc,
                 Translation *translation, Mode mode);
+        /** Stub function for compilation support of CheckerCPU. x86 ISA does
+         *  not support Checker model at the moment
+         */
+        Fault translateFunctional(RequestPtr req, ThreadContext *tc, Mode mode);
 
         TlbEntry * insert(Addr vpn, TlbEntry &entry);
 
         // Checkpointing
         virtual void serialize(std::ostream &os);
         virtual void unserialize(Checkpoint *cp, const std::string &section);
+
+        /**
+         * Get the table walker master port. This is used for
+         * migrating port connections during a CPU takeOverFrom()
+         * call. For architectures that do not have a table walker,
+         * NULL is returned, hence the use of a pointer rather than a
+         * reference. For X86 this method will always return a valid
+         * port pointer.
+         *
+         * @return A pointer to the walker master port
+         */
+        virtual MasterPort *getMasterPort();
     };
 }
 

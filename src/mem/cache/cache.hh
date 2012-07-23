@@ -41,6 +41,7 @@
  *          Dave Greene
  *          Steve Reinhardt
  *          Ron Dreslinski
+ *          Andreas Hansson
  */
 
 /**
@@ -76,59 +77,98 @@ class Cache : public BaseCache
 
   protected:
 
-    class CpuSidePort : public CachePort
+    /**
+     * The CPU-side port extends the base cache slave port with access
+     * functions for functional, atomic and timing requests.
+     */
+    class CpuSidePort : public CacheSlavePort
     {
-      public:
-        CpuSidePort(const std::string &_name,
-                    Cache<TagStore> *_cache,
-                    const std::string &_label);
+      private:
 
-        // BaseCache::CachePort just has a BaseCache *; this function
-        // lets us get back the type info we lost when we stored the
-        // cache pointer there.
-        Cache<TagStore> *myCache() {
-            return static_cast<Cache<TagStore> *>(cache);
-        }
+        // a pointer to our specific cache implementation
+        Cache<TagStore> *cache;
 
-        virtual AddrRangeList getAddrRanges();
+      protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingSnoopResp(PacketPtr pkt);
+
+        virtual bool recvTimingReq(PacketPtr pkt);
 
         virtual Tick recvAtomic(PacketPtr pkt);
 
         virtual void recvFunctional(PacketPtr pkt);
+
+        virtual unsigned deviceBlockSize() const
+        { return cache->getBlockSize(); }
+
+        virtual AddrRangeList getAddrRanges() const;
+
+      public:
+
+        CpuSidePort(const std::string &_name, Cache<TagStore> *_cache,
+                    const std::string &_label);
+
     };
 
-    class MemSidePort : public CachePort
+    /**
+     * Override the default behaviour of sendDeferredPacket to enable
+     * the memory-side cache port to also send requests based on the
+     * current MSHR status. This queue has a pointer to our specific
+     * cache implementation and is used by the MemSidePort.
+     */
+    class MemSidePacketQueue : public MasterPacketQueue
     {
+
+      protected:
+
+        Cache<TagStore> &cache;
+
       public:
-        MemSidePort(const std::string &_name,
-                    Cache<TagStore> *_cache,
+
+        MemSidePacketQueue(Cache<TagStore> &cache, MasterPort &port,
+                           const std::string &label) :
+            MasterPacketQueue(cache, port, label), cache(cache) { }
+
+        /**
+         * Override the normal sendDeferredPacket and do not only
+         * consider the transmit list (used for responses), but also
+         * requests.
+         */
+        virtual void sendDeferredPacket();
+
+    };
+
+    /**
+     * The memory-side port extends the base cache master port with
+     * access functions for functional, atomic and timing snoops.
+     */
+    class MemSidePort : public CacheMasterPort
+    {
+      private:
+
+        /** The cache-specific queue. */
+        MemSidePacketQueue _queue;
+
+        // a pointer to our specific cache implementation
+        Cache<TagStore> *cache;
+
+      protected:
+
+        virtual void recvTimingSnoopReq(PacketPtr pkt);
+
+        virtual bool recvTimingResp(PacketPtr pkt);
+
+        virtual Tick recvAtomicSnoop(PacketPtr pkt);
+
+        virtual void recvFunctionalSnoop(PacketPtr pkt);
+
+        virtual unsigned deviceBlockSize() const
+        { return cache->getBlockSize(); }
+
+      public:
+
+        MemSidePort(const std::string &_name, Cache<TagStore> *_cache,
                     const std::string &_label);
-
-        // BaseCache::CachePort just has a BaseCache *; this function
-        // lets us get back the type info we lost when we stored the
-        // cache pointer there.
-        Cache<TagStore> *myCache() {
-            return static_cast<Cache<TagStore> *>(cache);
-        }
-
-        void sendPacket();
-
-        void processSendEvent();
-
-        virtual bool isSnooping();
-
-        virtual bool recvTiming(PacketPtr pkt);
-
-        virtual void recvRetry();
-
-        virtual Tick recvAtomic(PacketPtr pkt);
-
-        virtual void recvFunctional(PacketPtr pkt);
-
-        typedef EventWrapper<MemSidePort, &MemSidePort::processSendEvent>
-                SendEvent;
     };
 
     /** Tag and data Storage */
@@ -149,6 +189,13 @@ class Cache : public BaseCache
      * Notify the prefetcher on every access, not just misses.
      */
     const bool prefetchOnAccess;
+
+    /**
+     * @todo this is a temporary workaround until the 4-phase code is committed.
+     * upstream caches need this packet until true is returned, so hold it for
+     * deletion until a subsequent call
+     */
+    std::vector<PacketPtr> pendingDelete;
 
     /**
      * Does all the processing necessary to perform the provided request.
@@ -211,9 +258,7 @@ class Cache : public BaseCache
 
   public:
     /** Instantiates a basic cache object. */
-    Cache(const Params *p, TagStore *tags, BasePrefetcher *prefetcher);
-
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+    Cache(const Params *p, TagStore *tags);
 
     void regStats();
 
@@ -303,12 +348,6 @@ class Cache : public BaseCache
     void markInService(MSHR *mshr, PacketPtr pkt = 0);
 
     /**
-     * Perform the given writeback request.
-     * @param pkt The writeback request.
-     */
-    void doWriteback(PacketPtr pkt);
-
-    /**
      * Return whether there are any outstanding misses.
      */
     bool outstandingMisses() const
@@ -332,6 +371,12 @@ class Cache : public BaseCache
      * Find next request ready time from among possible sources.
      */
     Tick nextMSHRReadyTime();
+
+    /** serialize the state of the caches
+     * We currently don't support checkpointing cache state, so this panics.
+     */
+    virtual void serialize(std::ostream &os);
+    void unserialize(Checkpoint *cp, const std::string &section);
 };
 
 #endif // __CACHE_HH__

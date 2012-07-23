@@ -29,6 +29,7 @@
 import m5
 from m5.objects import *
 m5.util.addToPath('../configs/common')
+m5.util.addToPath('../configs/topologies')
 
 nb_cores = 4
 cpus = [ DerivO3CPU(cpu_id=i) for i in xrange(nb_cores) ]
@@ -37,17 +38,19 @@ import ruby_config
 ruby_memory = ruby_config.generate("TwoLevel_SplitL1UnifiedL2.rb", nb_cores)
 
 # system simulated
-system = System(cpu = cpus, physmem = ruby_memory, membus = Bus())
+system = System(cpu = cpus, physmem = ruby_memory, membus = CoherentBus())
 
 for cpu in cpus:
+    # create the interrupt controller
+    cpu.createInterruptController()
     cpu.connectAllPorts(system.membus)
     cpu.clock = '2GHz'
 
 # connect memory to membus
-system.physmem.port = system.membus.port
+system.physmem.port = system.membus.master
 
 # Connect the system port for loading of binaries etc
-system.system_port = system.membus.port
+system.system_port = system.membus.slave
 
 # -----------------------
 # run simulation

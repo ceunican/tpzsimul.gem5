@@ -160,6 +160,7 @@ IIC::~IIC()
     delete [] dataStore;
     delete [] tagStore;
     delete [] sets;
+    delete [] dataBlks;
 }
 
 /* register cache stats */
@@ -369,9 +370,8 @@ IIC::freeReplacementBlock(PacketList & writebacks)
                                   tag_ptr->size);
 */
             Request *writebackReq = new Request(regenerateBlkAddr(tag_ptr->tag, 0),
-                                           blkSize, 0);
-            PacketPtr writeback = new Packet(writebackReq, MemCmd::Writeback,
-                                             -1);
+                                           blkSize, 0, Request::wbMasterId);
+            PacketPtr writeback = new Packet(writebackReq, MemCmd::Writeback);
             writeback->allocate();
             memcpy(writeback->getPtr<uint8_t>(), tag_ptr->data, blkSize);
 

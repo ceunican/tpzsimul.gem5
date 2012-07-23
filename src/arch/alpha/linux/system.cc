@@ -88,9 +88,9 @@ LinuxAlphaSystem::initState()
      * Since we aren't using a bootloader, we have to copy the
      * kernel arguments directly into the kernel's memory.
      */
-    virtProxy->writeBlob(CommandLine(),
-                         (uint8_t*)params()->boot_osflags.c_str(),
-                         params()->boot_osflags.length()+1);
+    virtProxy.writeBlob(CommandLine(),
+                        (uint8_t*)params()->boot_osflags.c_str(),
+                        params()->boot_osflags.length()+1);
 
     /**
      * find the address of the est_cycle_freq variable and insert it
@@ -98,8 +98,8 @@ LinuxAlphaSystem::initState()
      * calculated it by using the PIT, RTC, etc.
      */
     if (kernelSymtab->findAddress("est_cycle_freq", addr))
-        virtProxy->write(addr, (uint64_t)(SimClock::Frequency /
-                                          params()->boot_cpu_frequency));
+        virtProxy.write(addr, (uint64_t)(SimClock::Frequency /
+                                         params()->boot_cpu_frequency));
 
 
     /**
@@ -109,10 +109,16 @@ LinuxAlphaSystem::initState()
      * 255 ASNs.
      */
     if (kernelSymtab->findAddress("dp264_mv", addr))
-        virtProxy->write(addr + 0x18, LittleEndianGuest::htog((uint32_t)127));
+        virtProxy.write(addr + 0x18, LittleEndianGuest::htog((uint32_t)127));
     else
         panic("could not find dp264_mv\n");
 
+}
+
+void
+LinuxAlphaSystem::setupFuncEvents()
+{
+    AlphaSystem::setupFuncEvents();
 #ifndef NDEBUG
     kernelPanicEvent = addKernelFuncEvent<BreakPCEvent>("panic");
     if (!kernelPanicEvent)
@@ -148,6 +154,7 @@ LinuxAlphaSystem::initState()
     // re-enable, but we should find a better way to turn it on than
     // using DTRACE(Thread), since looking at a trace flag at tick 0
     // leads to non-intuitive behavior with --trace-start.
+    Addr addr = 0;
     if (false && kernelSymtab->findAddress("alpha_switch_to", addr)) {
         printThreadEvent = new PrintThreadInfo(&pcEventQueue, "threadinfo",
                                                addr + sizeof(MachInst) * 6);
@@ -176,10 +183,8 @@ LinuxAlphaSystem::setDelayLoop(ThreadContext *tc)
     if (kernelSymtab->findAddress("loops_per_jiffy", addr)) {
         Tick cpuFreq = tc->getCpuPtr()->frequency();
         assert(intrFreq);
-        FSTranslatingPortProxy* vp;
-
-        vp = tc->getVirtProxy();
-        vp->writeHtoG(addr, (uint32_t)((cpuFreq / intrFreq) * 0.9988));
+        FSTranslatingPortProxy &vp = tc->getVirtProxy();
+        vp.writeHtoG(addr, (uint32_t)((cpuFreq / intrFreq) * 0.9988));
     }
 }
 

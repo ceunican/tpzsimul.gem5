@@ -35,7 +35,9 @@ from m5.util import addToPath
 import os, optparse, sys
 addToPath('../common')
 addToPath('../ruby')
+addToPath('../topologies')
 
+import Options
 import Ruby
 
 # Get paths we might need.  It's expected this file is in m5/configs/example.
@@ -44,6 +46,7 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
 parser.add_option("-l", "--requests", metavar="N", default=100,
                   help="Stop after N requests")
@@ -81,11 +84,11 @@ else:
     sys.exit(1)
 
 #
-# Create the M5 system.  Note that the PhysicalMemory Object isn't
+# Create the M5 system.  Note that the Memory Object isn't
 # actually used by the rubytester, but is included to support the
 # M5 memory size == Ruby memory size checks
 #
-system = System(physmem = PhysicalMemory())
+system = System(physmem = SimpleMemory())
 
 #
 # Create the ruby random tester
@@ -102,7 +105,7 @@ for ruby_port in system.ruby._cpu_ruby_ports:
     #
     # Tie the ruby tester ports to the ruby cpu ports
     #
-    system.tester.cpuPort = ruby_port.port
+    system.tester.cpuPort = ruby_port.slave
 
 # -----------------------
 # run simulation

@@ -40,6 +40,7 @@
 #include "arch/kernel_stats.hh"
 
 class EndQuiesceEvent;
+class CheckerCPU;
 namespace Kernel {
     class Statistics;
 };
@@ -76,7 +77,17 @@ class InOrderThreadContext : public ThreadContext
     /** @TODO: PERF: Should we bind this to a pointer in constructor? */
     TheISA::TLB *getDTBPtr() { return cpu->getDTBPtr(); }
 
-    Decoder *getDecoderPtr() { return cpu->getDecoderPtr(); }
+    /** Currently InOrder model does not support CheckerCPU, this is
+     *  merely here for supporting compilation of gem5 with the Checker
+     *  as a runtime option
+     */
+    CheckerCPU *getCheckerCpuPtr() { return NULL; }
+
+    TheISA::Decoder *
+    getDecoderPtr()
+    {
+        return cpu->getDecoderPtr(thread->contextId());
+    }
 
     System *getSystemPtr() { return cpu->system; }
 
@@ -107,17 +118,13 @@ class InOrderThreadContext : public ThreadContext
 
     void setNextMicroPC(uint64_t val) { };
 
-    /** Returns a pointer to physical memory. */
-    PhysicalMemory *getPhysMemPtr()
-    { assert(0); return 0; /*return cpu->physmem;*/ }
-
     /** Returns a pointer to this thread's kernel statistics. */
     TheISA::Kernel::Statistics *getKernelStats()
     { return thread->kernelStats; }
 
-    PortProxy* getPhysProxy() { return thread->getPhysProxy(); }
+    PortProxy &getPhysProxy() { return thread->getPhysProxy(); }
 
-    FSTranslatingPortProxy* getVirtProxy();
+    FSTranslatingPortProxy &getVirtProxy();
 
     void initMemProxies(ThreadContext *tc)
     { thread->initMemProxies(tc); }
@@ -144,7 +151,7 @@ class InOrderThreadContext : public ThreadContext
         return this->thread->quiesceEvent;
     }
 
-    SETranslatingPortProxy* getMemProxy() { return thread->getMemProxy(); }
+    SETranslatingPortProxy &getMemProxy() { return thread->getMemProxy(); }
 
     /** Returns a pointer to this thread's process. */
     Process *getProcessPtr() { return thread->getProcessPtr(); }
@@ -214,6 +221,12 @@ class InOrderThreadContext : public ThreadContext
     /** Sets this thread's PC. */
     void pcState(const TheISA::PCState &val)
     { cpu->pcState(val, thread->threadId()); }
+
+    /** Needs to be implemented for future CheckerCPU support.
+     *  See O3CPU for examples on how to integrate Checker.
+     */
+    void pcStateNoRecord(const TheISA::PCState &val)
+    {}
 
     Addr instAddr()
     { return cpu->instAddr(thread->threadId()); }

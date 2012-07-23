@@ -56,20 +56,18 @@
 #include "cpu/pc_event.hh"
 #include "enums/MemoryMode.hh"
 #include "kern/system_events.hh"
+#include "mem/fs_translating_port_proxy.hh"
 #include "mem/mem_object.hh"
 #include "mem/port.hh"
+#include "mem/physical.hh"
 #include "params/System.hh"
 
 class BaseCPU;
 class BaseRemoteGDB;
-class FSTranslatingPortProxy;
 class GDBListener;
 class ObjectFile;
-class PhysicalMemory;
 class Platform;
-class PortProxy;
 class ThreadContext;
-class VirtualPort;
 
 class System : public MemObject
 {
@@ -80,7 +78,7 @@ class System : public MemObject
      * master for debug access and for non-structural entities that do
      * not have a port of their own.
      */
-    class SystemPort : public Port
+    class SystemPort : public MasterPort
     {
       public:
 
@@ -88,22 +86,12 @@ class System : public MemObject
          * Create a system port with a name and an owner.
          */
         SystemPort(const std::string &_name, MemObject *_owner)
-            : Port(_name, _owner)
+            : MasterPort(_name, _owner)
         { }
-        bool recvTiming(PacketPtr pkt)
+        bool recvTimingResp(PacketPtr pkt)
         { panic("SystemPort does not receive timing!\n"); return false; }
-        Tick recvAtomic(PacketPtr pkt)
-        { panic("SystemPort does not receive atomic!\n"); return 0; }
-        void recvFunctional(PacketPtr pkt)
-        { panic("SystemPort does not receive functional!\n"); }
-
-        /**
-         * The system port is a master port connected to a single
-         * slave and thus do not care about what ranges the slave
-         * covers (as there is nothing to choose from).
-         */
-        void recvRangeChange() { }
-
+        void recvRetry()
+        { panic("SystemPort does not expect retry!\n"); }
     };
 
     SystemPort _systemPort;
@@ -117,19 +105,19 @@ class System : public MemObject
     virtual void init();
 
     /**
-     * Get a pointer to the system port that can be used by
+     * Get a reference to the system port that can be used by
      * non-structural simulation objects like processes or threads, or
      * external entities like loaders and debuggers, etc, to access
      * the memory system.
      *
-     * @return a pointer to the system port we own
+     * @return a reference to the system port we own
      */
-    Port* getSystemPort() { return &_systemPort; }
+    MasterPort& getSystemPort() { return _systemPort; }
 
     /**
      * Additional function to return the Port of a memory object.
      */
-    Port *getPort(const std::string &if_name, int idx = -1);
+    MasterPort& getMasterPort(const std::string &if_name, int idx = -1);
 
     static const char *MemoryModeStrings[3];
 
@@ -146,7 +134,6 @@ class System : public MemObject
      */
     void setMemoryMode(Enums::MemoryMode mode);
 
-    PhysicalMemory *physmem;
     PCEventQueue pcEventQueue;
 
     std::vector<ThreadContext *> threadContexts;
@@ -167,22 +154,14 @@ class System : public MemObject
      * system.  These threads could be Active or Suspended. */
     int numRunningContexts();
 
-    /** List to store ranges of memories in this system */
-    AddrRangeList memRanges;
-
-    /** check if an address points to valid system memory
-     * and thus we can fetch instructions out of it
-     */
-    bool isMemory(const Addr addr) const;
-
     Addr pagePtr;
 
     uint64_t init_param;
 
     /** Port to physical memory used for writing object files into ram at
      * boot.*/
-    PortProxy* physProxy;
-    FSTranslatingPortProxy* virtProxy;
+    PortProxy physProxy;
+    FSTranslatingPortProxy virtProxy;
 
     /** kernel symbol table */
     SymbolTable *kernelSymtab;
@@ -216,20 +195,63 @@ class System : public MemObject
         return nextPID++;
     }
 
+    /** Get a pointer to access the physical memory of the system */
+    PhysicalMemory& getPhysMem() { return physmem; }
+
     /** Amount of physical memory that is still free */
-    Addr freeMemSize();
+    Addr freeMemSize() const;
 
     /** Amount of physical memory that exists */
-    Addr memSize();
+    Addr memSize() const;
+
+    /**
+     * Check if a physical address is within a range of a memory that
+     * is part of the global address map.
+     *
+     * @param addr A physical address
+     * @return Whether the address corresponds to a memory
+     */
+    bool isMemAddr(Addr addr) const;
 
   protected:
+
+    PhysicalMemory physmem;
+
     Enums::MemoryMode memoryMode;
     uint64_t workItemsBegin;
     uint64_t workItemsEnd;
     uint32_t numWorkIds;
     std::vector<bool> activeCpus;
 
+    /** This array is a per-sytem list of all devices capable of issuing a
+     * memory system request and an associated string for each master id.
+     * It's used to uniquely id any master in the system by name for things
+     * like cache statistics.
+     */
+    std::vector<std::string> masterIds;
+
   public:
+
+    /** Request an id used to create a request object in the system. All objects
+     * that intend to issues requests into the memory system must request an id
+     * in the init() phase of startup. All master ids must be fixed by the
+     * regStats() phase that immediately preceeds it. This allows objects in the
+     * memory system to understand how many masters may exist and
+     * appropriately name the bins of their per-master stats before the stats
+     * are finalized
+     */
+    MasterID getMasterId(std::string req_name);
+
+    /** Get the name of an object for a given request id.
+     */
+    std::string getMasterName(MasterID master_id);
+
+    /** Get the number of masters registered in the system */
+    MasterID maxMasters()
+    {
+        return masterIds.size();
+    }
+
     virtual void regStats();
     /**
      * Called by pseudo_inst to track the number of work items started by this
@@ -377,6 +399,9 @@ class System : public MemObject
     static int numSystemsRunning;
 
     static void printSystems();
+
+    // For futex system call
+    std::map<uint64_t, std::list<ThreadContext *> * > futexMap;
 
 
 };

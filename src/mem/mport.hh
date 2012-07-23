@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2008 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -31,6 +43,7 @@
 #ifndef __MEM_MPORT_HH__
 #define __MEM_MPORT_HH__
 
+#include "mem/mem_object.hh"
 #include "mem/tport.hh"
 
 /*
@@ -40,41 +53,47 @@
  * the underpinnings of SimpleTimingPort, but it tweaks some of the external
  * functions.
  */
-
-class MessagePort : public SimpleTimingPort
+class MessageSlavePort : public SimpleTimingPort
 {
+
   public:
-    MessagePort(std::string pname, MemObject *_owner = NULL) :
-        SimpleTimingPort(pname, _owner)
+    MessageSlavePort(const std::string &name, MemObject *owner) :
+        SimpleTimingPort(name, owner)
     {}
 
-    virtual ~MessagePort()
+    virtual ~MessageSlavePort()
     {}
 
-    void
-    recvFunctional(PacketPtr pkt)
-    {
-        recvAtomic(pkt);
-    }
+  protected:
 
     Tick recvAtomic(PacketPtr pkt);
 
     virtual Tick recvMessage(PacketPtr pkt) = 0;
+};
+
+class MessageMasterPort : public QueuedMasterPort
+{
+  public:
+
+    MessageMasterPort(const std::string &name, MemObject *owner) :
+        QueuedMasterPort(name, owner, queue), queue(*owner, *this)
+    {}
+
+    virtual ~MessageMasterPort()
+    {}
+
+    bool recvTimingResp(PacketPtr pkt) { recvResponse(pkt); return true; }
+
+  protected:
+
+    /** A packet queue for outgoing packets. */
+    MasterPacketQueue queue;
 
     // Accept and ignore responses.
     virtual Tick recvResponse(PacketPtr pkt)
     {
         return 0;
     }
-
-    // Since by default we're assuming everything we send is accepted, panic.
-    virtual Tick recvNack(PacketPtr pkt)
-    {
-        panic("Unhandled message nack.\n");
-    }
-
-    void sendMessageTiming(PacketPtr pkt, Tick latency);
-    Tick sendMessageAtomic(PacketPtr pkt);
 };
 
 #endif

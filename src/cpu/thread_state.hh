@@ -45,13 +45,10 @@ class ProfileNode;
 namespace TheISA {
     namespace Kernel {
         class Statistics;
-    };
-};
+    }
+}
 
 class Checkpoint;
-class PortProxy;
-class SETranslatingPort;
-class FSTranslatingPort;
 
 /**
  *  Struct for holding general thread state that is needed across CPU
@@ -88,7 +85,7 @@ struct ThreadState {
      * Initialise the physical and virtual port proxies and tie them to
      * the data port of the CPU.
      *
-     * tc ThreadContext for the virtual-to-physical translation
+     * @param tc ThreadContext for the virtual-to-physical translation
      */
     void initMemProxies(ThreadContext *tc);
 
@@ -102,13 +99,13 @@ struct ThreadState {
 
     TheISA::Kernel::Statistics *getKernelStats() { return kernelStats; }
 
-    PortProxy* getPhysProxy() { return physProxy; }
+    PortProxy &getPhysProxy();
 
-    FSTranslatingPortProxy* getVirtProxy() { return virtProxy; }
+    FSTranslatingPortProxy &getVirtProxy();
 
     Process *getProcessPtr() { return process; }
 
-    SETranslatingPortProxy* getMemProxy();
+    SETranslatingPortProxy &getMemProxy();
 
     /** Reads the number of instructions functionally executed and
      * committed.
@@ -132,6 +129,10 @@ struct ThreadState {
     Counter numInst;
     /** Stat for number instructions committed. */
     Stats::Scalar numInsts;
+    /** Number of ops (including micro ops) committed. */
+    Counter numOp;
+    /** Stat for number ops (including micro ops) committed. */
+    Stats::Scalar numOps;
     /** Stat for number of memory references. */
     Stats::Scalar numMemRefs;
 
@@ -179,8 +180,8 @@ struct ThreadState {
 
     /** A translating port proxy, outgoing only, for functional
      * accesse to virtual addresses. */
-    FSTranslatingPortProxy* virtProxy;
-    SETranslatingPortProxy* proxy;
+    FSTranslatingPortProxy *virtProxy;
+    SETranslatingPortProxy *proxy;
 
   public:
     /*

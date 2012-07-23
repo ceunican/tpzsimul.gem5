@@ -32,7 +32,7 @@
 #include "arch/utility.hh"
 #include "base/statistics.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
+#include "cpu/checker/cpu.hh"
 #include "cpu/ozone/front_end.hh"
 #include "cpu/exetrace.hh"
 #include "cpu/thread_context.hh"
@@ -40,10 +40,6 @@
 #include "mem/packet.hh"
 #include "mem/request.hh"
 #include "sim/faults.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
 
 using namespace TheISA;
 
@@ -60,12 +56,6 @@ void
 FrontEnd<Impl>::IcachePort::recvFunctional(PacketPtr pkt)
 {
     warn("FrontEnd doesn't update state from functional calls");
-}
-
-template<class Impl>
-void
-FrontEnd<Impl>::IcachePort::recvRangeChange()
-{
 }
 
 template<class Impl>
@@ -137,11 +127,9 @@ FrontEnd<Impl>::setCPU(CPUType *cpu_ptr)
 
     icachePort.setName(this->name() + "-iport");
 
-#if USE_CHECKER
     if (cpu->checker) {
         cpu->checker->setIcachePort(&icachePort);
     }
-#endif
 }
 
 template <class Impl>
@@ -489,8 +477,7 @@ FrontEnd<Impl>::fetchCacheLine()
 #endif
 
         // Build packet here.
-        PacketPtr data_pkt = new Packet(memReq,
-                                        Packet::ReadReq, Packet::Broadcast);
+        PacketPtr data_pkt = new Packet(memReq, Packet::ReadReq);
         data_pkt->dataStatic(cacheData);
 
         if (!icachePort.sendTiming(data_pkt)) {

@@ -43,7 +43,6 @@
 #include "arch/x86/types.hh"
 #include "arch/x86/x86_traits.hh"
 #include "base/types.hh"
-#include "cpu/static_inst_fwd.hh"
 
 namespace LittleEndianGuest {}
 
@@ -69,8 +68,6 @@ namespace X86ISA
 
     const int BranchPredAddrShiftAmt = 0;
 
-    StaticInstPtr decodeInst(ExtMachInst);
-
     // Memory accesses can be unaligned
     const bool HasUnalignedMemAcc = true;
 
@@ -85,6 +82,6 @@ namespace X86ISA
         SixtyFourBitMode                // Behave as if we're in 64 bit
                                         // mode (this doesn't actually matter).
     };
-};
+}
 
 #endif // __ARCH_X86_ISATRAITS_HH__

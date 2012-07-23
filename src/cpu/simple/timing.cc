@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -60,31 +60,21 @@
 using namespace std;
 using namespace TheISA;
 
-Port *
-TimingSimpleCPU::getPort(const std::string &if_name, int idx)
-{
-    if (if_name == "dcache_port")
-        return &dcachePort;
-    else if (if_name == "icache_port")
-        return &icachePort;
-    else
-        panic("No Such Port\n");
-}
-
 void
 TimingSimpleCPU::init()
 {
     BaseCPU::init();
-    if (FullSystem) {
+
+    // Initialise the ThreadContext's memory proxies
+    tcBase()->initMemProxies(tcBase());
+
+    if (FullSystem && !params()->defer_registration) {
         for (int i = 0; i < threadContexts.size(); ++i) {
             ThreadContext *tc = threadContexts[i];
             // initialize CPU, including PC
             TheISA::initCPU(tc, _cpuId);
         }
     }
-
-    // Initialise the ThreadContext's memory proxies
-    tcBase()->initMemProxies(tcBase());
 }
 
 void
@@ -244,7 +234,7 @@ TimingSimpleCPU::handleReadPacket(PacketPtr pkt)
         new IprEvent(pkt, this, nextCycle(curTick() + delay));
         _status = DcacheWaitResponse;
         dcache_pkt = NULL;
-    } else if (!dcachePort.sendTiming(pkt)) {
+    } else if (!dcachePort.sendTimingReq(pkt)) {
         _status = DcacheRetry;
         dcache_pkt = pkt;
     } else {
@@ -365,7 +355,7 @@ TimingSimpleCPU::buildPacket(PacketPtr &pkt, RequestPtr req, bool read)
             cmd = MemCmd::SwapReq;
         }
     }
-    pkt = new Packet(req, cmd, Packet::Broadcast);
+    pkt = new Packet(req, cmd);
 }
 
 void
@@ -385,9 +375,8 @@ TimingSimpleCPU::buildSplitPacket(PacketPtr &pkt1, PacketPtr &pkt2,
     buildPacket(pkt1, req1, read);
     buildPacket(pkt2, req2, read);
 
-    req->setPhys(req1->getPaddr(), req->getSize(), req1->getFlags());
-    PacketPtr pkt = new Packet(req, pkt1->cmd.responseCommand(),
-                               Packet::Broadcast);
+    req->setPhys(req1->getPaddr(), req->getSize(), req1->getFlags(), dataMasterId());
+    PacketPtr pkt = new Packet(req, pkt1->cmd.responseCommand());
 
     pkt->dataDynamicArray<uint8_t>(data);
     pkt1->dataStatic<uint8_t>(data);
@@ -418,7 +407,7 @@ TimingSimpleCPU::readMem(Addr addr, uint8_t *data,
     }
 
     RequestPtr req  = new Request(asid, addr, size,
-                                  flags, pc, _cpuId, tid);
+                                  flags, dataMasterId(), pc, _cpuId, tid);
 
     Addr split_addr = roundDown(addr + size - 1, block_size);
     assert(split_addr <= addr || split_addr - addr < block_size);
@@ -460,7 +449,7 @@ TimingSimpleCPU::handleWritePacket()
         new IprEvent(dcache_pkt, this, nextCycle(curTick() + delay));
         _status = DcacheWaitResponse;
         dcache_pkt = NULL;
-    } else if (!dcachePort.sendTiming(dcache_pkt)) {
+    } else if (!dcachePort.sendTimingReq(dcache_pkt)) {
         _status = DcacheRetry;
     } else {
         _status = DcacheWaitResponse;
@@ -488,7 +477,7 @@ TimingSimpleCPU::writeMem(uint8_t *data, unsigned size,
     }
 
     RequestPtr req = new Request(asid, addr, size,
-                                 flags, pc, _cpuId, tid);
+                                 flags, dataMasterId(), pc, _cpuId, tid);
 
     Addr split_addr = roundDown(addr + size - 1, block_size);
     assert(split_addr <= addr || split_addr - addr < block_size);
@@ -588,11 +577,11 @@ TimingSimpleCPU::sendFetch(Fault fault, RequestPtr req, ThreadContext *tc)
     if (fault == NoFault) {
         DPRINTF(SimpleCPU, "Sending fetch for addr %#x(pa: %#x)\n",
                 req->getVaddr(), req->getPaddr());
-        ifetch_pkt = new Packet(req, MemCmd::ReadReq, Packet::Broadcast);
+        ifetch_pkt = new Packet(req, MemCmd::ReadReq);
         ifetch_pkt->dataStatic(&inst);
         DPRINTF(SimpleCPU, " -- pkt addr: %#x\n", ifetch_pkt->getAddr());
 
-        if (!icachePort.sendTiming(ifetch_pkt)) {
+        if (!icachePort.sendTimingReq(ifetch_pkt)) {
             // Need to wait for retry
             _status = IcacheRetry;
         } else {
@@ -726,9 +715,9 @@ TimingSimpleCPU::IcachePort::ITickEvent::process()
 }
 
 bool
-TimingSimpleCPU::IcachePort::recvTiming(PacketPtr pkt)
+TimingSimpleCPU::IcachePort::recvTimingResp(PacketPtr pkt)
 {
-    if (pkt->isResponse() && !pkt->wasNacked()) {
+    if (!pkt->wasNacked()) {
         DPRINTF(SimpleCPU, "Received timing response %#x\n", pkt->getAddr());
         // delay processing of returned data until next CPU clock edge
         Tick next_tick = cpu->nextCycle(curTick());
@@ -739,15 +728,15 @@ TimingSimpleCPU::IcachePort::recvTiming(PacketPtr pkt)
             tickEvent.schedule(pkt, next_tick);
 
         return true;
-    } else if (pkt->wasNacked()) {
+    } else {
         assert(cpu->_status == IcacheWaitResponse);
         pkt->reinitNacked();
-        if (!sendTiming(pkt)) {
+        if (!sendTimingReq(pkt)) {
             cpu->_status = IcacheRetry;
             cpu->ifetch_pkt = pkt;
         }
     }
-    //Snooping a Coherence Request, do nothing
+
     return true;
 }
 
@@ -759,7 +748,7 @@ TimingSimpleCPU::IcachePort::recvRetry()
     assert(cpu->ifetch_pkt != NULL);
     assert(cpu->_status == IcacheRetry);
     PacketPtr tmp = cpu->ifetch_pkt;
-    if (sendTiming(tmp)) {
+    if (sendTimingReq(tmp)) {
         cpu->_status = IcacheWaitResponse;
         cpu->ifetch_pkt = NULL;
     }
@@ -846,9 +835,9 @@ TimingSimpleCPU::completeDrain()
 }
 
 bool
-TimingSimpleCPU::DcachePort::recvTiming(PacketPtr pkt)
+TimingSimpleCPU::DcachePort::recvTimingResp(PacketPtr pkt)
 {
-    if (pkt->isResponse() && !pkt->wasNacked()) {
+    if (!pkt->wasNacked()) {
         // delay processing of returned data until next CPU clock edge
         Tick next_tick = cpu->nextCycle(curTick());
 
@@ -868,16 +857,15 @@ TimingSimpleCPU::DcachePort::recvTiming(PacketPtr pkt)
         }
 
         return true;
-    }
-    else if (pkt->wasNacked()) {
+    } else  {
         assert(cpu->_status == DcacheWaitResponse);
         pkt->reinitNacked();
-        if (!sendTiming(pkt)) {
+        if (!sendTimingReq(pkt)) {
             cpu->_status = DcacheRetry;
             cpu->dcache_pkt = pkt;
         }
     }
-    //Snooping a Coherence Request, do nothing
+
     return true;
 }
 
@@ -906,7 +894,7 @@ TimingSimpleCPU::DcachePort::recvRetry()
             dynamic_cast<SplitMainSenderState *>(big_pkt->senderState);
         assert(main_send_state);
 
-        if (sendTiming(tmp)) {
+        if (sendTimingReq(tmp)) {
             // If we were able to send without retrying, record that fact
             // and try sending the other fragment.
             send_state->clearFromParent();
@@ -924,7 +912,7 @@ TimingSimpleCPU::DcachePort::recvRetry()
                 cpu->dcache_pkt = NULL;
             }
         }
-    } else if (sendTiming(tmp)) {
+    } else if (sendTimingReq(tmp)) {
         cpu->_status = DcacheWaitResponse;
         // memory system takes ownership of packet
         cpu->dcache_pkt = NULL;

@@ -38,17 +38,16 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 addToPath(config_root+'/configs/common')
 addToPath(config_root+'/configs/ruby')
+addToPath(config_root+'/configs/topologies')
 
+import Options
 import Ruby
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
-#
 # Add the ruby specific and protocol specific options
-#
 Ruby.define_options(parser)
-
-execfile(os.path.join(config_root, "configs/common", "Options.py"))
 
 (options, args) = parser.parse_args()
 
@@ -72,18 +71,20 @@ cpus = [ TimingSimpleCPU(cpu_id=i) for i in xrange(nb_cores) ]
 options.num_cpus = nb_cores
 
 # system simulated
-system = System(cpu = cpus, physmem = PhysicalMemory())
+system = System(cpu = cpus, physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
 assert(options.num_cpus == len(system.ruby._cpu_ruby_ports))
 
 for (i, cpu) in enumerate(system.cpu):
+    # create the interrupt controller
+    cpu.createInterruptController()
+
     #
     # Tie the cpu ports to the ruby cpu ports
     #
-    cpu.icache_port = system.ruby._cpu_ruby_ports[i].port
-    cpu.dcache_port = system.ruby._cpu_ruby_ports[i].port
+    cpu.connectAllPorts(system.ruby._cpu_ruby_ports[i])
 
 # -----------------------
 # run simulation

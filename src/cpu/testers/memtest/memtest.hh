@@ -34,10 +34,10 @@
 
 #include <set>
 
-#include "base/fast_alloc.hh"
 #include "base/statistics.hh"
 #include "mem/mem_object.hh"
 #include "mem/port.hh"
+#include "mem/port_proxy.hh"
 #include "params/MemTest.hh"
 #include "sim/eventq.hh"
 #include "sim/sim_exit.hh"
@@ -61,7 +61,8 @@ class MemTest : public MemObject
     // main simulation loop (one cycle)
     void tick();
 
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+    virtual MasterPort &getMasterPort(const std::string &if_name,
+                                      int idx = -1);
 
     /**
      * Print state of address in memory system via PrintReq (for
@@ -83,33 +84,34 @@ class MemTest : public MemObject
 
     TickEvent tickEvent;
 
-    class CpuPort : public Port
+    class CpuPort : public MasterPort
     {
         MemTest *memtest;
 
       public:
 
         CpuPort(const std::string &_name, MemTest *_memtest)
-            : Port(_name, _memtest), memtest(_memtest)
+            : MasterPort(_name, _memtest), memtest(_memtest)
         { }
 
       protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
 
-        virtual Tick recvAtomic(PacketPtr pkt);
+        virtual void recvTimingSnoopReq(PacketPtr pkt) { }
 
-        virtual void recvFunctional(PacketPtr pkt);
+        virtual Tick recvAtomicSnoop(PacketPtr pkt) { return 0; }
 
-        virtual void recvRangeChange();
+        virtual void recvFunctionalSnoop(PacketPtr pkt) { }
 
         virtual void recvRetry();
     };
 
     CpuPort cachePort;
     CpuPort funcPort;
+    PortProxy funcProxy;
 
-    class MemTestSenderState : public Packet::SenderState, public FastAlloc
+    class MemTestSenderState : public Packet::SenderState
     {
       public:
         /** Constructor. */
@@ -137,6 +139,9 @@ class MemTest : public MemObject
     unsigned percentUncacheable;
 
     bool issueDmas;
+
+    /** Request id for all generated traffic */
+    MasterID masterId;
 
     int id;
 

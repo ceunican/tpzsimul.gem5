@@ -40,17 +40,16 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 addToPath(config_root+'/configs/common')
 addToPath(config_root+'/configs/ruby')
+addToPath(config_root+'/configs/topologies')
 
 import Ruby
+import Options
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
-#
 # Add the ruby specific and protocol specific options
-#
 Ruby.define_options(parser)
-
-execfile(os.path.join(config_root, "configs/common", "Options.py"))
 
 (options, args) = parser.parse_args()
 
@@ -67,12 +66,18 @@ options.l1i_assoc=2
 options.l2_assoc=2
 options.l3_assoc=2
 
+# Turn on flush check for the hammer protocol
+check_flush = False
+if buildEnv['PROTOCOL'] == 'MOESI_hammer':
+    check_flush = True
+
 #
 # create the tester and system, including ruby
 #
-tester = RubyTester(checks_to_complete = 100, wakeup_frequency = 10)
+tester = RubyTester(check_flush = check_flush, checks_to_complete = 100,
+                    wakeup_frequency = 10, num_cpus = options.num_cpus)
 
-system = System(tester = tester, physmem = PhysicalMemory())
+system = System(tester = tester, physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
@@ -86,9 +91,12 @@ system.ruby.randomization = True
 
 for ruby_port in system.ruby._cpu_ruby_ports:
     #
-    # Tie the ruby tester ports to the ruby cpu ports
+    # Tie the ruby tester ports to the ruby cpu read and write ports
     #
-    tester.cpuPort = ruby_port.port
+    if ruby_port.support_data_reqs:
+         tester.cpuDataPort = ruby_port.slave
+    if ruby_port.support_inst_reqs:
+         tester.cpuInstPort = ruby_port.slave
 
     #
     # Tell the sequencer this is the ruby tester so that it

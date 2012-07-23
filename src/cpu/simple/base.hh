@@ -45,12 +45,10 @@
 #ifndef __CPU_SIMPLE_BASE_HH__
 #define __CPU_SIMPLE_BASE_HH__
 
-#include "arch/predecoder.hh"
 #include "base/statistics.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/base.hh"
-#include "cpu/decode.hh"
+#include "cpu/checker/cpu.hh"
 #include "cpu/pc_event.hh"
 #include "cpu/simple_thread.hh"
 #include "cpu/static_inst.hh"
@@ -61,13 +59,8 @@
 #include "sim/full_system.hh"
 #include "sim/system.hh"
 
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
-
 // forward declarations
 class Checkpoint;
-class MemObject;
 class Process;
 class Processor;
 class ThreadContext;
@@ -76,7 +69,6 @@ namespace TheISA
 {
     class DTB;
     class ITB;
-    class Predecoder;
 }
 
 namespace Trace {
@@ -129,9 +121,8 @@ class BaseSimpleCPU : public BaseCPU
      */
     ThreadContext *tc;
 
-#if USE_CHECKER
     CheckerCPU *checker;
-#endif
+
   protected:
 
     enum Status {
@@ -160,9 +151,6 @@ class BaseSimpleCPU : public BaseCPU
     // current instruction
     TheISA::MachInst inst;
 
-    // The predecoder
-    TheISA::Predecoder predecoder;
-
     StaticInstPtr curStaticInst;
     StaticInstPtr curMacroStaticInst;
 
@@ -189,18 +177,31 @@ class BaseSimpleCPU : public BaseCPU
     Counter numInst;
     Counter startNumInst;
     Stats::Scalar numInsts;
+    Counter numOp;
+    Counter startNumOp;
+    Stats::Scalar numOps;
 
     void countInst()
     {
-        numInst++;
-        numInsts++;
+        if (!curStaticInst->isMicroop() || curStaticInst->isLastMicroop()) {
+            numInst++;
+            numInsts++;
+        }
+        numOp++;
+        numOps++;
+
         system->totalNumInsts++;
         thread->funcExeInst++;
     }
 
-    virtual Counter totalInstructions() const
+    virtual Counter totalInsts() const
     {
         return numInst - startNumInst;
+    }
+
+    virtual Counter totalOps() const
+    {
+        return numOp - startNumOp;
     }
 
     //number of integer alu accesses

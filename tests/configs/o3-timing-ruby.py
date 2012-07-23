@@ -29,6 +29,7 @@
 import m5
 from m5.objects import *
 m5.util.addToPath('../configs/common')
+m5.util.addToPath('../configs/topologies')
 
 
 import ruby_config
@@ -39,11 +40,13 @@ cpu.clock = '2GHz'
 
 system = System(cpu = cpu,
                 physmem = ruby_memory,
-                membus = Bus())
-system.physmem.port = system.membus.port
+                membus = CoherentBus())
+system.physmem.port = system.membus.master
+# create the interrupt controller
+cpu.createInterruptController()
 cpu.connectAllPorts(system.membus)
 
 # Connect the system port for loading of binaries etc
-system.system_port = system.membus.port
+system.system_port = system.membus.slave
 
 root = Root(full_system = False, system = system)

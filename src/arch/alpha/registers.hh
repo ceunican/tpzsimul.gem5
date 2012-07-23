@@ -31,14 +31,17 @@
 #ifndef __ARCH_ALPHA_REGISTERS_HH__
 #define __ARCH_ALPHA_REGISTERS_HH__
 
+#include "arch/alpha/generated/max_inst_regs.hh"
 #include "arch/alpha/ipr.hh"
-#include "arch/alpha/max_inst_regs.hh"
 #include "base/types.hh"
 
 namespace AlphaISA {
 
 using AlphaISAInst::MaxInstSrcRegs;
 using AlphaISAInst::MaxInstDestRegs;
+
+// Locked read/write flags are can't be detected by the ISA parser
+const int MaxMiscDestRegs = AlphaISAInst::MaxMiscDestRegs + 1;
 
 typedef uint8_t RegIndex;
 typedef uint64_t IntReg;

@@ -30,7 +30,6 @@
  */
 
 #include "arch/alpha/osfpal.hh"
-#include "arch/faults.hh"
 #include "arch/isa_traits.hh" // For MachInst
 #include "arch/kernel_stats.hh"
 #include "arch/tlb.hh"
@@ -39,7 +38,7 @@
 #include "base/callback.hh"
 #include "base/trace.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
+#include "cpu/checker/thread_context.hh"
 #include "cpu/ozone/cpu.hh"
 #include "cpu/base.hh"
 #include "cpu/exetrace.hh"
@@ -56,10 +55,6 @@
 #include "sim/sim_object.hh"
 #include "sim/stats.hh"
 #include "sim/system.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/thread_context.hh"
-#endif
 
 using namespace TheISA;
 
@@ -98,16 +93,12 @@ OzoneCPU<Impl>::OzoneCPU(Params *p)
     _status = Idle;
 
     if (p->checker) {
-#if USE_CHECKER
         BaseCPU *temp_checker = p->checker;
         checker = dynamic_cast<Checker<DynInstPtr> *>(temp_checker);
         checker->setSystem(p->system);
         checkerTC = new CheckerThreadContext<OzoneTC>(&ozoneTC, checker);
         thread.tc = checkerTC;
         tc = checkerTC;
-#else
-        panic("Checker enabled but not compiled in!");
-#endif
     } else {
         // If checker is not being used, then the xcProxy points
         // directly to the CPU's ExecContext.
@@ -216,10 +207,9 @@ OzoneCPU<Impl>::signalSwitched()
     if (++switchCount == 2) {
         backEnd->doSwitchOut();
         frontEnd->doSwitchOut();
-#if USE_CHECKER
+
         if (checker)
             checker->switchOut();
-#endif
 
         _status = SwitchedOut;
 #ifndef NDEBUG
@@ -398,18 +388,6 @@ OzoneCPU<Impl>::init()
     backEnd->renameTable.copyFrom(thread.renameTable);
 
     thread.inSyscall = false;
-}
-
-template <class Impl>
-Port *
-OzoneCPU<Impl>::getPort(const std::string &if_name, int idx)
-{
-    if (if_name == "dcache_port")
-        return backEnd->getDcachePort();
-    else if (if_name == "icache_port")
-        return frontEnd->getIcachePort();
-    else
-        panic("No Such Port\n");
 }
 
 template <class Impl>

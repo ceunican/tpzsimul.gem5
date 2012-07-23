@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2002-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -79,7 +91,7 @@ class AtomicSimpleCPU : public BaseSimpleCPU
 
       protected:
 
-        virtual Tick recvAtomic(PacketPtr pkt)
+        virtual Tick recvAtomicSnoop(PacketPtr pkt)
         {
             // Snooping a coherence request, just return
             return 0;
@@ -90,8 +102,7 @@ class AtomicSimpleCPU : public BaseSimpleCPU
     AtomicCPUPort icachePort;
     AtomicCPUPort dcachePort;
 
-    CpuPort physmemPort;
-    bool hasPhysMemPort;
+    bool fastmem;
     Request ifetch_req;
     Request data_read_req;
     Request data_write_req;
@@ -99,11 +110,15 @@ class AtomicSimpleCPU : public BaseSimpleCPU
     bool dcache_access;
     Tick dcache_latency;
 
-    Range<Addr> physMemAddr;
+  protected:
+
+    /** Return a reference to the data port. */
+    virtual CpuPort &getDataPort() { return dcachePort; }
+
+    /** Return a reference to the instruction port. */
+    virtual CpuPort &getInstPort() { return icachePort; }
 
   public:
-
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
 
     virtual void serialize(std::ostream &os);
     virtual void unserialize(Checkpoint *cp, const std::string &section);

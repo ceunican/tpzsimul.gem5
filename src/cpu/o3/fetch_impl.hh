@@ -53,14 +53,13 @@
 #include "arch/vtophys.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/base.hh"
+//#include "cpu/checker/cpu.hh"
 #include "cpu/o3/fetch.hh"
 #include "cpu/exetrace.hh"
 #include "debug/Activity.hh"
 #include "debug/Fetch.hh"
 #include "mem/packet.hh"
-#include "mem/request.hh"
 #include "params/DerivO3CPU.hh"
 #include "sim/byteswap.hh"
 #include "sim/core.hh"
@@ -68,17 +67,12 @@
 #include "sim/full_system.hh"
 #include "sim/system.hh"
 
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif // USE_CHECKER
-
 using namespace std;
 
 template<class Impl>
 DefaultFetch<Impl>::DefaultFetch(O3CPU *_cpu, DerivO3CPUParams *params)
     : cpu(_cpu),
       branchPred(params),
-      predecoder(NULL),
       numInst(0),
       decodeToFetchDelay(params->decodeToFetchDelay),
       renameToFetchDelay(params->renameToFetchDelay),
@@ -99,6 +93,10 @@ DefaultFetch<Impl>::DefaultFetch(O3CPU *_cpu, DerivO3CPUParams *params)
         fatal("numThreads (%d) is larger than compiled limit (%d),\n"
               "\tincrease MaxThreads in src/cpu/o3/impl.hh\n",
               numThreads, static_cast<int>(Impl::MaxThreads));
+    if (fetchWidth > Impl::MaxWidth)
+        fatal("fetchWidth (%d) is larger than compiled limit (%d),\n"
+             "\tincrease MaxWidth in src/cpu/o3/impl.hh\n",
+             fetchWidth, static_cast<int>(Impl::MaxWidth));
 
     // Set fetch stage's status to inactive.
     _status = Inactive;
@@ -133,6 +131,9 @@ DefaultFetch<Impl>::DefaultFetch(O3CPU *_cpu, DerivO3CPUParams *params)
 
     // Get the size of an instruction.
     instSize = sizeof(TheISA::MachInst);
+
+    for (int i = 0; i < Impl::MaxThreads; i++)
+        decoder[i] = new TheISA::Decoder(NULL);
 }
 
 template <class Impl>
@@ -335,10 +336,10 @@ template<class Impl>
 void
 DefaultFetch<Impl>::setIcache()
 {
-    assert(cpu->getIcachePort()->isConnected());
+    assert(cpu->getInstPort().isConnected());
 
     // Size of cache block.
-    cacheBlkSize = cpu->getIcachePort()->peerBlockSize();
+    cacheBlkSize = cpu->getInstPort().peerBlockSize();
 
     // Create mask to get rid of offset bits.
     cacheBlkMask = (cacheBlkSize - 1);
@@ -544,7 +545,7 @@ DefaultFetch<Impl>::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
         DPRINTF(Fetch, "[tid:%i] Can't fetch cache line, switched out\n",
                 tid);
         return false;
-    } else if (checkInterrupt(pc)) {
+    } else if (checkInterrupt(pc) && !delayedCommit[tid]) {
         // Hold off fetch from getting new instructions when:
         // Cache is blocked, or
         // while an interrupt is pending and we're not in PAL mode, or
@@ -565,7 +566,7 @@ DefaultFetch<Impl>::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
     // Build request here.
     RequestPtr mem_req =
         new Request(tid, block_PC, cacheBlkSize, Request::INST_FETCH,
-                    pc, cpu->thread[tid]->contextId(), tid);
+                    cpu->instMasterId(), pc, cpu->thread[tid]->contextId(), tid);
 
     memReq[tid] = mem_req;
 
@@ -602,7 +603,7 @@ DefaultFetch<Impl>::finishTranslation(Fault fault, RequestPtr mem_req)
         // Check that we're not going off into random memory
         // If we have, just wait around for commit to squash something and put
         // us on the right track
-        if (!cpu->system->isMemory(mem_req->getPaddr())) {
+        if (!cpu->system->isMemAddr(mem_req->getPaddr())) {
             warn("Address %#x is outside of physical memory, stopping fetch\n",
                     mem_req->getPaddr());
             fetchStatus[tid] = NoGoodAddr;
@@ -612,8 +613,7 @@ DefaultFetch<Impl>::finishTranslation(Fault fault, RequestPtr mem_req)
         }
 
         // Build packet here.
-        PacketPtr data_pkt = new Packet(mem_req,
-                                        MemCmd::ReadReq, Packet::Broadcast);
+        PacketPtr data_pkt = new Packet(mem_req, MemCmd::ReadReq);
         data_pkt->dataDynamicArray(new uint8_t[cacheBlkSize]);
 
         cacheDataPC[tid] = block_PC;
@@ -623,7 +623,7 @@ DefaultFetch<Impl>::finishTranslation(Fault fault, RequestPtr mem_req)
         fetchedCacheLines++;
 
         // Access the cache.
-        if (!cpu->getIcachePort()->sendTiming(data_pkt)) {
+        if (!cpu->getInstPort().sendTimingReq(data_pkt)) {
             assert(retryPkt == NULL);
             assert(retryTid == InvalidThreadID);
             DPRINTF(Fetch, "[tid:%i] Out of MSHRs!\n", tid);
@@ -662,7 +662,7 @@ DefaultFetch<Impl>::finishTranslation(Fault fault, RequestPtr mem_req)
         DPRINTF(Fetch, "[tid:%i]: Translation faulted, building noop.\n", tid);
         // We will use a nop in ordier to carry the fault.
         DynInstPtr instruction = buildInst(tid,
-                decoder.decode(TheISA::NoopMachInst, fetchPC.instAddr()),
+                decoder[tid]->decode(TheISA::NoopMachInst, fetchPC.instAddr()),
                 NULL, fetchPC, fetchPC, false);
 
         instruction->setPredTarg(fetchPC);
@@ -695,7 +695,7 @@ DefaultFetch<Impl>::doSquash(const TheISA::PCState &newPC,
         macroop[tid] = squashInst->macroop;
     else
         macroop[tid] = NULL;
-    predecoder.reset();
+    decoder[tid]->reset();
 
     // Clear the icache miss if it's outstanding.
     if (fetchStatus[tid] == IcacheWaitResponse) {
@@ -720,6 +720,13 @@ DefaultFetch<Impl>::doSquash(const TheISA::PCState &newPC,
     }
 
     fetchStatus[tid] = Squashing;
+
+    // microops are being squashed, it is not known wheather the
+    // youngest non-squashed microop was  marked delayed commit
+    // or not. Setting the flag to true ensures that the
+    // interrupts are not handled when they cannot be, though
+    // some opportunities to handle interrupts may be missed.
+    delayedCommit[tid] = true;
 
     ++fetchSquashCycles;
 }
@@ -1144,6 +1151,7 @@ DefaultFetch<Impl>::fetch(bool &status_change)
             // an delayed commit micro-op currently (delayed commit instructions
             // are not interruptable by interrupts, only faults)
             ++fetchMiscStallCycles;
+            DPRINTF(Fetch, "[tid:%i]: Fetch is stalled!\n", tid);
             return;
         }
     } else {
@@ -1187,10 +1195,18 @@ DefaultFetch<Impl>::fetch(bool &status_change)
 
         // We need to process more memory if we aren't going to get a
         // StaticInst from the rom, the current macroop, or what's already
-        // in the predecoder.
-        bool needMem = !inRom && !curMacroop && !predecoder.extMachInstReady();
+        // in the decoder.
+        bool needMem = !inRom && !curMacroop &&
+            !decoder[tid]->instReady();
+        fetchAddr = (thisPC.instAddr() + pcOffset) & BaseCPU::PCMask;
+        Addr block_PC = icacheBlockAlignPC(fetchAddr);
 
         if (needMem) {
+            // If buffer is no longer valid or fetchAddr has moved to point
+            // to the next cache block then start fetch from icache.
+            if (!cacheDataValid[tid] || block_PC != cacheDataPC[tid])
+                break;
+
             if (blkOffset >= numInsts) {
                 // We need to process more memory, but we've run out of the
                 // current block.
@@ -1209,10 +1225,10 @@ DefaultFetch<Impl>::fetch(bool &status_change)
             }
             MachInst inst = TheISA::gtoh(cacheInsts[blkOffset]);
 
-            predecoder.setTC(cpu->thread[tid]->getTC());
-            predecoder.moreBytes(thisPC, fetchAddr, inst);
+            decoder[tid]->setTC(cpu->thread[tid]->getTC());
+            decoder[tid]->moreBytes(thisPC, fetchAddr, inst);
 
-            if (predecoder.needMoreBytes()) {
+            if (decoder[tid]->needMoreBytes()) {
                 blkOffset++;
                 fetchAddr += instSize;
                 pcOffset += instSize;
@@ -1223,11 +1239,8 @@ DefaultFetch<Impl>::fetch(bool &status_change)
         // the memory we've processed so far.
         do {
             if (!(curMacroop || inRom)) {
-                if (predecoder.extMachInstReady()) {
-                    ExtMachInst extMachInst =
-                        predecoder.getExtMachInst(thisPC);
-                    staticInst =
-                        decoder.decode(extMachInst, thisPC.instAddr());
+                if (decoder[tid]->instReady()) {
+                    staticInst = decoder[tid]->decode(thisPC);
 
                     // Increment stat of fetched instructions.
                     ++fetchedInsts;
@@ -1282,6 +1295,7 @@ DefaultFetch<Impl>::fetch(bool &status_change)
 
             // Move to the next instruction, unless we have a branch.
             thisPC = nextPC;
+            inRom = isRomMicroPC(thisPC.microPC());
 
             if (newMacro) {
                 fetchAddr = thisPC.instAddr() & BaseCPU::PCMask;
@@ -1297,7 +1311,7 @@ DefaultFetch<Impl>::fetch(bool &status_change)
                 status_change = true;
                 break;
             }
-        } while ((curMacroop || predecoder.extMachInstReady()) &&
+        } while ((curMacroop || decoder[tid]->instReady()) &&
                  numInst < fetchWidth);
     }
 
@@ -1342,7 +1356,7 @@ DefaultFetch<Impl>::recvRetry()
         assert(retryTid != InvalidThreadID);
         assert(fetchStatus[retryTid] == IcacheWaitRetry);
 
-        if (cpu->getIcachePort()->sendTiming(retryPkt)) {
+        if (cpu->getInstPort().sendTimingReq(retryPkt)) {
             fetchStatus[retryTid] = IcacheWaitResponse;
             retryPkt = NULL;
             retryTid = InvalidThreadID;

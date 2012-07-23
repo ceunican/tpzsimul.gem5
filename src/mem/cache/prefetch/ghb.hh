@@ -37,25 +37,20 @@
 #define __MEM_CACHE_PREFETCH_GHB_PREFETCHER_HH__
 
 #include "mem/cache/prefetch/base.hh"
+#include "params/GHBPrefetcher.hh"
 
 class GHBPrefetcher : public BasePrefetcher
 {
   protected:
 
-    static const int Max_Contexts = 64;
+    static const int Max_Masters = 64;
 
-    Addr secondLastMissAddr[Max_Contexts];
-    Addr lastMissAddr[Max_Contexts];
-
-    Tick latency;
-    int degree;
-    bool useContextId;
+    Addr secondLastMissAddr[Max_Masters];
+    Addr lastMissAddr[Max_Masters];
 
   public:
-
-    GHBPrefetcher(const BaseCacheParams *p)
-        : BasePrefetcher(p), latency(p->prefetch_latency),
-          degree(p->prefetch_degree), useContextId(p->prefetch_use_cpu_id)
+    GHBPrefetcher(const Params *p)
+        : BasePrefetcher(p)
     {
     }
 

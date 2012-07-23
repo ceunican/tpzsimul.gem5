@@ -1,12 +1,12 @@
 gem5 Simulator System.  http://gem5.org
 gem5 is copyrighted software; use the --copyright option for details.
 
-gem5 compiled Jan 23 2012 04:08:34
-gem5 started Jan 23 2012 08:24:02
+gem5 compiled Jun  4 2012 13:44:28
+gem5 started Jun  4 2012 16:58:23
 gem5 executing on zizzer
-command line: build/X86_SE/gem5.opt -d build/X86_SE/tests/opt/long/70.twolf/x86/linux/simple-atomic -re tests/run.py build/X86_SE/tests/opt/long/70.twolf/x86/linux/simple-atomic
-Couldn't unlink  build/X86_SE/tests/opt/long/70.twolf/x86/linux/simple-atomic/smred.sav
-Couldn't unlink  build/X86_SE/tests/opt/long/70.twolf/x86/linux/simple-atomic/smred.sv2
+command line: build/X86/gem5.opt -d build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic -re tests/run.py build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic
+Couldn't unlink  build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic/smred.sav
+Couldn't unlink  build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic/smred.sv2
 Global frequency set at 1000000000000 ticks per second
 info: Entering event queue @ 0.  Starting simulation...
 

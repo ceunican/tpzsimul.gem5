@@ -39,6 +39,7 @@
 #include "base/statistics.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
+#include "mem/se_translating_port_proxy.hh"
 #include "sim/sim_object.hh"
 #include "sim/syscallreturn.hh"
 
@@ -48,7 +49,6 @@ struct LiveProcessParams;
 class SyscallDesc;
 class System;
 class ThreadContext;
-class SETranslatingPortProxy;
 
 template<class IntType>
 struct AuxVector
@@ -121,16 +121,13 @@ class Process : public SimObject
 
     virtual void initState();
 
-  protected:
-    /// Memory object for initialization (image loading)
-    SETranslatingPortProxy *initVirtMem;
-
   public:
-    PageTable *pTable;
 
     //This id is assigned by m5 and is used to keep process' tlb entries
     //separated.
     uint64_t M5_pid;
+
+    PageTable* pTable;
 
     class FdMap
     {
@@ -151,6 +148,10 @@ class Process : public SimObject
         void serialize(std::ostream &os);
         void unserialize(Checkpoint *cp, const std::string &section);
     };
+
+  protected:
+    /// Memory proxy for initialization (image loading)
+    SETranslatingPortProxy initVirtMem;
 
   private:
     // file descriptor remapping support
@@ -208,6 +209,21 @@ class Process : public SimObject
     /// Attempt to fix up a fault at vaddr by allocating a page on the stack.
     /// @return Whether the fault has been fixed.
     bool fixupStackFault(Addr vaddr);
+
+    /**
+     * Map a contiguous range of virtual addresses in this process's
+     * address space to a contiguous range of physical addresses.
+     * This function exists primarily to enable exposing the map
+     * operation to python, so that configuration scripts can set up
+     * mappings in SE mode.
+     *
+     * @param vaddr The starting virtual address of the range.
+     * @param paddr The starting physical address of the range.
+     * @param size The length of the range in bytes.
+     * @return True if the map operation was successful.  (At this
+     *           point in time, the map operation always succeeds.)
+     */
+    bool map(Addr vaddr, Addr paddr, int size);
 
     void serialize(std::ostream &os);
     void unserialize(Checkpoint *cp, const std::string &section);

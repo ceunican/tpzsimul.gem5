@@ -64,7 +64,7 @@ DefaultDecode<Impl>::DefaultDecode(O3CPU *_cpu, DerivO3CPUParams *params)
     }
 
     // @todo: Make into a parameter
-    skidBufferMax = (fetchToDecodeDelay * params->fetchWidth) + decodeWidth;
+    skidBufferMax = (fetchToDecodeDelay + 1) *  params->fetchWidth;
 }
 
 template <class Impl>
@@ -278,11 +278,15 @@ DefaultDecode<Impl>::squash(DynInstPtr &inst, ThreadID tid)
     // Send back mispredict information.
     toFetch->decodeInfo[tid].branchMispredict = true;
     toFetch->decodeInfo[tid].predIncorrect = true;
+    toFetch->decodeInfo[tid].mispredictInst = inst;
     toFetch->decodeInfo[tid].squash = true;
     toFetch->decodeInfo[tid].doneSeqNum = inst->seqNum;
     toFetch->decodeInfo[tid].nextPC = inst->branchTarget();
     toFetch->decodeInfo[tid].branchTaken = inst->pcState().branching();
     toFetch->decodeInfo[tid].squashInst = inst;
+    if (toFetch->decodeInfo[tid].mispredictInst->isUncondCtrl()) {
+            toFetch->decodeInfo[tid].branchTaken = true;
+    }
 
     InstSeqNum squash_seq_num = inst->seqNum;
 
@@ -705,7 +709,7 @@ DefaultDecode<Impl>::decodeInsts(ThreadID tid)
         --insts_available;
 
 #if TRACING_ON
-        inst->decodeTick = curTick();
+        inst->decodeTick = curTick() - inst->fetchTick;
 #endif
 
         // Ensure that if it was predicted as a branch, it really is a

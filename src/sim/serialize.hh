@@ -50,6 +50,15 @@ class Serializable;
 class Checkpoint;
 class SimObject;
 
+/** The current version of the checkpoint format.
+ * This should be incremented by 1 and only 1 for every new version, where a new
+ * version is defined as a checkpoint created before this version won't work on
+ * the current version until the checkpoint format is updated. Adding a new
+ * SimObject shouldn't cause the version number to increase, only changes to
+ * existing objects such as serializing/unserializing more state, changing sizes
+ * of serialized arrays, etc. */
+static const uint64_t gem5CheckpointVersion = 0x0000000000000001;
+
 template <class T>
 void paramOut(std::ostream &os, const std::string &name, const T &param);
 
@@ -89,6 +98,17 @@ void
 objParamIn(Checkpoint *cp, const std::string &section,
            const std::string &name, SimObject * &param);
 
+template <typename T>
+void fromInt(T &t, int i)
+{
+    t = (T)i;
+}
+
+template <typename T>
+void fromSimObject(T &t, SimObject *s)
+{
+    t = dynamic_cast<T>(s);
+}
 
 //
 // These macros are streamlined to use in serialize/unserialize
@@ -106,7 +126,7 @@ objParamIn(Checkpoint *cp, const std::string &section,
  do {                                           \
     int tmp;                                    \
     paramIn(cp, section, #scalar, tmp);         \
-    scalar = (typeof(scalar))tmp;               \
+    fromInt(scalar, tmp);                    \
   } while (0)
 
 #define SERIALIZE_ARRAY(member, size)           \
@@ -121,7 +141,7 @@ objParamIn(Checkpoint *cp, const std::string &section,
   do {                                                  \
     SimObject *sptr;                                    \
     objParamIn(cp, section, #objptr, sptr);             \
-    objptr = dynamic_cast<typeof(objptr)>(sptr);        \
+    fromSimObject(objptr, sptr);                        \
   } while (0)
 
 /*
@@ -234,6 +254,7 @@ class Checkpoint
 
   public:
     Checkpoint(const std::string &cpt_dir);
+    ~Checkpoint();
 
     const std::string cptDir;
 

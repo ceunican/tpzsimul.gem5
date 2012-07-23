@@ -56,6 +56,7 @@ output header {{
 output decoder {{
 #include <cmath>
 
+#include "arch/alpha/decoder.hh"
 #include "arch/alpha/registers.hh"
 #include "arch/alpha/regredir.hh"
 #include "base/loader/symtab.hh"
@@ -70,8 +71,9 @@ using namespace AlphaISA;
 }};
 
 output exec {{
-#include <math.h>
+#include <cmath>
 
+#include "arch/alpha/decoder.hh"
 #include "arch/alpha/registers.hh"
 #include "arch/alpha/regredir.hh"
 #include "arch/generic/memhelpers.hh"
@@ -222,7 +224,7 @@ output header {{
         /// this class and derived classes.  Maybe these should really
         /// live here and not in the AlphaISA namespace.
         enum DependenceTags {
-            FP_Base_DepTag = AlphaISA::FP_Base_DepTag,
+            FP_Base_DepTag = AlphaISA::FP_Base_DepTag
         };
 
         /// Constructor.

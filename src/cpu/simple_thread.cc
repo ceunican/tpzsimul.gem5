@@ -59,9 +59,11 @@
 using namespace std;
 
 // constructor
-SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, Process *_process,
-                           TheISA::TLB *_itb, TheISA::TLB *_dtb)
-    : ThreadState(_cpu, _thread_num, _process), itb(_itb), dtb(_dtb)
+SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
+                           Process *_process, TheISA::TLB *_itb,
+                           TheISA::TLB *_dtb)
+    : ThreadState(_cpu, _thread_num, _process), system(_sys), itb(_itb),
+      dtb(_dtb), decoder(NULL)
 {
     clearArchRegs();
     tc = new ProxyThreadContext<SimpleThread>(this);
@@ -69,7 +71,8 @@ SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, Process *_process,
 SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
                            TheISA::TLB *_itb, TheISA::TLB *_dtb,
                            bool use_kernel_stats)
-    : ThreadState(_cpu, _thread_num, NULL), system(_sys), itb(_itb), dtb(_dtb)
+    : ThreadState(_cpu, _thread_num, NULL), system(_sys), itb(_itb), dtb(_dtb),
+      decoder(NULL)
 {
     tc = new ProxyThreadContext<SimpleThread>(this);
 
@@ -96,7 +99,7 @@ SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
 }
 
 SimpleThread::SimpleThread()
-    : ThreadState(NULL, -1, NULL)
+    : ThreadState(NULL, -1, NULL), decoder(NULL)
 {
     tc = new ProxyThreadContext<SimpleThread>(this);
 }

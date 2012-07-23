@@ -57,8 +57,6 @@
 #include "debug/Loader.hh"
 #include "debug/WorkItems.hh"
 #include "kern/kernel_stats.hh"
-#include "mem/fs_translating_port_proxy.hh"
-#include "mem/mem_object.hh"
 #include "mem/physical.hh"
 #include "params/System.hh"
 #include "sim/byteswap.hh"
@@ -75,11 +73,14 @@ int System::numSystemsRunning = 0;
 
 System::System(Params *p)
     : MemObject(p), _systemPort("system_port", this),
-      physmem(p->physmem),
       _numContexts(0),
+      pagePtr(0),
       init_param(p->init_param),
+      physProxy(_systemPort),
+      virtProxy(_systemPort),
       loadAddrMask(p->load_addr_mask),
       nextPID(0),
+      physmem(p->memories),
       memoryMode(p->mem_mode),
       workItemsBegin(0),
       workItemsEnd(0),
@@ -91,27 +92,62 @@ System::System(Params *p)
     // add self to global system list
     systemList.push_back(this);
 
-    /** Keep track of all memories we can execute code out of
-     * in our system
-     */
-    for (int x = 0; x < p->memories.size(); x++) {
-        if (!p->memories[x])
-            continue;
-        memRanges.push_back(RangeSize(p->memories[x]->start(),
-                                      p->memories[x]->size()));
-    }
-
     if (FullSystem) {
         kernelSymtab = new SymbolTable;
         if (!debugSymbolTable)
             debugSymbolTable = new SymbolTable;
-
-        /**
-         * Get a port proxy to memory
-         */
-        physProxy = new PortProxy(*getSystemPort());
-        virtProxy = new FSTranslatingPortProxy(*getSystemPort());
     }
+
+    // Get the generic system master IDs
+    MasterID tmp_id M5_VAR_USED;
+    tmp_id = getMasterId("writebacks");
+    assert(tmp_id == Request::wbMasterId);
+    tmp_id = getMasterId("functional");
+    assert(tmp_id == Request::funcMasterId);
+    tmp_id = getMasterId("interrupt");
+    assert(tmp_id == Request::intMasterId);
+
+    if (FullSystem) {
+        if (params()->kernel == "") {
+            inform("No kernel set for full system simulation. "
+                    "Assuming you know what you're doing if not SPARC ISA\n");
+        } else {
+            // Get the kernel code
+            kernel = createObjectFile(params()->kernel);
+            inform("kernel located at: %s", params()->kernel);
+
+            if (kernel == NULL)
+                fatal("Could not load kernel file %s", params()->kernel);
+
+            // setup entry points
+            kernelStart = kernel->textBase();
+            kernelEnd = kernel->bssBase() + kernel->bssSize();
+            kernelEntry = kernel->entryPoint();
+
+            // load symbols
+            if (!kernel->loadGlobalSymbols(kernelSymtab))
+                fatal("could not load kernel symbols\n");
+
+            if (!kernel->loadLocalSymbols(kernelSymtab))
+                fatal("could not load kernel local symbols\n");
+
+            if (!kernel->loadGlobalSymbols(debugSymbolTable))
+                fatal("could not load kernel symbols\n");
+
+            if (!kernel->loadLocalSymbols(debugSymbolTable))
+                fatal("could not load kernel local symbols\n");
+
+            // Loading only needs to happen once and after memory system is
+            // connected so it will happen in initState()
+        }
+    }
+
+    // increment the number of running systms
+    numSystemsRunning++;
+
+    // Set back pointers to the system in all memories
+    for (int x = 0; x < params()->memories.size(); x++)
+        params()->memories[x]->system(this);
 }
 
 System::~System()
@@ -131,11 +167,11 @@ System::init()
         panic("System port on %s is not connected.\n", name());
 }
 
-Port*
-System::getPort(const std::string &if_name, int idx)
+MasterPort&
+System::getMasterPort(const std::string &if_name, int idx)
 {
     // no need to distinguish at the moment (besides checking)
-    return &_systemPort;
+    return _systemPort;
 }
 
 void
@@ -227,37 +263,9 @@ System::initState()
         /**
          * Load the kernel code into memory
          */
-        if (params()->kernel == "") {
-            inform("No kernel set for full system simulation. "
-                    "Assuming you know what you're doing...\n");
-        } else {
-            // Load kernel code
-            kernel = createObjectFile(params()->kernel);
-            inform("kernel located at: %s", params()->kernel);
-
-            if (kernel == NULL)
-                fatal("Could not load kernel file %s", params()->kernel);
-
+        if (params()->kernel != "")  {
             // Load program sections into memory
             kernel->loadSections(physProxy, loadAddrMask);
-
-            // setup entry points
-            kernelStart = kernel->textBase();
-            kernelEnd = kernel->bssBase() + kernel->bssSize();
-            kernelEntry = kernel->entryPoint();
-
-            // load symbols
-            if (!kernel->loadGlobalSymbols(kernelSymtab))
-                fatal("could not load kernel symbols\n");
-
-            if (!kernel->loadLocalSymbols(kernelSymtab))
-                fatal("could not load kernel local symbols\n");
-
-            if (!kernel->loadGlobalSymbols(debugSymbolTable))
-                fatal("could not load kernel symbols\n");
-
-            if (!kernel->loadLocalSymbols(debugSymbolTable))
-                fatal("could not load kernel local symbols\n");
 
             DPRINTF(Loader, "Kernel start = %#x\n", kernelStart);
             DPRINTF(Loader, "Kernel end   = %#x\n", kernelEnd);
@@ -265,9 +273,6 @@ System::initState()
             DPRINTF(Loader, "Kernel loaded...\n");
         }
     }
-
-    // increment the number of running systms
-    numSystemsRunning++;
 
     activeCpus.clear();
 
@@ -296,32 +301,27 @@ System::allocPhysPages(int npages)
 {
     Addr return_addr = pagePtr << LogVMPageSize;
     pagePtr += npages;
-    if (return_addr >= physmem->size())
+    if ((pagePtr << LogVMPageSize) > physmem.totalSize())
         fatal("Out of memory, please increase size of physical memory.");
     return return_addr;
 }
 
 Addr
-System::memSize()
+System::memSize() const
 {
-    return physmem->size();
+    return physmem.totalSize();
 }
 
 Addr
-System::freeMemSize()
+System::freeMemSize() const
 {
-   return physmem->size() - (pagePtr << LogVMPageSize);
+   return physmem.totalSize() - (pagePtr << LogVMPageSize);
 }
 
 bool
-System::isMemory(const Addr addr) const
+System::isMemAddr(Addr addr) const
 {
-    std::list<Range<Addr> >::const_iterator i;
-    for (i = memRanges.begin(); i != memRanges.end(); i++) {
-        if (*i == addr)
-            return true;
-    }
-    return false;
+    return physmem.isMemAddr(addr);
 }
 
 void
@@ -396,6 +396,43 @@ void
 printSystems()
 {
     System::printSystems();
+}
+
+MasterID
+System::getMasterId(std::string master_name)
+{
+    // strip off system name if the string starts with it
+    if (master_name.size() > name().size() &&
+                          master_name.compare(0, name().size(), name()) == 0)
+        master_name = master_name.erase(0, name().size() + 1);
+
+    // CPUs in switch_cpus ask for ids again after switching
+    for (int i = 0; i < masterIds.size(); i++) {
+        if (masterIds[i] == master_name) {
+            return i;
+        }
+    }
+
+    // Verify that the statistics haven't been enabled yet
+    // Otherwise objects will have sized their stat buckets and
+    // they will be too small
+
+    if (Stats::enabled())
+        fatal("Can't request a masterId after regStats(). \
+                You must do so in init().\n");
+
+    masterIds.push_back(master_name);
+
+    return masterIds.size() - 1;
+}
+
+std::string
+System::getMasterName(MasterID master_id)
+{
+    if (master_id >= masterIds.size())
+        fatal("Invalid master_id passed to getMasterName()\n");
+
+    return masterIds[master_id];
 }
 
 const char *System::MemoryModeStrings[3] = {"invalid", "atomic",

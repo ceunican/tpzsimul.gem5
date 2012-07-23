@@ -84,6 +84,11 @@ Pl111::Pl111(const Params *p)
         vncserver->setFramebufferAddr(dmaBuffer);
 }
 
+Pl111::~Pl111()
+{
+    delete[] dmaBuffer;
+}
+
 // read registers and frame buffer
 Tick
 Pl111::read(PacketPtr pkt)
@@ -460,9 +465,9 @@ Pl111::fillFifo()
         // will be uncacheable as well. If we have uncacheable and cacheable
         // requests in the memory system for the same address it won't be
         // pleased
-        dmaPort->dmaAction(MemCmd::ReadReq, curAddr + startAddr, dmaSize,
-                &dmaDoneEvent[dmaPendingNum-1], curAddr + dmaBuffer, 0,
-                Request::UNCACHEABLE);
+        dmaPort.dmaAction(MemCmd::ReadReq, curAddr + startAddr, dmaSize,
+                          &dmaDoneEvent[dmaPendingNum-1], curAddr + dmaBuffer,
+                          0, Request::UNCACHEABLE);
         curAddr += dmaSize;
     }
 }
@@ -741,7 +746,7 @@ Pl111::generateInterrupt()
 }
 
 AddrRangeList
-Pl111::getAddrRanges()
+Pl111::getAddrRanges() const
 {
     AddrRangeList ranges;
     ranges.push_back(RangeSize(pioAddr, pioSize));

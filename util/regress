@@ -47,7 +47,7 @@ add_option('--builds',
            'MIPS,' \
            'POWER,' \
            'SPARC,' \
-           'X86,' \
+           'X86,X86_MESI_CMP_directory,' \
            'ARM',
            help="comma-separated build targets to test (default: '%default')")
 add_option('--modes',
@@ -111,7 +111,7 @@ targets = []
 
 # start with compile-only targets, if any
 if compile_variants:
-    targets += ['%s/%s/m5.%s' % (options.build_dir, build, variant)
+    targets += ['%s/%s/gem5.%s' % (options.build_dir, build, variant)
                 for variant in compile_variants
                 for build in builds]
 
@@ -119,7 +119,7 @@ if compile_variants:
 if not tests:
     tests = ['quick']
 elif 'all' in tests:
-    tests = ['quick,long']
+    tests = ['quick', 'long']
 
 # set up test targets for scons, since we don't have any quick SPARC
 # full-system tests exclude it

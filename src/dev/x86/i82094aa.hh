@@ -101,7 +101,7 @@ class I82094AA : public PioDevice, public IntDev
     Tick read(PacketPtr pkt);
     Tick write(PacketPtr pkt);
 
-    AddrRangeList getAddrRanges()
+    AddrRangeList getAddrRanges() const
     {
         AddrRangeList ranges;
         ranges.push_back(RangeEx(pioAddr, pioAddr + 4));
@@ -109,7 +109,7 @@ class I82094AA : public PioDevice, public IntDev
         return ranges;
     }
 
-    AddrRangeList getIntAddrRange()
+    AddrRangeList getIntAddrRange() const
     {
         AddrRangeList ranges;
         ranges.push_back(RangeEx(x86InterruptAddress(initialApicId, 0),
@@ -121,11 +121,11 @@ class I82094AA : public PioDevice, public IntDev
     void writeReg(uint8_t offset, uint32_t value);
     uint32_t readReg(uint8_t offset);
 
-    Port *getPort(const std::string &if_name, int idx = -1)
+    MasterPort &getMasterPort(const std::string &if_name, int idx = -1)
     {
-        if (if_name == "int_port")
-            return intPort;
-        return PioDevice::getPort(if_name, idx);
+        if (if_name == "int_master")
+            return intMasterPort;
+        return PioDevice::getMasterPort(if_name, idx);
     }
 
     void signalInterrupt(int line);

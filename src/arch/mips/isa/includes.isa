@@ -45,8 +45,9 @@ output header {{
 }};
 
 output decoder {{
-#include <math.h>
+#include <cmath>
 
+#include "arch/mips/decoder.hh"
 #include "arch/mips/dsp.hh"
 #include "arch/mips/dt_constants.hh"
 #include "arch/mips/faults.hh"
@@ -69,7 +70,7 @@ using namespace MipsISA;
 }};
 
 output exec {{
-#include <math.h>
+#include <cmath>
 
 #include "arch/generic/memhelpers.hh"
 #include "arch/mips/dsp.hh"

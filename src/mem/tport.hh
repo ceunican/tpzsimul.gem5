@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -26,6 +38,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Ali Saidi
+ *          Andreas Hansson
  */
 
 #ifndef __MEM_TPORT_HH__
@@ -37,138 +50,61 @@
  * Declaration of SimpleTimingPort.
  */
 
-#include <list>
-#include <string>
-
-#include "mem/port.hh"
-#include "sim/eventq.hh"
+#include "mem/qport.hh"
 
 /**
- * A simple port for interfacing objects that basically have only
- * functional memory behavior (e.g. I/O devices) to the memory system.
- * Both timing and functional accesses are implemented in terms of
- * atomic accesses.  A derived port class thus only needs to provide
- * recvAtomic() to support all memory access modes.
- *
- * The tricky part is handling recvTiming(), where the response must
- * be scheduled separately via a later call to sendTiming().  This
- * feature is handled by scheduling an internal event that calls
- * sendTiming() after a delay, and optionally rescheduling the
- * response if it is nacked.
+ * The simple timing port uses a queued port to implement
+ * recvFunctional and recvTimingReq through recvAtomic. It is always a
+ * slave port.
  */
-class SimpleTimingPort : public Port
+class SimpleTimingPort : public QueuedSlavePort
 {
+
+  private:
+
+    /**
+     * The packet queue used to store outgoing responses. Note that
+     * the queue is made private and that we avoid overloading the
+     * name used in the QueuedSlavePort. Access is provided through
+     * the queue reference in the base class.
+     */
+    SlavePacketQueue queueImpl;
+
   protected:
-    /** A deferred packet, buffered to transmit later. */
-    class DeferredPacket {
-      public:
-        Tick tick;      ///< The tick when the packet is ready to transmit
-        PacketPtr pkt;  ///< Pointer to the packet to transmit
-        DeferredPacket(Tick t, PacketPtr p)
-            : tick(t), pkt(p)
-        {}
-    };
-
-    typedef std::list<DeferredPacket> DeferredPacketList;
-    typedef std::list<DeferredPacket>::iterator DeferredPacketIterator;
-
-    /** A list of outgoing timing response packets that haven't been
-     * serviced yet. */
-    DeferredPacketList transmitList;
-
-    /** This function attempts to send deferred packets.  Scheduled to
-     * be called in the future via SendEvent. */
-    void processSendEvent();
-
-    /**
-     * This class is used to implemented sendTiming() with a delay. When
-     * a delay is requested a the event is scheduled if it isn't already.
-     * When the event time expires it attempts to send the packet.
-     * If it cannot, the packet sent when recvRetry() is called.
-     **/
-    Event *sendEvent;
-
-    /** If we need to drain, keep the drain event around until we're done
-     * here.*/
-    Event *drainEvent;
-
-    /** Remember whether we're awaiting a retry from the bus. */
-    bool waitingOnRetry;
-
-    /** Check the list of buffered packets against the supplied
-     * functional request. */
-    bool checkFunctional(PacketPtr funcPkt);
-
-    /** Check whether we have a packet ready to go on the transmit list. */
-    bool deferredPacketReady()
-    { return !transmitList.empty() && transmitList.front().tick <= curTick(); }
-
-    Tick deferredPacketReadyTime()
-    { return transmitList.empty() ? MaxTick : transmitList.front().tick; }
-
-    /**
-     * Schedule a send even if not already waiting for a retry. If the
-     * requested time is before an already scheduled send event it
-     * will be rescheduled.
-     *
-     * @param when
-     */
-    void schedSendEvent(Tick when);
-
-    /** Schedule a sendTiming() event to be called in the future.
-     * @param pkt packet to send
-     * @param absolute time (in ticks) to send packet
-     */
-    void schedSendTiming(PacketPtr pkt, Tick when);
-
-    /** Attempt to send the packet at the head of the deferred packet
-     * list.  Caller must guarantee that the deferred packet list is
-     * non-empty and that the head packet is scheduled for curTick() (or
-     * earlier).
-     */
-    void sendDeferredPacket();
-
-    /** This function is notification that the device should attempt to send a
-     * packet again. */
-    virtual void recvRetry();
 
     /** Implemented using recvAtomic(). */
     void recvFunctional(PacketPtr pkt);
 
     /** Implemented using recvAtomic(). */
-    bool recvTiming(PacketPtr pkt);
+    bool recvTimingReq(PacketPtr pkt);
+
+    virtual Tick recvAtomic(PacketPtr pkt) = 0;
 
     /**
-     * Simple ports are generally used as slave ports (i.e. the
-     * respond to requests) and thus do not expect to receive any
-     * range changes (as the neighbouring port has a master role and
-     * do not have any address ranges. A subclass can override the
-     * default behaviuor if needed.
+     * @todo this is a temporary workaround until the 4-phase code is committed.
+     * upstream caches need this packet until true is returned, so hold it for
+     * deletion until a subsequent call
      */
-    virtual void recvRangeChange() { }
+    std::vector<PacketPtr> pendingDelete;
 
 
   public:
-    SimpleTimingPort(std::string pname, MemObject *_owner);
-    ~SimpleTimingPort();
 
-    /** Hook for draining timing accesses from the system.  The
-     * associated SimObject's drain() functions should be implemented
-     * something like this when this class is used:
-     \code
-          PioDevice::drain(Event *de)
-          {
-              unsigned int count;
-              count = SimpleTimingPort->drain(de);
-              if (count)
-                  changeState(Draining);
-              else
-                  changeState(Drained);
-              return count;
-          }
-     \endcode
-    */
-    unsigned int drain(Event *de);
+    /**
+     * Create a new SimpleTimingPort that relies on a packet queue to
+     * hold responses, and implements recvTimingReq and recvFunctional
+     * through calls to recvAtomic. Once a request arrives, it is
+     * passed to recvAtomic, and in the case of a timing access any
+     * response is scheduled to be sent after the delay of the atomic
+     * operation.
+     *
+     * @param name port name
+     * @param owner structural owner
+     */
+    SimpleTimingPort(const std::string& name, MemObject* owner);
+
+    virtual ~SimpleTimingPort() { }
+
 };
 
 #endif // __MEM_TPORT_HH__

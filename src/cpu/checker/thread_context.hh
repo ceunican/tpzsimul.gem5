@@ -55,6 +55,7 @@ namespace TheISA {
     namespace Kernel {
         class Statistics;
     };
+    class Decoder;
 };
 
 /**
@@ -112,25 +113,25 @@ class CheckerThreadContext : public ThreadContext
 
     TheISA::TLB *getDTBPtr() { return actualTC->getDTBPtr(); }
 
-    BaseCPU *getCheckerCpuPtr() { return checkerTC->getCpuPtr(); }
+    CheckerCPU *getCheckerCpuPtr()
+    {
+        return checkerCPU;
+    }
 
-    Decoder *getDecoderPtr() { return actualTC->getDecoderPtr(); }
+    TheISA::Decoder *getDecoderPtr() { return actualTC->getDecoderPtr(); }
 
     System *getSystemPtr() { return actualTC->getSystemPtr(); }
-
-    PhysicalMemory *getPhysMemPtr() { return actualTC->getPhysMemPtr(); }
 
     TheISA::Kernel::Statistics *getKernelStats()
     { return actualTC->getKernelStats(); }
 
     Process *getProcessPtr() { return actualTC->getProcessPtr(); }
 
-    PortProxy* getPhysProxy() { return actualTC->getPhysProxy(); }
+    PortProxy &getPhysProxy() { return actualTC->getPhysProxy(); }
 
-    FSTranslatingPortProxy* getVirtProxy()
+    FSTranslatingPortProxy &getVirtProxy()
     { return actualTC->getVirtProxy(); }
 
-    //XXX: How does this work now?
     void initMemProxies(ThreadContext *tc)
     { actualTC->initMemProxies(tc); }
 
@@ -139,7 +140,7 @@ class CheckerThreadContext : public ThreadContext
         actualTC->connectMemPorts(tc);
     }
 
-    SETranslatingPortProxy* getMemProxy() { return actualTC->getMemProxy(); }
+    SETranslatingPortProxy &getMemProxy() { return actualTC->getMemProxy(); }
 
     /** Executes a syscall in SE mode. */
     void syscall(int64_t callnum)

@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2008 The Hewlett-Packard Development Company
  * All rights reserved.
  *
@@ -291,6 +303,7 @@ X86ISA::Interrupts::setCPU(BaseCPU * newCPU)
     cpu = newCPU;
     initialApicId = cpu->cpuId();
     regs[APIC_ID] = (initialApicId << 24);
+    pioAddr = x86LocalAPICAddress(initialApicId, 0);
 }
 
 
@@ -304,6 +317,9 @@ X86ISA::Interrupts::init()
     //
     BasicPioDevice::init();
     IntDev::init();
+
+    // the slave port has a range so inform the connected master
+    intSlavePort.sendRangeChange();
 }
 
 
@@ -352,20 +368,19 @@ X86ISA::Interrupts::recvResponse(PacketPtr pkt)
 
 
 AddrRangeList
-X86ISA::Interrupts::getAddrRanges()
+X86ISA::Interrupts::getAddrRanges() const
 {
     AddrRangeList ranges;
     Range<Addr> range = RangeEx(x86LocalAPICAddress(initialApicId, 0),
                                 x86LocalAPICAddress(initialApicId, 0) + 
                                 PageBytes);
     ranges.push_back(range);
-    pioAddr = range.start;
     return ranges;
 }
 
 
 AddrRangeList
-X86ISA::Interrupts::getIntAddrRange()
+X86ISA::Interrupts::getIntAddrRange() const
 {
     AddrRangeList ranges;
     ranges.push_back(RangeEx(x86InterruptAddress(initialApicId, 0),
@@ -554,7 +569,7 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
                 break;
             }
             pendingIPIs += apics.size();
-            intPort->sendMessage(apics, message, timing);
+            intMasterPort.sendMessage(apics, message, timing);
             newVal = regs[APIC_INTERRUPT_COMMAND_LOW];
         }
         break;
@@ -612,7 +627,8 @@ X86ISA::Interrupts::Interrupts(Params * p) :
     pendingInit(false), initVector(0),
     pendingStartup(false), startupVector(0),
     startedUp(false), pendingUnmaskableInt(false),
-    pendingIPIs(0), cpu(NULL)
+    pendingIPIs(0), cpu(NULL),
+    intSlavePort(name() + ".int_slave", this, this, latency)
 {
     pioSize = PageBytes;
     memset(regs, 0, sizeof(regs));
