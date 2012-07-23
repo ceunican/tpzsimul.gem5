@@ -33,7 +33,6 @@
 
 #include <set>
 
-#include "base/fast_alloc.hh"
 #include "base/statistics.hh"
 #include "mem/mem_object.hh"
 #include "mem/port.hh"
@@ -57,7 +56,8 @@ class NetworkTest : public MemObject
     // main simulation loop (one cycle)
     void tick();
 
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+    virtual MasterPort &getMasterPort(const std::string &if_name,
+                                      int idx = -1);
 
     /**
      * Print state of address in memory system via PrintReq (for
@@ -79,32 +79,26 @@ class NetworkTest : public MemObject
 
     TickEvent tickEvent;
 
-    class CpuPort : public Port
+    class CpuPort : public MasterPort
     {
         NetworkTest *networktest;
 
       public:
 
         CpuPort(const std::string &_name, NetworkTest *_networktest)
-            : Port(_name, _networktest), networktest(_networktest)
+            : MasterPort(_name, _networktest), networktest(_networktest)
         { }
 
       protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
-
-        virtual Tick recvAtomic(PacketPtr pkt);
-
-        virtual void recvFunctional(PacketPtr pkt);
-
-        virtual void recvRangeChange();
+        virtual bool recvTimingResp(PacketPtr pkt);
 
         virtual void recvRetry();
     };
 
     CpuPort cachePort;
 
-    class NetworkTestSenderState : public Packet::SenderState, public FastAlloc
+    class NetworkTestSenderState : public Packet::SenderState
     {
       public:
         /** Constructor. */
@@ -133,6 +127,8 @@ class NetworkTest : public MemObject
     int trafficType;
     double injRate;
     int precision;
+
+    MasterID masterId;
 
     void completeRequest(PacketPtr pkt);
 

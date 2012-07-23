@@ -44,14 +44,13 @@
 #define __CPU_O3_THREAD_CONTEXT_HH__
 
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/o3/isa_specific.hh"
 #include "cpu/thread_context.hh"
 
 class EndQuiesceEvent;
 namespace Kernel {
     class Statistics;
-};
+}
 
 /**
  * Derived ThreadContext class for use with the O3CPU.  It
@@ -84,11 +83,13 @@ class O3ThreadContext : public ThreadContext
     /** Returns a pointer to the DTB. */
     TheISA::TLB *getDTBPtr() { return cpu->dtb; }
 
-#if USE_CHECKER
-    BaseCPU *getCheckerCpuPtr() { return NULL; }
-#endif
+    CheckerCPU *getCheckerCpuPtr() { return NULL; }
 
-    Decoder *getDecoderPtr() { return &cpu->fetch.decoder; }
+    TheISA::Decoder *
+    getDecoderPtr()
+    {
+        return cpu->fetch.decoder[thread->threadId()];
+    }
 
     /** Returns a pointer to this CPU. */
     virtual BaseCPU *getCpuPtr() { return cpu; }
@@ -114,14 +115,14 @@ class O3ThreadContext : public ThreadContext
     /** Returns a pointer to this thread's process. */
     virtual Process *getProcessPtr() { return thread->getProcessPtr(); }
 
-    virtual PortProxy* getPhysProxy() { return thread->getPhysProxy(); }
+    virtual PortProxy &getPhysProxy() { return thread->getPhysProxy(); }
 
-    virtual FSTranslatingPortProxy* getVirtProxy();
+    virtual FSTranslatingPortProxy &getVirtProxy();
 
     virtual void initMemProxies(ThreadContext *tc)
     { thread->initMemProxies(tc); }
 
-    virtual SETranslatingPortProxy* getMemProxy()
+    virtual SETranslatingPortProxy &getMemProxy()
     { return thread->getMemProxy(); }
 
     /** Returns this thread's status. */
@@ -194,9 +195,7 @@ class O3ThreadContext : public ThreadContext
     /** Sets this thread's PC state. */
     virtual void pcState(const TheISA::PCState &val);
 
-#if USE_CHECKER
     virtual void pcStateNoRecord(const TheISA::PCState &val);
-#endif
 
     /** Reads this thread's PC. */
     virtual Addr instAddr()

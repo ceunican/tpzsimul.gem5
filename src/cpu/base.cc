@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -53,8 +53,8 @@
 #include "base/misc.hh"
 #include "base/output.hh"
 #include "base/trace.hh"
-#include "config/use_checker.hh"
 #include "cpu/base.hh"
+#include "cpu/checker/cpu.hh"
 #include "cpu/cpuevent.hh"
 #include "cpu/profile.hh"
 #include "cpu/thread_context.hh"
@@ -65,10 +65,6 @@
 #include "sim/sim_events.hh"
 #include "sim/sim_exit.hh"
 #include "sim/system.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
 
 // Hack
 #include "sim/stat_control.hh"
@@ -93,7 +89,7 @@ CPUProgressEvent::CPUProgressEvent(BaseCPU *_cpu, Tick ival)
 void
 CPUProgressEvent::process()
 {
-    Counter temp = cpu->totalInstructions();
+    Counter temp = cpu->totalOps();
 #ifndef NDEBUG
     double ipc = double(temp - lastNumInst) / (_interval / cpu->ticks(1));
 
@@ -118,8 +114,10 @@ CPUProgressEvent::description() const
     return "CPU Progress";
 }
 
-BaseCPU::BaseCPU(Params *p)
+BaseCPU::BaseCPU(Params *p, bool is_checker)
     : MemObject(p), clock(p->clock), instCnt(0), _cpuId(p->cpu_id),
+      _instMasterId(p->system->getMasterId(name() + ".inst")),
+      _dataMasterId(p->system->getMasterId(name() + ".data")),
       interrupts(p->interrupts),
       numThreads(p->numThreads), system(p->system),
       phase(p->phase)
@@ -217,10 +215,17 @@ BaseCPU::BaseCPU(Params *p)
             schedule(event, p->function_trace_start);
         }
     }
-    // Check if CPU model has interrupts connected. The CheckerCPU
-    // cannot take interrupts directly for example.
-    if (interrupts)
-        interrupts->setCPU(this);
+
+    // The interrupts should always be present unless this CPU is
+    // switched in later or in case it is a checker CPU
+    if (!params()->defer_registration && !is_checker) {
+        if (interrupts) {
+            interrupts->setCPU(this);
+        } else {
+            fatal("CPU %s has no interrupt controller.\n"
+                  "Ensure createInterruptController() is called.\n", name());
+        }
+    }
 
     if (FullSystem) {
         profileEvent = NULL;
@@ -238,6 +243,9 @@ BaseCPU::enableFunctionTrace()
 
 BaseCPU::~BaseCPU()
 {
+    delete profileEvent;
+    delete[] comLoadEventQueue;
+    delete[] comInstEventQueue;
 }
 
 void
@@ -292,6 +300,21 @@ BaseCPU::regStats()
         }
     } else if (size == 1)
         threadContexts[0]->regStats(name());
+}
+
+MasterPort &
+BaseCPU::getMasterPort(const string &if_name, int idx)
+{
+    // Get the right port based on name. This applies to all the
+    // subclasses of the base CPU and relies on their implementation
+    // of getDataPort and getInstPort. In all cases there methods
+    // return a CpuPort pointer.
+    if (if_name == "dcache_port")
+        return getDataPort();
+    else if (if_name == "icache_port")
+        return getInstPort();
+    else
+        return MemObject::getMasterPort(if_name, idx);
 }
 
 Tick
@@ -361,8 +384,6 @@ BaseCPU::switchOut()
 void
 BaseCPU::takeOverFrom(BaseCPU *oldCPU)
 {
-    Port *ic = getPort("icache_port");
-    Port *dc = getPort("dcache_port");
     assert(threadContexts.size() == oldCPU->threadContexts.size());
 
     _cpuId = oldCPU->cpuId();
@@ -387,54 +408,49 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
             ThreadContext::compare(oldTC, newTC);
         */
 
-        Port  *old_itb_port, *old_dtb_port, *new_itb_port, *new_dtb_port;
-        old_itb_port = oldTC->getITBPtr()->getPort();
-        old_dtb_port = oldTC->getDTBPtr()->getPort();
-        new_itb_port = newTC->getITBPtr()->getPort();
-        new_dtb_port = newTC->getDTBPtr()->getPort();
+        MasterPort *old_itb_port = oldTC->getITBPtr()->getMasterPort();
+        MasterPort *old_dtb_port = oldTC->getDTBPtr()->getMasterPort();
+        MasterPort *new_itb_port = newTC->getITBPtr()->getMasterPort();
+        MasterPort *new_dtb_port = newTC->getDTBPtr()->getMasterPort();
 
         // Move over any table walker ports if they exist
         if (new_itb_port && !new_itb_port->isConnected()) {
             assert(old_itb_port);
-            Port *peer = old_itb_port->getPeer();;
-            new_itb_port->setPeer(peer);
-            peer->setPeer(new_itb_port);
+            SlavePort &slavePort = old_itb_port->getSlavePort();
+            new_itb_port->bind(slavePort);
         }
         if (new_dtb_port && !new_dtb_port->isConnected()) {
             assert(old_dtb_port);
-            Port *peer = old_dtb_port->getPeer();;
-            new_dtb_port->setPeer(peer);
-            peer->setPeer(new_dtb_port);
+            SlavePort &slavePort = old_dtb_port->getSlavePort();
+            new_dtb_port->bind(slavePort);
         }
 
-#if USE_CHECKER
-        Port *old_checker_itb_port, *old_checker_dtb_port;
-        Port *new_checker_itb_port, *new_checker_dtb_port;
+        // Checker whether or not we have to transfer CheckerCPU
+        // objects over in the switch
+        CheckerCPU *oldChecker = oldTC->getCheckerCpuPtr();
+        CheckerCPU *newChecker = newTC->getCheckerCpuPtr();
+        if (oldChecker && newChecker) {
+            MasterPort *old_checker_itb_port =
+                oldChecker->getITBPtr()->getMasterPort();
+            MasterPort *old_checker_dtb_port =
+                oldChecker->getDTBPtr()->getMasterPort();
+            MasterPort *new_checker_itb_port =
+                newChecker->getITBPtr()->getMasterPort();
+            MasterPort *new_checker_dtb_port =
+                newChecker->getDTBPtr()->getMasterPort();
 
-        CheckerCPU *oldChecker =
-            dynamic_cast<CheckerCPU*>(oldTC->getCheckerCpuPtr());
-        CheckerCPU *newChecker =
-            dynamic_cast<CheckerCPU*>(newTC->getCheckerCpuPtr());
-        old_checker_itb_port = oldChecker->getITBPtr()->getPort();
-        old_checker_dtb_port = oldChecker->getDTBPtr()->getPort();
-        new_checker_itb_port = newChecker->getITBPtr()->getPort();
-        new_checker_dtb_port = newChecker->getDTBPtr()->getPort();
-
-        // Move over any table walker ports if they exist for checker
-        if (new_checker_itb_port && !new_checker_itb_port->isConnected()) {
-            assert(old_checker_itb_port);
-            Port *peer = old_checker_itb_port->getPeer();;
-            new_checker_itb_port->setPeer(peer);
-            peer->setPeer(new_checker_itb_port);
+            // Move over any table walker ports if they exist for checker
+            if (new_checker_itb_port && !new_checker_itb_port->isConnected()) {
+                assert(old_checker_itb_port);
+                SlavePort &slavePort = old_checker_itb_port->getSlavePort();;
+                new_checker_itb_port->bind(slavePort);
+            }
+            if (new_checker_dtb_port && !new_checker_dtb_port->isConnected()) {
+                assert(old_checker_dtb_port);
+                SlavePort &slavePort = old_checker_dtb_port->getSlavePort();;
+                new_checker_dtb_port->bind(slavePort);
+            }
         }
-        if (new_checker_dtb_port && !new_checker_dtb_port->isConnected()) {
-            assert(old_checker_dtb_port);
-            Port *peer = old_checker_dtb_port->getPeer();;
-            new_checker_dtb_port->setPeer(peer);
-            peer->setPeer(new_checker_dtb_port);
-        }
-#endif
-
     }
 
     interrupts = oldCPU->interrupts;
@@ -451,16 +467,12 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
     // Connect new CPU to old CPU's memory only if new CPU isn't
     // connected to anything.  Also connect old CPU's memory to new
     // CPU.
-    if (!ic->isConnected()) {
-        Port *peer = oldCPU->getPort("icache_port")->getPeer();
-        ic->setPeer(peer);
-        peer->setPeer(ic);
+    if (!getInstPort().isConnected()) {
+        getInstPort().bind(oldCPU->getInstPort().getSlavePort());
     }
 
-    if (!dc->isConnected()) {
-        Port *peer = oldCPU->getPort("dcache_port")->getPeer();
-        dc->setPeer(peer);
-        peer->setPeer(dc);
+    if (!getDataPort().isConnected()) {
+        getDataPort().bind(oldCPU->getDataPort().getSlavePort());
     }
 }
 
@@ -523,34 +535,22 @@ BaseCPU::traceFunctionsInternal(Addr pc)
 }
 
 bool
-BaseCPU::CpuPort::recvTiming(PacketPtr pkt)
+BaseCPU::CpuPort::recvTimingResp(PacketPtr pkt)
 {
-    panic("BaseCPU doesn't expect recvTiming callback!");
+    panic("BaseCPU doesn't expect recvTiming!\n");
     return true;
 }
 
 void
 BaseCPU::CpuPort::recvRetry()
 {
-    panic("BaseCPU doesn't expect recvRetry callback!");
-}
-
-Tick
-BaseCPU::CpuPort::recvAtomic(PacketPtr pkt)
-{
-    panic("BaseCPU doesn't expect recvAtomic callback!");
-    return curTick();
+    panic("BaseCPU doesn't expect recvRetry!\n");
 }
 
 void
-BaseCPU::CpuPort::recvFunctional(PacketPtr pkt)
+BaseCPU::CpuPort::recvFunctionalSnoop(PacketPtr pkt)
 {
-    // No internal storage to update (in the general case). In the
-    // long term this should never be called, but that assumed a split
-    // into master/slave and request/response.
-}
-
-void
-BaseCPU::CpuPort::recvRangeChange()
-{
+    // No internal storage to update (in the general case). A CPU with
+    // internal storage, e.g. an LSQ that should be part of the
+    // coherent memory has to check against stored data.
 }

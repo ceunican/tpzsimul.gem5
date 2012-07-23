@@ -37,12 +37,10 @@
 #include <list>
 #include <string>
 
-#include "arch/faults.hh"
 #include "arch/isa_traits.hh"
 #include "arch/mt.hh"
 #include "arch/types.hh"
 #include "arch/utility.hh"
-#include "base/fast_alloc.hh"
 #include "base/trace.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
@@ -58,6 +56,7 @@
 #include "cpu/thread_context.hh"
 #include "debug/InOrderDynInst.hh"
 #include "mem/packet.hh"
+#include "sim/fault_fwd.hh"
 #include "sim/system.hh"
 
 #if THE_ISA == ALPHA_ISA
@@ -73,7 +72,7 @@
 class ResourceRequest;
 class Packet;
 
-class InOrderDynInst : public FastAlloc, public RefCounted
+class InOrderDynInst : public RefCounted
 {
   public:
     // Binary machine instruction type.
@@ -103,7 +102,7 @@ class InOrderDynInst : public FastAlloc, public RefCounted
 
     enum {
         MaxInstSrcRegs = TheISA::MaxInstSrcRegs,        /// Max source regs
-        MaxInstDestRegs = TheISA::MaxInstDestRegs,      /// Max dest regs
+        MaxInstDestRegs = TheISA::MaxInstDestRegs       /// Max dest regs
     };
 
   public:
@@ -398,6 +397,8 @@ class InOrderDynInst : public FastAlloc, public RefCounted
     bool isUnverifiable() const { return staticInst->isUnverifiable(); }
     bool isSyscall() const
     { return staticInst->isSyscall(); }
+    bool isMicroop() const { return staticInst->isMicroop(); }
+    bool isLastMicroop() const { return staticInst->isLastMicroop(); }
 
 
     /////////////////////////////////////////////

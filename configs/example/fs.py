@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 ARM Limited
+# Copyright (c) 2010-2012 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -39,7 +39,6 @@
 # Authors: Ali Saidi
 
 import optparse
-import os
 import sys
 
 import m5
@@ -55,43 +54,11 @@ from Benchmarks import *
 import Simulation
 import CacheConfig
 from Caches import *
-
-# Get paths we might need.  It's expected this file is in m5/configs/example.
-config_path = os.path.dirname(os.path.abspath(__file__))
-config_root = os.path.dirname(config_path)
+import Options
 
 parser = optparse.OptionParser()
-
-# Simulation options
-parser.add_option("--timesync", action="store_true",
-        help="Prevent simulated time from getting ahead of real time")
-
-# System options
-parser.add_option("--kernel", action="store", type="string")
-parser.add_option("--script", action="store", type="string")
-parser.add_option("--frame-capture", action="store_true",
-        help="Stores changed frame buffers from the VNC server to compressed "\
-        "files in the gem5 output directory")
-
-if buildEnv['TARGET_ISA'] == "arm":
-    parser.add_option("--bare-metal", action="store_true",
-               help="Provide the raw system without the linux specific bits")
-    parser.add_option("--machine-type", action="store", type="choice",
-            choices=ArmMachineType.map.keys(), default="RealView_PBX")
-# Benchmark options
-parser.add_option("--dual", action="store_true",
-                  help="Simulate two systems attached with an ethernet link")
-parser.add_option("-b", "--benchmark", action="store", type="string",
-                  dest="benchmark",
-                  help="Specify the benchmark to run. Available benchmarks: %s"\
-                  % DefinedBenchmarks)
-
-# Metafile options
-parser.add_option("--etherdump", action="store", type="string", dest="etherdump",
-                  help="Specify the filename to dump a pcap capture of the" \
-                  "ethernet traffic")
-
-execfile(os.path.join(config_root, "common", "Options.py"))
+Options.addCommonOptions(parser)
+Options.addFSOptions(parser)
 
 (options, args) = parser.parse_args()
 
@@ -107,8 +74,8 @@ drive_mem_mode = 'atomic'
 # system under test can be any CPU
 (TestCPUClass, test_mem_mode, FutureClass) = Simulation.setCPUClass(options)
 
-TestCPUClass.clock = '2GHz'
-DriveCPUClass.clock = '2GHz'
+TestCPUClass.clock = options.clock
+DriveCPUClass.clock = options.clock
 
 if options.benchmark:
     try:
@@ -119,9 +86,9 @@ if options.benchmark:
         sys.exit(1)
 else:
     if options.dual:
-        bm = [SysConfig(), SysConfig()]
+        bm = [SysConfig(disk=options.disk_image, mem=options.mem_size), SysConfig(disk=options.disk_image, mem=options.mem_size)]
     else:
-        bm = [SysConfig()]
+        bm = [SysConfig(disk=options.disk_image, mem=options.mem_size)]
 
 np = options.num_cpus
 
@@ -133,14 +100,12 @@ elif buildEnv['TARGET_ISA'] == "sparc":
     test_sys = makeSparcSystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "x86":
     test_sys = makeLinuxX86System(test_mem_mode, options.num_cpus, bm[0])
-    setWorkCountOptions(test_sys, options)
 elif buildEnv['TARGET_ISA'] == "arm":
     test_sys = makeArmSystem(test_mem_mode,
             options.machine_type, bm[0],
             bare_metal=options.bare_metal)
-    setWorkCountOptions(test_sys, options)
 else:
-    fatal("incapable of building non-alpha or non-sparc full system!")
+    fatal("Incapable of building %s full system!", buildEnv['TARGET_ISA'])
 
 if options.kernel is not None:
     test_sys.kernel = binary(options.kernel)
@@ -152,28 +117,31 @@ test_sys.init_param = options.init_param
 
 test_sys.cpu = [TestCPUClass(cpu_id=i) for i in xrange(np)]
 
-CacheConfig.config_cache(options, test_sys)
-
 if bm[0]:
     mem_size = bm[0].mem()
 else:
     mem_size = SysConfig().mem()
 if options.caches or options.l2cache:
-    test_sys.iocache = IOCache(addr_range=mem_size)
-    test_sys.iocache.cpu_side = test_sys.iobus.port
-    test_sys.iocache.mem_side = test_sys.membus.port
+    test_sys.iocache = IOCache(addr_ranges=[test_sys.physmem.range])
+    test_sys.iocache.cpu_side = test_sys.iobus.master
+    test_sys.iocache.mem_side = test_sys.membus.slave
 else:
     test_sys.iobridge = Bridge(delay='50ns', nack_delay='4ns',
-                               ranges = [AddrRange(mem_size)])
-    test_sys.iobridge.slave = test_sys.iobus.port
-    test_sys.iobridge.master = test_sys.membus.port
+                               ranges = [test_sys.physmem.range])
+    test_sys.iobridge.slave = test_sys.iobus.master
+    test_sys.iobridge.master = test_sys.membus.slave
+
+# Sanity check
+if options.fastmem and (options.caches or options.l2cache):
+    fatal("You cannot use fastmem in combination with caches!")
 
 for i in xrange(np):
     if options.fastmem:
-        test_sys.cpu[i].physmem_port = test_sys.physmem.port
+        test_sys.cpu[i].fastmem = True
+    if options.checker:
+        test_sys.cpu[i].addCheckerCpu()
 
-if buildEnv['TARGET_ISA'] == 'mips':
-    setMipsOptions(TestCPUClass)
+CacheConfig.config_cache(options, test_sys)
 
 if len(bm) == 2:
     if buildEnv['TARGET_ISA'] == 'alpha':
@@ -188,15 +156,16 @@ if len(bm) == 2:
         drive_sys = makeArmSystem(drive_mem_mode, options.machine_type, bm[1])
 
     drive_sys.cpu = DriveCPUClass(cpu_id=0)
+    drive_sys.cpu.createInterruptController()
     drive_sys.cpu.connectAllPorts(drive_sys.membus)
     if options.fastmem:
-        drive_sys.cpu.physmem_port = drive_sys.physmem.port
+        drive_sys.cpu.fastmem = True
     if options.kernel is not None:
         drive_sys.kernel = binary(options.kernel)
     drive_sys.iobridge = Bridge(delay='50ns', nack_delay='4ns',
-                               ranges = [AddrRange(bm[1].mem())])
-    drive_sys.iobridge.slave = drive_sys.iobus.port
-    drive_sys.iobridge.master = drive_sys.membus.port
+                               ranges = [drive_sys.physmem.range])
+    drive_sys.iobridge.slave = drive_sys.iobus.master
+    drive_sys.iobridge.master = drive_sys.membus.slave
 
     drive_sys.init_param = options.init_param
     root = makeDualRoot(True, test_sys, drive_sys, options.etherdump)
@@ -212,4 +181,5 @@ if options.timesync:
 if options.frame_capture:
     VncServer.frame_capture = True
 
+Simulation.setWorkCountOptions(test_sys, options)
 Simulation.run(options, root, test_sys, FutureClass)

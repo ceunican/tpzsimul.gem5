@@ -40,7 +40,6 @@
  * Authors: Steve Reinhardt
  */
 
-#include "arch/faults.hh"
 #include "arch/kernel_stats.hh"
 #include "arch/stacktrace.hh"
 #include "arch/tlb.hh"
@@ -56,9 +55,10 @@
 #include "base/trace.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/simple/base.hh"
 #include "cpu/base.hh"
+#include "cpu/checker/cpu.hh"
+#include "cpu/checker/thread_context.hh"
 #include "cpu/exetrace.hh"
 #include "cpu/profile.hh"
 #include "cpu/simple_thread.hh"
@@ -74,34 +74,29 @@
 #include "params/BaseSimpleCPU.hh"
 #include "sim/byteswap.hh"
 #include "sim/debug.hh"
+#include "sim/faults.hh"
 #include "sim/full_system.hh"
 #include "sim/sim_events.hh"
 #include "sim/sim_object.hh"
 #include "sim/stats.hh"
 #include "sim/system.hh"
 
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#include "cpu/checker/thread_context.hh"
-#endif
-
 using namespace std;
 using namespace TheISA;
 
 BaseSimpleCPU::BaseSimpleCPU(BaseSimpleCPUParams *p)
-    : BaseCPU(p), traceData(NULL), thread(NULL), predecoder(NULL)
+    : BaseCPU(p), traceData(NULL), thread(NULL)
 {
     if (FullSystem)
         thread = new SimpleThread(this, 0, p->system, p->itb, p->dtb);
     else
-        thread = new SimpleThread(this, /* thread_num */ 0, p->workload[0],
-                p->itb, p->dtb);
+        thread = new SimpleThread(this, /* thread_num */ 0, p->system,
+                p->workload[0], p->itb, p->dtb);
 
     thread->setStatus(ThreadContext::Halted);
 
     tc = thread->getTC();
 
-#if USE_CHECKER
     if (p->checker) {
         BaseCPU *temp_checker = p->checker;
         checker = dynamic_cast<CheckerCPU *>(temp_checker);
@@ -112,10 +107,11 @@ BaseSimpleCPU::BaseSimpleCPU(BaseSimpleCPUParams *p)
     } else {
         checker = NULL;
     }
-#endif
 
     numInst = 0;
     startNumInst = 0;
+    numOp = 0;
+    startNumOp = 0;
     numLoad = 0;
     startNumLoad = 0;
     lastIcacheStall = 0;
@@ -156,8 +152,13 @@ BaseSimpleCPU::regStats()
     BaseCPU::regStats();
 
     numInsts
-        .name(name() + ".num_insts")
-        .desc("Number of instructions executed")
+        .name(name() + ".committedInsts")
+        .desc("Number of instructions committed")
+        ;
+
+    numOps
+        .name(name() + ".committedOps")
+        .desc("Number of ops (including micro ops) committed")
         ;
 
     numIntAluAccesses
@@ -331,7 +332,7 @@ BaseSimpleCPU::checkForInterrupts()
             fetchOffset = 0;
             interrupts->updateIntrInfo(tc);
             interrupt->invoke(tc);
-            predecoder.reset();
+            thread->decoder.reset();
         }
     }
 }
@@ -346,7 +347,8 @@ BaseSimpleCPU::setupFetchRequest(Request *req)
     DPRINTF(Fetch, "Fetch: PC:%08p\n", instAddr);
 
     Addr fetchPC = (instAddr & PCMask) + fetchOffset;
-    req->setVirt(0, fetchPC, sizeof(MachInst), Request::INST_FETCH, instAddr);
+    req->setVirt(0, fetchPC, sizeof(MachInst), Request::INST_FETCH, instMasterId(),
+            instAddr);
 }
 
 
@@ -376,23 +378,24 @@ BaseSimpleCPU::preExecute()
         //We're not in the middle of a macro instruction
         StaticInstPtr instPtr = NULL;
 
+        TheISA::Decoder *decoder = &(thread->decoder);
+
         //Predecode, ie bundle up an ExtMachInst
         //This should go away once the constructor can be set up properly
-        predecoder.setTC(thread->getTC());
+        decoder->setTC(thread->getTC());
         //If more fetch data is needed, pass it in.
         Addr fetchPC = (pcState.instAddr() & PCMask) + fetchOffset;
-        //if(predecoder.needMoreBytes())
-            predecoder.moreBytes(pcState, fetchPC, inst);
+        //if(decoder->needMoreBytes())
+            decoder->moreBytes(pcState, fetchPC, inst);
         //else
-        //    predecoder.process();
+        //    decoder->process();
 
-        //If an instruction is ready, decode it. Otherwise, we'll have to
+        //Decode an instruction if one is ready. Otherwise, we'll have to
         //fetch beyond the MachInst at the current pc.
-        if (predecoder.extMachInstReady()) {
+        instPtr = decoder->decode(pcState);
+        if (instPtr) {
             stayAtPC = false;
-            ExtMachInst machInst = predecoder.getExtMachInst(pcState);
             thread->pcState(pcState);
-            instPtr = thread->decoder.decode(machInst, pcState.instAddr());
         } else {
             stayAtPC = true;
             fetchOffset += sizeof(MachInst);
@@ -412,13 +415,12 @@ BaseSimpleCPU::preExecute()
     }
 
     //If we decoded an instruction this "tick", record information about it.
-    if(curStaticInst)
-    {
+    if (curStaticInst) {
 #if TRACING_ON
         traceData = tracer->getInstRecord(curTick(), tc,
                 curStaticInst, thread->pcState(), curMacroStaticInst);
 
-        DPRINTF(Decode,"Decode: Decoded %s instruction: 0x%x\n",
+        DPRINTF(Decode,"Decode: Decoded %s instruction: %#x\n",
                 curStaticInst->getName(), curStaticInst->machInst);
 #endif // TRACING_ON
     }
@@ -504,7 +506,7 @@ BaseSimpleCPU::advancePC(Fault fault)
     if (fault != NoFault) {
         curMacroStaticInst = StaticInst::nullStaticInstPtr;
         fault->invoke(tc, curStaticInst);
-        predecoder.reset();
+        thread->decoder.reset();
     } else {
         if (curStaticInst) {
             if (curStaticInst->isLastMicroop())

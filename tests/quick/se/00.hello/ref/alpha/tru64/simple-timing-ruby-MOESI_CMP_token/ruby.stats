@@ -1,60 +1,24 @@
-
-================ Begin RubySystem Configuration Print ================
-
-RubySystem config:
-  random_seed: 1234
-  randomization: 0
-  cycle_period: 1
-  block_size_bytes: 64
-  block_size_bits: 6
-  memory_size_bytes: 134217728
-  memory_size_bits: 27
-
-Network Configuration
----------------------
-network: SIMPLE_NETWORK
-topology: 
-
-virtual_net_0: active, ordered
-virtual_net_1: active, unordered
-virtual_net_2: active, unordered
-virtual_net_3: active, ordered
-virtual_net_4: active, unordered
-virtual_net_5: active, ordered
-virtual_net_6: inactive
-virtual_net_7: inactive
-virtual_net_8: inactive
-virtual_net_9: inactive
-
-
-Profiler Configuration
-----------------------
-periodic_stats_period: 1000000
-
-================ End RubySystem Configuration Print ================
-
-
-Real time: Jan/23/2012 04:22:26
+Real time: Jul/10/2012 17:45:47
 
 Profiler Stats
 --------------
-Elapsed_time_in_seconds: 1
-Elapsed_time_in_minutes: 0.0166667
-Elapsed_time_in_hours: 0.000277778
-Elapsed_time_in_days: 1.15741e-05
+Elapsed_time_in_seconds: 0
+Elapsed_time_in_minutes: 0
+Elapsed_time_in_hours: 0
+Elapsed_time_in_days: 0
 
-Virtual_time_in_seconds: 0.22
-Virtual_time_in_minutes: 0.00366667
-Virtual_time_in_hours:   6.11111e-05
-Virtual_time_in_days:    2.5463e-06
+Virtual_time_in_seconds: 0.42
+Virtual_time_in_minutes: 0.007
+Virtual_time_in_hours:   0.000116667
+Virtual_time_in_days:    4.86111e-06
 
 Ruby_current_time: 87899
 Ruby_start_time: 0
 Ruby_cycles: 87899
 
-mbytes_resident: 42.2227
-mbytes_total: 211.34
-resident_ratio: 0.199786
+mbytes_resident: 44.4727
+mbytes_total: 227.578
+resident_ratio: 0.195434
 
 ruby_cycles_executed: [ 87900 ]
 
@@ -127,11 +91,11 @@ Resource Usage
 page_size: 4096
 user_time: 0
 system_time: 0
-page_reclaims: 11088
-page_faults: 5
+page_reclaims: 12519
+page_faults: 0
 swaps: 0
-block_inputs: 1064
-block_outputs: 104
+block_inputs: 0
+block_outputs: 0
 
 Network Stats
 -------------

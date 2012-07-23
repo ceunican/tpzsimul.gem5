@@ -64,6 +64,9 @@ namespace X86ISA
         OFBit = 1 << 11
     };
 
+    const uint32_t cfofMask = CFBit | OFBit;
+    const uint32_t ccFlagMask = PFBit | AFBit | ZFBit | SFBit | DFBit;
+
     enum RFLAGBit {
         TFBit = 1 << 8,
         IFBit = 1 << 9,
@@ -915,6 +918,6 @@ namespace X86ISA
         Bitfield<11> enable;
         Bitfield<8> bsp;
     EndBitUnion(LocalApicBase)
-};
+}
 
 #endif // __ARCH_X86_INTREGS_HH__

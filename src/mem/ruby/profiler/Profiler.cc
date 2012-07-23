@@ -45,6 +45,8 @@
 // Allows use of times() library call, which determines virtual runtime
 #include <sys/resource.h>
 #include <sys/times.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <fstream>
@@ -160,15 +162,6 @@ Profiler::setPeriodicStatsInterval(integer_t period)
 
     m_stats_period = period;
     g_eventQueue_ptr->scheduleEvent(this, 1);
-}
-
-void
-Profiler::printConfig(ostream& out) const
-{
-    out << endl;
-    out << "Profiler Configuration" << endl;
-    out << "----------------------" << endl;
-    out << "periodic_stats_period: " << m_stats_period << endl;
 }
 
 void

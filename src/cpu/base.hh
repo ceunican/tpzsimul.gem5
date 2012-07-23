@@ -58,17 +58,11 @@
 #include "sim/full_system.hh"
 #include "sim/insttracer.hh"
 
-class BaseCPUParams;
+struct BaseCPUParams;
 class BranchPred;
 class CheckerCPU;
 class ThreadContext;
 class System;
-class Port;
-
-namespace TheISA
-{
-    class Predecoder;
-}
 
 class CPUProgressEvent : public Event
 {
@@ -104,6 +98,12 @@ class BaseCPU : public MemObject
     // therefore no setCpuId() method is provided
     int _cpuId;
 
+    /** instruction side request id that must be placed in all requests */
+    MasterID _instMasterId;
+
+    /** data side request id that must be placed in all requests */
+    MasterID _dataMasterId;
+
     /**
      * Define a base class for the CPU ports (instruction and data)
      * that is refined in the subclasses. This class handles the
@@ -112,7 +112,7 @@ class BaseCPU : public MemObject
      * both atomic and timing access is to panic and the corresponding
      * subclasses have to override these methods.
      */
-    class CpuPort : public Port
+    class CpuPort : public MasterPort
     {
       public:
 
@@ -123,26 +123,56 @@ class BaseCPU : public MemObject
          * @param _name structural owner of this port
          */
         CpuPort(const std::string& _name, MemObject* _owner) :
-            Port(_name, _owner)
+            MasterPort(_name, _owner)
         { }
 
       protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
-
-        virtual Tick recvAtomic(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
 
         virtual void recvRetry();
 
-        void recvFunctional(PacketPtr pkt);
-
-        void recvRangeChange();
+        virtual void recvFunctionalSnoop(PacketPtr pkt);
 
     };
 
   public:
+
+    /**
+     * Purely virtual method that returns a reference to the data
+     * port. All subclasses must implement this method.
+     *
+     * @return a reference to the data port
+     */
+    virtual CpuPort &getDataPort() = 0;
+
+    /**
+     * Purely virtual method that returns a reference to the instruction
+     * port. All subclasses must implement this method.
+     *
+     * @return a reference to the instruction port
+     */
+    virtual CpuPort &getInstPort() = 0;
+
     /** Reads this CPU's ID. */
     int cpuId() { return _cpuId; }
+
+    /** Reads this CPU's unique data requestor ID */
+    MasterID dataMasterId() { return _dataMasterId; }
+    /** Reads this CPU's unique instruction requestor ID */
+    MasterID instMasterId() { return _instMasterId; }
+
+    /**
+     * Get a master port on this CPU. All CPUs have a data and
+     * instruction port, and this method uses getDataPort and
+     * getInstPort of the subclasses to resolve the two ports.
+     *
+     * @param if_name the port name
+     * @param idx ignored index
+     *
+     * @return a reference to the port with the given name
+     */
+    MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
 
 //    Tick currentTick;
     inline Tick frequency() const { return SimClock::Frequency / clock; }
@@ -222,7 +252,6 @@ class BaseCPU : public MemObject
 
   protected:
     std::vector<ThreadContext *> threadContexts;
-    std::vector<TheISA::Predecoder *> predecoders;
 
     Trace::InstTracer * tracer;
 
@@ -258,7 +287,7 @@ class BaseCPU : public MemObject
     typedef BaseCPUParams Params;
     const Params *params() const
     { return reinterpret_cast<const Params *>(_params); }
-    BaseCPU(Params *params);
+    BaseCPU(Params *params, bool is_checker = false);
     virtual ~BaseCPU();
 
     virtual void init();
@@ -320,7 +349,9 @@ class BaseCPU : public MemObject
      */
     virtual BranchPred *getBranchPred() { return NULL; };
 
-    virtual Counter totalInstructions() const = 0;
+    virtual Counter totalInsts() const = 0;
+
+    virtual Counter totalOps() const = 0;
 
     // Function tracing
   private:
@@ -343,13 +374,24 @@ class BaseCPU : public MemObject
     }
 
     static int numSimulatedCPUs() { return cpuList.size(); }
-    static Counter numSimulatedInstructions()
+    static Counter numSimulatedInsts()
     {
         Counter total = 0;
 
         int size = cpuList.size();
         for (int i = 0; i < size; ++i)
-            total += cpuList[i]->totalInstructions();
+            total += cpuList[i]->totalInsts();
+
+        return total;
+    }
+
+    static Counter numSimulatedOps()
+    {
+        Counter total = 0;
+
+        int size = cpuList.size();
+        for (int i = 0; i < size; ++i)
+            total += cpuList[i]->totalOps();
 
         return total;
     }

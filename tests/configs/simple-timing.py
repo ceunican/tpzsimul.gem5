@@ -44,10 +44,12 @@ cpu.addTwoLevelCacheHierarchy(MyL1Cache(size = '128kB'),
                               MyL1Cache(size = '256kB'),
                               MyCache(size = '2MB', latency='10ns'))
 system = System(cpu = cpu,
-                physmem = PhysicalMemory(),
-                membus = Bus())
-system.system_port = system.membus.port
-system.physmem.port = system.membus.port
+                physmem = SimpleMemory(),
+                membus = CoherentBus())
+system.system_port = system.membus.slave
+system.physmem.port = system.membus.master
+# create the interrupt controller
+cpu.createInterruptController()
 cpu.connectAllPorts(system.membus)
 cpu.clock = '2GHz'
 

@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2009 Advanced Micro Devices, Inc.
  * Copyright (c) 2011 Mark D. Hill and David A. Wood
  * All rights reserved.
@@ -46,9 +58,11 @@ class AbstractController;
 class RubyPort : public MemObject
 {
   public:
-    class M5Port : public SimpleTimingPort
+    class M5Port : public QueuedSlavePort
     {
       private:
+
+        SlavePacketQueue queue;
         RubyPort *ruby_port;
         RubySystem* ruby_system;
         bool _onRetryList;
@@ -57,7 +71,7 @@ class RubyPort : public MemObject
       public:
         M5Port(const std::string &_name, RubyPort *_port,
                RubySystem*_system, bool _access_phys_mem);
-        bool sendTiming(PacketPtr pkt);
+        bool sendNextCycle(PacketPtr pkt, bool send_as_snoop = false);
         void hitCallback(PacketPtr pkt);
         void evictionCallback(const Address& address);
         unsigned deviceBlockSize() const;
@@ -69,9 +83,10 @@ class RubyPort : public MemObject
         { _onRetryList = newVal; }
 
       protected:
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingReq(PacketPtr pkt);
         virtual Tick recvAtomic(PacketPtr pkt);
         virtual void recvFunctional(PacketPtr pkt);
+        virtual AddrRangeList getAddrRanges() const;
 
       private:
         bool isPhysMemAddress(Addr addr);
@@ -81,18 +96,20 @@ class RubyPort : public MemObject
 
     friend class M5Port;
 
-    class PioPort : public SimpleTimingPort
+    class PioPort : public QueuedMasterPort
     {
       private:
+
+        MasterPacketQueue queue;
+
         RubyPort *ruby_port;
 
       public:
         PioPort(const std::string &_name, RubyPort *_port);
-        bool sendTiming(PacketPtr pkt);
+        bool sendNextCycle(PacketPtr pkt);
 
       protected:
-        virtual bool recvTiming(PacketPtr pkt);
-        virtual Tick recvAtomic(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
     };
 
     friend class PioPort;
@@ -113,7 +130,8 @@ class RubyPort : public MemObject
 
     void init();
 
-    Port *getPort(const std::string &if_name, int idx);
+    MasterPort &getMasterPort(const std::string &if_name, int idx);
+    SlavePort &getSlavePort(const std::string &if_name, int idx);
 
     virtual RequestStatus makeRequest(PacketPtr pkt) = 0;
     virtual int outstandingCount() const = 0;
@@ -137,7 +155,7 @@ class RubyPort : public MemObject
     int m_version;
     AbstractController* m_controller;
     MessageBuffer* m_mandatory_q_ptr;
-    PioPort* pio_port;
+    PioPort pio_port;
     bool m_usingRubyTester;
 
   private:
@@ -155,16 +173,15 @@ class RubyPort : public MemObject
     uint16_t m_port_id;
     uint64_t m_request_cnt;
 
-    PioPort* physMemPort;
-
-    /*! Vector of CPU Port attached to this Ruby port. */
+    /** Vector of M5 Ports attached to this Ruby port. */
     typedef std::vector<M5Port*>::iterator CpuPortIter;
-    std::vector<M5Port*> cpu_ports;
+    std::vector<M5Port*> slave_ports;
+    std::vector<PioPort*> master_ports;
 
     Event *drainEvent;
 
-    PhysicalMemory* physmem;
     RubySystem* ruby_system;
+    System* system;
 
     //
     // Based on similar code in the M5 bus.  Stores pointers to those ports

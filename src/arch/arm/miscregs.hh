@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -85,6 +85,41 @@ namespace ArmISA
         MISCREG_MVFR1,
         MISCREG_SCTLR_RST,
         MISCREG_SEV_MAILBOX,
+
+        // CP14 registers
+        MISCREG_CP14_START,
+        MISCREG_DBGDIDR = MISCREG_CP14_START,
+        MISCREG_DBGDSCR_INT,
+        MISCREG_DBGDTRRX_INT,
+        MISCREG_DBGTRTX_INT,
+        MISCREG_DBGWFAR,
+        MISCREG_DBGVCR,
+        MISCREG_DBGECR,
+        MISCREG_DBGDSCCR,
+        MISCREG_DBGSMCR,
+        MISCREG_DBGDTRRX_EXT,
+        MISCREG_DBGDSCR_EXT,
+        MISCREG_DBGDTRTX_EXT,
+        MISCREG_DBGDRCR,
+        MISCREG_DBGBVR,
+        MISCREG_DBGBCR,
+        MISCREG_DBGBVR_M,
+        MISCREG_DBGBCR_M,
+        MISCREG_DBGDRAR,
+        MISCREG_DBGBXVR_M,
+        MISCREG_DBGOSLAR,
+        MISCREG_DBGOSSRR,
+        MISCREG_DBGOSDLR,
+        MISCREG_DBGPRCR,
+        MISCREG_DBGPRSR,
+        MISCREG_DBGDSAR,
+        MISCREG_DBGITCTRL,
+        MISCREG_DBGCLAIMSET,
+        MISCREG_DBGCLAIMCLR,
+        MISCREG_DBGAUTHSTATUS,
+        MISCREG_DBGDEVID2,
+        MISCREG_DBGDEVID1,
+        MISCREG_DBGDEVID,
 
         // CP15 registers
         MISCREG_CP15_START,
@@ -208,8 +243,12 @@ namespace ArmISA
         NUM_MISCREGS
     };
 
+    MiscRegIndex decodeCP14Reg(unsigned crn, unsigned opc1,
+                               unsigned crm, unsigned opc2);
+
     MiscRegIndex decodeCP15Reg(unsigned crn, unsigned opc1,
                                unsigned crm, unsigned opc2);
+
 
     const char * const miscRegName[NUM_MISCREGS] = {
         "cpsr", "cpsr_q", "spsr", "spsr_fiq", "spsr_irq", "spsr_svc",
@@ -217,6 +256,38 @@ namespace ArmISA
         "fpsr", "fpsid", "fpscr", "fpscr_qc", "fpscr_exc", "fpexc",
         "mvfr0", "mvfr1",
         "sctlr_rst", "sev_mailbox",
+        "DBGDIDR",
+        "DBGDSCR_INT",
+        "DBGDTRRX_INT",
+        "DBGTRTX_INT",
+        "DBGWFAR",
+        "DBGVCR",
+        "DBGECR",
+        "DBGDSCCR",
+        "DBGSMCR",
+        "DBGDTRRX_EXT",
+        "DBGDSCR_EXT",
+        "DBGDTRTX_EXT",
+        "DBGDRCR",
+        "DBGBVR",
+        "DBGBCR",
+        "DBGBVR_M",
+        "DBGBCR_M",
+        "DBGDRAR",
+        "DBGBXVR_M",
+        "DBGOSLAR",
+        "DBGOSSRR",
+        "DBGOSDLR",
+        "DBGPRCR",
+        "DBGPRSR",
+        "DBGDSAR",
+        "DBGITCTRL",
+        "DBGCLAIMSET",
+        "DBGCLAIMCLR",
+        "DBGAUTHSTATUS",
+        "DBGDEVID2",
+        "DBGDEVID1",
+        "DBGDEVID",
         "sctlr", "dccisw", "dccimvac", "dccmvac",
         "contextidr", "tpidrurw", "tpidruro", "tpidrprw",
         "cp15isb", "cp15dsb", "cp15dmb", "cpacr",
@@ -280,7 +351,7 @@ namespace ArmISA
         Bitfield<31> ie;  // Instruction endianness
         Bitfield<30> te;  // Thumb Exception Enable
         Bitfield<29> afe; // Access flag enable
-        Bitfield<28> tre; // TEX Remap bit 
+        Bitfield<28> tre; // TEX Remap bit
         Bitfield<27> nmfi;// Non-maskable fast interrupts enable
         Bitfield<25> ee;  // Exception Endianness bit
         Bitfield<24> ve;  // Interrupt vectors enable
@@ -298,10 +369,10 @@ namespace ArmISA
         Bitfield<10> sw;  // Enable swp/swpb
         Bitfield<9,8> rs;   // deprecated protection bits
         Bitfield<6,3> rao4;// Read as one
-        Bitfield<7>  b;   // Endianness support (unused)  
+        Bitfield<7>  b;   // Endianness support (unused)
         Bitfield<2>  c;   // Cache enable bit
         Bitfield<1>  a;   // Alignment fault checking
-        Bitfield<0>  m;   // MMU enable bit 
+        Bitfield<0>  m;   // MMU enable bit
     EndBitUnion(SCTLR)
 
     BitUnion32(CPACR)
@@ -458,6 +529,6 @@ namespace ArmISA
       Bitfield<31>    l2rstDISABLE_monitor;
    EndBitUnion(L2CTLR)
 
-};
+}
 
 #endif // __ARCH_ARM_MISCREGS_HH__

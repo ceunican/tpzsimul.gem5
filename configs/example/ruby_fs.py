@@ -31,9 +31,7 @@
 #
 
 import optparse
-import os
 import sys
-from os.path import join as joinpath
 
 import m5
 from m5.defines import buildEnv
@@ -42,41 +40,22 @@ from m5.util import addToPath, fatal
 
 addToPath('../common')
 addToPath('../ruby')
+addToPath('../topologies')
 
 import Ruby
 
 from FSConfig import *
 from SysPaths import *
 from Benchmarks import *
+import Options
 import Simulation
-from Caches import *
-
-# Get paths we might need.  It's expected this file is in m5/configs/example.
-config_path = os.path.dirname(os.path.abspath(__file__))
-config_root = os.path.dirname(config_path)
-m5_root = os.path.dirname(config_root)
 
 parser = optparse.OptionParser()
-# System options
-parser.add_option("--kernel", action="store", type="string")
-parser.add_option("--script", action="store", type="string")
-# Benchmark options
-parser.add_option("-b", "--benchmark", action="store", type="string",
-                  dest="benchmark",
-                  help="Specify the benchmark to run. Available benchmarks: %s"\
-                  % DefinedBenchmarks)
-parser.add_option("-o", "--options", default="",
-    help='The options to pass to the binary, use " " around the entire string')
-parser.add_option("-i", "--input", default="", help="Read stdin from a file.")
-parser.add_option("--output", default="", help="Redirect stdout to a file.")
-parser.add_option("--errout", default="", help="Redirect stderr to a file.")
+Options.addCommonOptions(parser)
+Options.addFSOptions(parser)
 
-#
 # Add the ruby specific and protocol specific options
-#
 Ruby.define_options(parser)
-
-execfile(os.path.join(config_root, "common", "Options.py"))
 
 (options, args) = parser.parse_args()
 options.ruby = True
@@ -93,7 +72,7 @@ if options.benchmark:
         print "Valid benchmarks are: %s" % DefinedBenchmarks
         sys.exit(1)
 else:
-    bm = [SysConfig()]
+    bm = [SysConfig(disk=options.disk_image, mem=options.mem_size)]
 
 # Check for timing mode because ruby does not support atomic accesses
 if not (options.cpu_type == "detailed" or options.cpu_type == "timing"):
@@ -107,7 +86,7 @@ if buildEnv['TARGET_ISA'] == "alpha":
     system = makeLinuxAlphaRubySystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "x86":
     system = makeLinuxX86System(test_mem_mode, options.num_cpus, bm[0], True)
-    setWorkCountOptions(system, options)
+    Simulation.setWorkCountOptions(system, options)
 else:
     fatal("incapable of building non-alpha or non-x86 full system!")
 
@@ -118,21 +97,21 @@ if options.script is not None:
     system.readfile = options.script
 
 system.cpu = [CPUClass(cpu_id=i) for i in xrange(options.num_cpus)]
-Ruby.create_system(options, system, system.piobus, system._dma_devices)
-
+Ruby.create_system(options, system, system.piobus, system._dma_ports)
 
 for (i, cpu) in enumerate(system.cpu):
     #
     # Tie the cpu ports to the correct ruby system ports
     #
-    cpu.icache_port = system.ruby._cpu_ruby_ports[i].port
-    cpu.dcache_port = system.ruby._cpu_ruby_ports[i].port
+    cpu.createInterruptController()
+    cpu.icache_port = system.ruby._cpu_ruby_ports[i].slave
+    cpu.dcache_port = system.ruby._cpu_ruby_ports[i].slave
     if buildEnv['TARGET_ISA'] == "x86":
-        cpu.itb.walker.port = system.ruby._cpu_ruby_ports[i].port
-        cpu.dtb.walker.port = system.ruby._cpu_ruby_ports[i].port
-        cpu.interrupts.pio = system.piobus.port
-        cpu.interrupts.int_port = system.piobus.port
+        cpu.itb.walker.port = system.ruby._cpu_ruby_ports[i].slave
+        cpu.dtb.walker.port = system.ruby._cpu_ruby_ports[i].slave
+        cpu.interrupts.pio = system.piobus.master
+        cpu.interrupts.int_master = system.piobus.slave
+        cpu.interrupts.int_slave = system.piobus.master
 
 root = Root(full_system = True, system = system)
-
 Simulation.run(options, root, system, FutureClass)

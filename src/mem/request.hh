@@ -40,8 +40,8 @@
 #define __MEM_REQUEST_HH__
 
 #include <cassert>
+#include <climits>
 
-#include "base/fast_alloc.hh"
 #include "base/flags.hh"
 #include "base/misc.hh"
 #include "base/types.hh"
@@ -50,8 +50,9 @@
 class Request;
 
 typedef Request* RequestPtr;
+typedef uint16_t MasterID;
 
-class Request : public FastAlloc
+class Request
 {
   public:
     typedef uint32_t FlagsType;
@@ -100,6 +101,22 @@ class Request : public FastAlloc
        (assigned a new address). */
     static const FlagsType STICKY_FLAGS = INST_FETCH;
 
+    /** Request Ids that are statically allocated
+     * @{*/
+    /** This request id is used for writeback requests by the caches */
+    static const MasterID wbMasterId = 0;
+    /** This request id is used for functional requests that don't come from a
+     * particular device
+     */
+    static const MasterID funcMasterId = 1;
+    /** This request id is used for message signaled interrupts */
+    static const MasterID intMasterId = 2;
+    /** Invalid request id for assertion checking only. It is invalid behavior
+     * to ever send this id as part of a request.
+     * @todo C++1x replace with numeric_limits when constexpr is added  */
+    static const MasterID invldMasterId = USHRT_MAX;
+    /** @} */
+
   private:
     typedef uint8_t PrivateFlagsType;
     typedef ::Flags<PrivateFlagsType> PrivateFlags;
@@ -136,6 +153,11 @@ class Request : public FastAlloc
      * valid as long as one of the address fields is valid.
      */
     int _size;
+
+    /** The requestor ID which is unique in the system for all ports
+     * that are capable of issuing a transaction
+     */
+    MasterID _masterId;
 
     /** Flag structure for the request. */
     Flags _flags;
@@ -182,31 +204,31 @@ class Request : public FastAlloc
      * just physical address, size, flags, and timestamp (to curTick()).
      * These fields are adequate to perform a request. 
      */
-    Request(Addr paddr, int size, Flags flags)
+    Request(Addr paddr, int size, Flags flags, MasterID mid)
     {
-        setPhys(paddr, size, flags);
+        setPhys(paddr, size, flags, mid);
     }
 
-    Request(Addr paddr, int size, Flags flags, Tick time)
+    Request(Addr paddr, int size, Flags flags, MasterID mid, Tick time)
     {
-        setPhys(paddr, size, flags, time);
+        setPhys(paddr, size, flags, mid, time);
     }
 
-    Request(Addr paddr, int size, Flags flags, Tick time, Addr pc)
+    Request(Addr paddr, int size, Flags flags, MasterID mid, Tick time, Addr pc)
     {
-        setPhys(paddr, size, flags, time);
+        setPhys(paddr, size, flags, mid, time);
         privateFlags.set(VALID_PC);
         _pc = pc;
     }
 
-    Request(int asid, Addr vaddr, int size, Flags flags, Addr pc,
+    Request(int asid, Addr vaddr, int size, Flags flags, MasterID mid, Addr pc,
             int cid, ThreadID tid)
     {
-        setVirt(asid, vaddr, size, flags, pc);
+        setVirt(asid, vaddr, size, flags, mid, pc);
         setThreadContext(cid, tid);
     }
 
-    ~Request() {}  // for FastAlloc
+    ~Request() {}
 
     /**
      * Set up CPU and thread numbers.
@@ -224,13 +246,13 @@ class Request : public FastAlloc
      * allocated Request object.
      */
     void
-    setPhys(Addr paddr, int size, Flags flags, Tick time)
+    setPhys(Addr paddr, int size, Flags flags, MasterID mid, Tick time)
     {
         assert(size >= 0);
         _paddr = paddr;
         _size = size;
         _time = time;
-
+        _masterId = mid;
         _flags.clear(~STICKY_FLAGS);
         _flags.set(flags);
         privateFlags.clear(~STICKY_PRIVATE_FLAGS);
@@ -238,9 +260,9 @@ class Request : public FastAlloc
     }
 
     void
-    setPhys(Addr paddr, int size, Flags flags)
+    setPhys(Addr paddr, int size, Flags flags, MasterID mid)
     {
-        setPhys(paddr, size, flags, curTick());
+        setPhys(paddr, size, flags, mid, curTick());
     }
 
     /**
@@ -248,12 +270,13 @@ class Request : public FastAlloc
      * allocated Request object.
      */
     void
-    setVirt(int asid, Addr vaddr, int size, Flags flags, Addr pc)
+    setVirt(int asid, Addr vaddr, int size, Flags flags, MasterID mid, Addr pc)
     {
         assert(size >= 0);
         _asid = asid;
         _vaddr = vaddr;
         _size = size;
+        _masterId = mid;
         _pc = pc;
         _time = curTick();
 
@@ -367,6 +390,13 @@ class Request : public FastAlloc
     {
         assert(privateFlags.isSet(VALID_VADDR));
         return _vaddr;
+    }
+
+    /** Accesssor for the requestor id. */
+    MasterID
+    masterId()
+    {
+        return _masterId;
     }
 
     /** Accessor function for asid.*/

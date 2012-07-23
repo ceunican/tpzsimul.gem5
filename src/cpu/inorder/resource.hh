@@ -70,12 +70,6 @@ class Resource {
     /** Return name of this resource */
     virtual std::string name();
 
-    /** Define this function if resource, has a port to connect to an outside
-     *  simulation object.
-     */
-    virtual Port* getPort(const std::string &if_name, int idx) 
-    { return NULL; }
-
     /** Return ID for this resource */
     int getId() { return id; }
 
@@ -269,7 +263,7 @@ class ResourceEvent : public Event
     /// (for InOrderCPU model).
     /// check src/sim/eventq.hh for more event priorities.
     enum InOrderPriority {
-        Resource_Event_Pri = 45,
+        Resource_Event_Pri = 45
     };
 
     /** The Resource Slot that this event is servicing */

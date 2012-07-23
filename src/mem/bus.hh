@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -40,11 +40,12 @@
  * Authors: Ron Dreslinski
  *          Ali Saidi
  *          Andreas Hansson
+ *          William Wang
  */
 
 /**
  * @file
- * Declaration of a bus object.
+ * Declaration of an abstract bus base class.
  */
 
 #ifndef __MEM_BUS_HH__
@@ -52,160 +53,212 @@
 
 #include <list>
 #include <set>
-#include <string>
 
-#include "base/hashmap.hh"
 #include "base/range.hh"
 #include "base/range_map.hh"
 #include "base/types.hh"
 #include "mem/mem_object.hh"
-#include "mem/packet.hh"
-#include "mem/port.hh"
-#include "mem/request.hh"
-#include "params/Bus.hh"
-#include "sim/eventq.hh"
+#include "params/BaseBus.hh"
 
-class Bus : public MemObject
+/**
+ * The base bus contains the common elements of the non-coherent and
+ * coherent bus. It is an abstract class that does not have any of the
+ * functionality relating to the actual reception and transmission of
+ * packets, as this is left for the subclasses.
+ *
+ * The BaseBus is responsible for the basic flow control (busy or
+ * not), the administration of retries, and the address decoding.
+ */
+class BaseBus : public MemObject
 {
-    /** Declaration of the buses port type, one will be instantiated for each
-        of the interfaces connecting to the bus. */
-    class BusPort : public Port
+
+  protected:
+
+    /**
+     * A bus layer is an internal bus structure with its own flow
+     * control and arbitration. Hence, a single-layer bus mimics a
+     * traditional off-chip tri-state bus (like PCI), where only one
+     * set of wires are shared. For on-chip buses, a good starting
+     * point is to have three layers, for requests, responses, and
+     * snoop responses respectively (snoop requests are instantaneous
+     * and do not need any flow control or arbitration). This case is
+     * similar to AHB and some OCP configurations.
+     *
+     * As a further extensions beyond the three-layer bus, a future
+     * multi-layer bus has with one layer per connected slave port
+     * provides a full or partial crossbar, like AXI, OCP, PCIe etc.
+     *
+     * The template parameter, PortClass, indicates the destination
+     * port type for the bus. The retry list holds either master ports
+     * or slave ports, depending on the direction of the layer. Thus,
+     * a request layer has a retry list containing slave ports,
+     * whereas a response layer holds master ports.
+     */
+    template <typename PortClass>
+    class Layer
     {
-        bool _onRetryList;
-
-        /** A pointer to the bus to which this port belongs. */
-        Bus *bus;
-
-        /** A id to keep track of the intercafe ID this port is connected to. */
-        int id;
 
       public:
-
-        /** Constructor for the BusPort.*/
-        BusPort(const std::string &_name, Bus *_bus, int _id)
-            : Port(_name, _bus), _onRetryList(false), bus(_bus), id(_id)
-        { }
-
-        bool onRetryList()
-        { return _onRetryList; }
-
-        void onRetryList(bool newVal)
-        { _onRetryList = newVal; }
-
-        int getId() const { return id; }
 
         /**
-         * Determine if this port should be considered a snooper. This
-         * is determined by the bus.
+         * Create a bus layer and give it a name. The bus layer uses
+         * the bus an event manager.
          *
-         * @return a boolean that is true if this port is snooping
+         * @param _bus the bus this layer belongs to
+         * @param _name the layer's name
+         * @param _clock clock period in ticks
          */
-        virtual bool isSnooping()
-        { return bus->isSnooping(id); }
+        Layer(BaseBus& _bus, const std::string& _name, Tick _clock);
 
-      protected:
+        /**
+         * Drain according to the normal semantics, so that the bus
+         * can tell the layer to drain, and pass an event to signal
+         * back when drained.
+         *
+         * @param de drain event to call once drained
+         *
+         * @return 1 if busy or waiting to retry, or 0 if idle
+         */
+        unsigned int drain(Event *de);
 
-        /** When reciving a timing request from the peer port (at id),
-            pass it to the bus. */
-        virtual bool recvTiming(PacketPtr pkt)
-        { pkt->setSrc(id); return bus->recvTiming(pkt); }
+        /**
+         * Get the bus layer's name
+         */
+        const std::string name() const { return bus.name() + _name; }
 
-        /** When reciving a Atomic requestfrom the peer port (at id),
-            pass it to the bus. */
-        virtual Tick recvAtomic(PacketPtr pkt)
-        { pkt->setSrc(id); return bus->recvAtomic(pkt); }
 
-        /** When reciving a Functional requestfrom the peer port (at id),
-            pass it to the bus. */
-        virtual void recvFunctional(PacketPtr pkt)
-        { pkt->setSrc(id); bus->recvFunctional(pkt); }
+        /**
+         * Determine if the bus layer accepts a packet from a specific
+         * port. If not, the port in question is also added to the
+         * retry list. In either case the state of the layer is updated
+         * accordingly.
+         *
+         * @param port Source port resenting the packet
+         *
+         * @return True if the bus layer accepts the packet
+         */
+        bool tryTiming(PortClass* port);
 
-        /** When reciving a range change from the peer port (at id),
-            pass it to the bus. */
-        virtual void recvRangeChange()
-        { bus->recvRangeChange(id); }
+        /**
+         * Deal with a destination port accepting a packet by potentially
+         * removing the source port from the retry list (if retrying) and
+         * occupying the bus layer accordingly.
+         *
+         * @param busy_time Time to spend as a result of a successful send
+         */
+        void succeededTiming(Tick busy_time);
 
-        /** When reciving a retry from the peer port (at id),
-            pass it to the bus. */
-        virtual void recvRetry()
-        { bus->recvRetry(id); }
+        /**
+         * Deal with a destination port not accepting a packet by
+         * potentially adding the source port to the retry list (if
+         * not already at the front) and occupying the bus layer
+         * accordingly.
+         *
+         * @param busy_time Time to spend as a result of a failed send
+         */
+        void failedTiming(PortClass* port, Tick busy_time);
 
-        // This should return all the 'owned' addresses that are
-        // downstream from this bus, yes?  That is, the union of all
-        // the 'owned' address ranges of all the other interfaces on
-        // this bus...
-        virtual AddrRangeList getAddrRanges()
-        { return bus->getAddrRanges(id); }
+        /** Occupy the bus layer until until */
+        void occupyLayer(Tick until);
 
-        // Ask the bus to ask everyone on the bus what their block size is and
-        // take the max of it. This might need to be changed a bit if we ever
-        // support multiple block sizes.
-        virtual unsigned deviceBlockSize() const
-        { return bus->findBlockSize(id); }
+        /**
+         * Send a retry to the port at the head of the retryList. The
+         * caller must ensure that the list is not empty.
+         */
+        void retryWaiting();
+
+        /**
+         * Handler a retry from a neighbouring module. Eventually this
+         * should be all encapsulated in the bus. This wraps
+         * retryWaiting by verifying that there are ports waiting
+         * before calling retryWaiting.
+         */
+        void recvRetry();
+
+      private:
+
+        /** The bus this layer is a part of. */
+        BaseBus& bus;
+
+        /** A name for this layer. */
+        std::string _name;
+
+        /**
+         * We declare an enum to track the state of the bus layer. The
+         * starting point is an idle state where the bus layer is
+         * waiting for a packet to arrive. Upon arrival, the bus layer
+         * transitions to the busy state, where it remains either
+         * until the packet transfer is done, or the header time is
+         * spent. Once the bus layer leaves the busy state, it can
+         * either go back to idle, if no packets have arrived while it
+         * was busy, or the bus layer goes on to retry the first port
+         * on the retryList. A similar transition takes place from
+         * idle to retry if the bus layer receives a retry from one of
+         * its connected ports. The retry state lasts until the port
+         * in questions calls sendTiming and returns control to the
+         * bus layer, or goes to a busy state if the port does not
+         * immediately react to the retry by calling sendTiming.
+         */
+        enum State { IDLE, BUSY, RETRY };
+
+        /** track the state of the bus layer */
+        State state;
+
+        /** the clock speed for the bus layer */
+        Tick clock;
+
+        /** event for signalling when drained */
+        Event * drainEvent;
+
+        /**
+         * An array of ports that retry should be called
+         * on because the original send failed for whatever reason.
+         */
+        std::list<PortClass*> retryList;
+
+        /**
+         * Release the bus layer after being occupied and return to an
+         * idle state where we proceed to send a retry to any
+         * potential waiting port, or drain if asked to do so.
+         */
+        void releaseLayer();
+
+        /** event used to schedule a release of the layer */
+        EventWrapper<Layer, &Layer::releaseLayer> releaseEvent;
 
     };
 
-    class BusFreeEvent : public Event
-    {
-        Bus * bus;
-
-      public:
-        BusFreeEvent(Bus * _bus);
-        void process();
-        const char *description() const;
-    };
-
-    /** a globally unique id for this bus. */
-    int busId;
     /** the clock speed for the bus */
-    int clock;
+    Tick clock;
     /** cycles of overhead per transaction */
     int headerCycles;
     /** the width of the bus in bytes */
     int width;
-    /** the next tick at which the bus will be idle */
-    Tick tickNextIdle;
 
-    Event * drainEvent;
-
-    typedef range_map<Addr,int>::iterator PortIter;
-    range_map<Addr, int> portMap;
+    typedef range_map<Addr, PortID>::iterator PortMapIter;
+    typedef range_map<Addr, PortID>::const_iterator PortMapConstIter;
+    range_map<Addr, PortID> portMap;
 
     AddrRangeList defaultRange;
 
-    typedef std::vector<BusPort*>::iterator SnoopIter;
-    std::vector<BusPort*> snoopPorts;
-
-    /** Function called by the port when the bus is recieving a Timing
-      transaction.*/
-    bool recvTiming(PacketPtr pkt);
-
-    /** Function called by the port when the bus is recieving a Atomic
-      transaction.*/
-    Tick recvAtomic(PacketPtr pkt);
-
-    /** Function called by the port when the bus is recieving a Functional
-        transaction.*/
-    void recvFunctional(PacketPtr pkt);
-
-    /** Timing function called by port when it is once again able to process
-     * requests. */
-    void recvRetry(int id);
-
-    /** Function called by the port when the bus is recieving a range change.*/
-    void recvRangeChange(int id);
+    /**
+     * Function called by the port when the bus is recieving a range change.
+     *
+     * @param master_port_id id of the port that received the change
+     */
+    void recvRangeChange(PortID master_port_id);
 
     /** Find which port connected to this bus (if any) should be given a packet
      * with this address.
      * @param addr Address to find port for.
      * @return id of port that the packet should be sent out of.
      */
-    int findPort(Addr addr);
+    PortID findPort(Addr addr);
 
     // Cache for the findPort function storing recently used ports from portMap
     struct PortCache {
         bool valid;
-        int  id;
+        PortID id;
         Addr start;
         Addr end;
     };
@@ -214,7 +267,7 @@ class Bus : public MemObject
 
     // Checks the cache and returns the id of the port that has the requested
     // address within its range
-    inline int checkPortCache(Addr addr) {
+    inline PortID checkPortCache(Addr addr) {
         if (portCache[0].valid && addr >= portCache[0].start &&
             addr < portCache[0].end) {
             return portCache[0].id;
@@ -228,7 +281,7 @@ class Bus : public MemObject
             return portCache[2].id;
         }
 
-        return -1;
+        return InvalidPortID;
     }
 
     // Clears the earliest entry of the cache and inserts a new port entry
@@ -257,22 +310,11 @@ class Bus : public MemObject
     }
 
     /**
-     * Return the address ranges this port is responsible for.
-     *
-     * @param id id of the bus port that made the request
+     * Return the address ranges the bus is responsible for.
      *
      * @return a list of non-overlapping address ranges
      */
-    AddrRangeList getAddrRanges(int id);
-
-    /**
-     * Determine if the bus port is snooping or not.
-     *
-     * @param id id of the bus port that made the request
-     *
-     * @return a boolean indicating if this port is snooping or not
-     */
-    bool isSnooping(int id);
+    AddrRangeList getAddrRanges() const;
 
     /** Calculate the timing parameters for the packet.  Updates the
      * firstWordTime and finishTime fields of the packet object.
@@ -281,52 +323,27 @@ class Bus : public MemObject
      */
     Tick calcPacketTiming(PacketPtr pkt);
 
-    /** Occupy the bus until until */
-    void occupyBus(Tick until);
-
-    /** Ask everyone on the bus what their size is
-     * @param id id of the busport that made the request
+    /**
+     * Ask everyone on the bus what their size is
+     *
      * @return the max of all the sizes
      */
-    unsigned findBlockSize(int id);
+    unsigned findBlockSize();
 
-    BusFreeEvent busIdle;
+    std::set<PortID> inRecvRangeChange;
 
-    bool inRetry;
-    std::set<int> inRecvRangeChange;
+    /** The master and slave ports of the bus */
+    std::vector<SlavePort*> slavePorts;
+    std::vector<MasterPort*> masterPorts;
 
-    /** An ordered vector of pointers to the peer port interfaces
-        connected to this bus.*/
-    std::vector<BusPort*> interfaces;
-
-    /** An array of pointers to ports that retry should be called on because the
-     * original send failed for whatever reason.*/
-    std::list<BusPort*> retryList;
-
-    void addToRetryList(BusPort * port)
-    {
-        if (!inRetry) {
-            // The device wasn't retrying a packet, or wasn't at an appropriate
-            // time.
-            assert(!port->onRetryList());
-            port->onRetryList(true);
-            retryList.push_back(port);
-        } else {
-            if (port->onRetryList()) {
-                // The device was retrying a packet. It didn't work, so we'll leave
-                // it at the head of the retry list.
-                assert(port == retryList.front());
-                inRetry = false;
-            }
-            else {
-                port->onRetryList(true);
-                retryList.push_back(port);
-            }
-        }
-    }
+    /** Convenience typedefs. */
+    typedef std::vector<SlavePort*>::iterator SlavePortIter;
+    typedef std::vector<MasterPort*>::iterator MasterPortIter;
+    typedef std::vector<SlavePort*>::const_iterator SlavePortConstIter;
+    typedef std::vector<MasterPort*>::const_iterator MasterPortConstIter;
 
     /** Port that handles requests that don't match any of the interfaces.*/
-    short defaultPortId;
+    PortID defaultPortID;
 
     /** If true, use address range provided by default device.  Any
        address not handled by another port and not in default device's
@@ -338,17 +355,18 @@ class Bus : public MemObject
     unsigned cachedBlockSize;
     bool cachedBlockSizeValid;
 
+    BaseBus(const BaseBusParams *p);
+
+    virtual ~BaseBus();
+
   public:
 
     /** A function used to return the port associated with this bus object. */
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+    virtual MasterPort& getMasterPort(const std::string& if_name, int idx = -1);
+    virtual SlavePort& getSlavePort(const std::string& if_name, int idx = -1);
 
-    virtual void init();
-    virtual void startup();
+    virtual unsigned int drain(Event *de) = 0;
 
-    unsigned int drain(Event *de);
-
-    Bus(const BusParams *p);
 };
 
 #endif //__MEM_BUS_HH__

@@ -35,6 +35,9 @@ from m5.util import addToPath
 import os, optparse, sys
 addToPath('../common')
 addToPath('../ruby')
+addToPath('../topologies')
+
+import Options
 import Ruby
 
 # Get paths we might need.  It's expected this file is in m5/configs/example.
@@ -43,6 +46,7 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
 parser.add_option("--synthetic", type="int", default=0,
                   help="Synthetic Traffic type. 0 = Uniform Random,\
@@ -100,7 +104,7 @@ cpus = [ NetworkTest(fixed_pkts=options.fixed_pkts,
 
 # create the desired simulated system
 system = System(cpu = cpus,
-                physmem = PhysicalMemory())
+                physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
@@ -109,7 +113,7 @@ for ruby_port in system.ruby._cpu_ruby_ports:
      #
      # Tie the cpu test ports to the ruby cpu port
      #
-     cpus[i].test = ruby_port.port
+     cpus[i].test = ruby_port.slave
      ruby_port.access_phys_mem = False
 
      i += 1

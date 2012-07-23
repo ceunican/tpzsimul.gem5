@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2008 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -65,7 +77,9 @@ CopyEngine::CopyEngine(const Params *p)
 
 
 CopyEngine::CopyEngineChannel::CopyEngineChannel(CopyEngine *_ce, int cid)
-    : ce(_ce), channelId(cid), busy(false), underReset(false),
+    : cePort(_ce, _ce->sys, _ce->params()->min_backoff_delay,
+             _ce->params()->max_backoff_delay),
+      ce(_ce), channelId(cid), busy(false), underReset(false),
     refreshNext(false), latBeforeBegin(ce->params()->latBeforeBegin),
     latAfterCompletion(ce->params()->latAfterCompletion),
     completionDataReg(0), nextState(Idle), drainEvent(NULL),
@@ -94,27 +108,28 @@ CopyEngine::CopyEngineChannel::~CopyEngineChannel()
 {
     delete curDmaDesc;
     delete [] copyBuffer;
-    delete cePort;
 }
 
-void
-CopyEngine::init()
+MasterPort &
+CopyEngine::getMasterPort(const std::string &if_name, int idx)
 {
-    PciDev::init();
-    for (int x = 0; x < chan.size(); x++)
-        chan[x]->init();
+    if (if_name != "dma") {
+        // pass it along to our super class
+        return PciDev::getMasterPort(if_name, idx);
+    } else {
+        if (idx >= static_cast<int>(chan.size())) {
+            panic("CopyEngine::getMasterPort: unknown index %d\n", idx);
+        }
+
+        return chan[idx]->getMasterPort();
+    }
 }
 
-void
-CopyEngine::CopyEngineChannel::init()
-{
-    Port *peer;
 
-    cePort = new DmaPort(ce, ce->sys, ce->params()->min_backoff_delay,
-            ce->params()->max_backoff_delay);
-    peer = ce->dmaPort->getPeer()->getOwner()->getPort("");
-    peer->setPeer(cePort);
-    cePort->setPeer(peer);
+MasterPort &
+CopyEngine::CopyEngineChannel::getMasterPort()
+{
+    return cePort;
 }
 
 void
@@ -439,9 +454,9 @@ CopyEngine::CopyEngineChannel::fetchDescriptor(Addr address)
     DPRINTF(DMACopyEngine, "dmaAction: %#x, %d bytes, to addr %#x\n",
             ce->platform->pciToDma(address), sizeof(DmaDesc), curDmaDesc);
 
-    cePort->dmaAction(MemCmd::ReadReq, ce->platform->pciToDma(address),
-            sizeof(DmaDesc), &fetchCompleteEvent, (uint8_t*)curDmaDesc,
-            latBeforeBegin);
+    cePort.dmaAction(MemCmd::ReadReq, ce->platform->pciToDma(address),
+                     sizeof(DmaDesc), &fetchCompleteEvent,
+                     (uint8_t*)curDmaDesc, latBeforeBegin);
     lastDescriptorAddr = address;
 }
 
@@ -483,8 +498,8 @@ CopyEngine::CopyEngineChannel::readCopyBytes()
     DPRINTF(DMACopyEngine, "Reading %d bytes from buffer to memory location %#x(%#x)\n",
            curDmaDesc->len, curDmaDesc->dest,
            ce->platform->pciToDma(curDmaDesc->src));
-    cePort->dmaAction(MemCmd::ReadReq, ce->platform->pciToDma(curDmaDesc->src),
-            curDmaDesc->len, &readCompleteEvent, copyBuffer, 0);
+    cePort.dmaAction(MemCmd::ReadReq, ce->platform->pciToDma(curDmaDesc->src),
+                     curDmaDesc->len, &readCompleteEvent, copyBuffer, 0);
 }
 
 void
@@ -505,8 +520,8 @@ CopyEngine::CopyEngineChannel::writeCopyBytes()
            curDmaDesc->len, curDmaDesc->dest,
            ce->platform->pciToDma(curDmaDesc->dest));
 
-    cePort->dmaAction(MemCmd::WriteReq, ce->platform->pciToDma(curDmaDesc->dest),
-            curDmaDesc->len, &writeCompleteEvent, copyBuffer, 0);
+    cePort.dmaAction(MemCmd::WriteReq, ce->platform->pciToDma(curDmaDesc->dest),
+                     curDmaDesc->len, &writeCompleteEvent, copyBuffer, 0);
 
     ce->bytesCopied[channelId] += curDmaDesc->len;
     ce->copiesProcessed[channelId]++;
@@ -574,9 +589,10 @@ CopyEngine::CopyEngineChannel::writeCompletionStatus()
             completionDataReg, cr.completionAddr,
             ce->platform->pciToDma(cr.completionAddr));
 
-    cePort->dmaAction(MemCmd::WriteReq, ce->platform->pciToDma(cr.completionAddr),
-            sizeof(completionDataReg), &statusCompleteEvent,
-            (uint8_t*)&completionDataReg, latAfterCompletion);
+    cePort.dmaAction(MemCmd::WriteReq,
+                     ce->platform->pciToDma(cr.completionAddr),
+                     sizeof(completionDataReg), &statusCompleteEvent,
+                     (uint8_t*)&completionDataReg, latAfterCompletion);
 }
 
 void
@@ -592,9 +608,10 @@ CopyEngine::CopyEngineChannel::fetchNextAddr(Addr address)
     anBegin("FetchNextAddr");
     DPRINTF(DMACopyEngine, "Fetching next address...\n");
     busy = true;
-    cePort->dmaAction(MemCmd::ReadReq, ce->platform->pciToDma(address +
-                offsetof(DmaDesc, next)), sizeof(Addr), &addrCompleteEvent,
-            (uint8_t*)curDmaDesc + offsetof(DmaDesc, next), 0);
+    cePort.dmaAction(MemCmd::ReadReq,
+                     ce->platform->pciToDma(address + offsetof(DmaDesc, next)),
+                     sizeof(Addr), &addrCompleteEvent,
+                     (uint8_t*)curDmaDesc + offsetof(DmaDesc, next), 0);
 }
 
 void
@@ -636,7 +653,7 @@ CopyEngine::CopyEngineChannel::drain(Event *de)
     if (nextState == Idle || ce->getState() != SimObject::Running)
         return 0;
     unsigned int count = 1;
-    count += cePort->drain(de);
+    count += cePort.drain(de);
 
     DPRINTF(DMACopyEngine, "unable to drain, returning %d\n", count);
     drainEvent = de;
@@ -647,7 +664,7 @@ unsigned int
 CopyEngine::drain(Event *de)
 {
     unsigned int count;
-    count = pioPort->drain(de) + dmaPort->drain(de) + configPort->drain(de);
+    count = pioPort.drain(de) + dmaPort.drain(de) + configPort.drain(de);
     for (int x = 0;x < chan.size(); x++)
         count += chan[x]->drain(de);
 

@@ -51,7 +51,7 @@
 
 namespace X86ISA
 {
-    //This really determines how many bytes are passed to the predecoder.
+    //This really determines how many bytes are passed to the decoder.
     typedef uint64_t MachInst;
 
     enum Prefixes {
@@ -127,7 +127,7 @@ namespace X86ISA
         RealMode
     };
 
-    //The intermediate structure the x86 predecoder returns.
+    //The intermediate structure used by the x86 decoder.
     struct ExtMachInst
     {
         //Prefixes
@@ -278,9 +278,9 @@ namespace X86ISA
         }
     };
 
-};
+}
 
-namespace __hash_namespace {
+__hash_namespace_begin
     template<>
     struct hash<X86ISA::ExtMachInst> {
         size_t operator()(const X86ISA::ExtMachInst &emi) const {
@@ -298,7 +298,7 @@ namespace __hash_namespace {
                     emi.stackSize ^ emi.dispSize;
         };
     };
-}
+__hash_namespace_end
 
 // These two functions allow ExtMachInst to be used with SERIALIZE_SCALAR
 // and UNSERIALIZE_SCALAR.

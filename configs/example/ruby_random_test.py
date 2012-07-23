@@ -35,7 +35,9 @@ from m5.util import addToPath
 import os, optparse, sys
 addToPath('../common')
 addToPath('../ruby')
+addToPath('../topologies')
 
+import Options
 import Ruby
 
 # Get paths we might need.  It's expected this file is in m5/configs/example.
@@ -44,6 +46,7 @@ config_root = os.path.dirname(config_path)
 m5_root = os.path.dirname(config_root)
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
 parser.add_option("-l", "--checks", metavar="N", default=100,
                   help="Stop after N checks (loads)")
@@ -90,15 +93,17 @@ tester = RubyTester(check_flush = check_flush,
                     wakeup_frequency = options.wakeup_freq)
 
 #
-# Create the M5 system.  Note that the PhysicalMemory Object isn't
+# Create the M5 system.  Note that the Memory Object isn't
 # actually used by the rubytester, but is included to support the
 # M5 memory size == Ruby memory size checks
 #
-system = System(tester = tester, physmem = PhysicalMemory())
+system = System(tester = tester, physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
 assert(options.num_cpus == len(system.ruby._cpu_ruby_ports))
+
+tester.num_cpus = len(system.ruby._cpu_ruby_ports)
 
 #
 # The tester is most effective when randomization is turned on and
@@ -108,9 +113,12 @@ system.ruby.randomization = True
 
 for ruby_port in system.ruby._cpu_ruby_ports:
     #
-    # Tie the ruby tester ports to the ruby cpu ports
+    # Tie the ruby tester ports to the ruby cpu read and write ports
     #
-    tester.cpuPort = ruby_port.port
+    if ruby_port.support_data_reqs:
+         tester.cpuDataPort = ruby_port.slave
+    if ruby_port.support_inst_reqs:
+         tester.cpuInstPort = ruby_port.slave
 
     #
     # Tell each sequencer this is the ruby tester so that it

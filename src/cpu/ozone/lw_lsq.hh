@@ -36,9 +36,7 @@
 #include <map>
 #include <queue>
 
-#include "arch/faults.hh"
 #include "arch/types.hh"
-#include "base/fast_alloc.hh"
 #include "base/hashmap.hh"
 #include "config/the_isa.hh"
 #include "cpu/inst_seq.hh"
@@ -46,6 +44,7 @@
 #include "mem/port.hh"
 //#include "mem/page_table.hh"
 #include "sim/debug.hh"
+#include "sim/fault_fwd.hh"
 #include "sim/sim_object.hh"
 
 class MemObject;
@@ -240,7 +239,7 @@ class OzoneLWLSQ {
     /** Pointer to the back-end stage. */
     BackEnd *be;
 
-    class DcachePort : public Port
+    class DcachePort : public MasterPort
     {
       protected:
         OzoneLWLSQ *lsq;
@@ -255,13 +254,10 @@ class OzoneLWLSQ {
 
         virtual void recvFunctional(PacketPtr pkt);
 
-        virtual void recvRangeChange();
-
         /**
          * Is a snooper due to LSQ maintenance
          */
-        virtual bool isSnooping()
-        { return true; }
+        virtual bool isSnooping() const { return true; }
 
         virtual bool recvTiming(PacketPtr pkt);
 
@@ -304,7 +300,7 @@ class OzoneLWLSQ {
     };
 
     /** Derived class to hold any sender state the LSQ needs. */
-    class LSQSenderState : public Packet::SenderState, public FastAlloc
+    class LSQSenderState : public Packet::SenderState
     {
       public:
         /** Default constructor. */
@@ -574,7 +570,7 @@ OzoneLWLSQ<Impl>::read(RequestPtr req, T &data, int load_idx)
                     (*sq_it).inst->seqNum, inst->seqNum, req->getVaddr(),
                     *(inst->memData));
 
-            PacketPtr data_pkt = new Packet(req, Packet::ReadReq, Packet::Broadcast);
+            PacketPtr data_pkt = new Packet(req, Packet::ReadReq);
             data_pkt->dataStatic(inst->memData);
 
             WritebackEvent *wb = new WritebackEvent(inst, data_pkt, this);
@@ -638,8 +634,7 @@ OzoneLWLSQ<Impl>::read(RequestPtr req, T &data, int load_idx)
     PacketPtr data_pkt =
         new Packet(req,
                    (req->isLLSC() ?
-                    MemCmd::LoadLockedReq : Packet::ReadReq),
-                   Packet::Broadcast);
+                    MemCmd::LoadLockedReq : Packet::ReadReq));
     data_pkt->dataStatic(inst->memData);
 
     LSQSenderState *state = new LSQSenderState;

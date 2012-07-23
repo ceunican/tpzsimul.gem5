@@ -39,7 +39,7 @@
 
 #include <cstring>
 
-#include "dev/io_device.hh"
+#include "dev/dma_device.hh"
 #include "dev/pcireg.h"
 #include "dev/platform.hh"
 #include "params/PciDevice.hh"
@@ -65,7 +65,7 @@ class PciDev : public DmaDevice
 
         virtual Tick recvAtomic(PacketPtr pkt);
 
-        virtual AddrRangeList getAddrRanges();
+        virtual AddrRangeList getAddrRanges() const;
 
         Platform *platform;
 
@@ -151,7 +151,7 @@ class PciDev : public DmaDevice
     Platform *platform;
     Tick pioDelay;
     Tick configDelay;
-    PciConfigPort *configPort;
+    PciConfigPort configPort;
 
     /**
      * Write to the PCI config space data that is stored locally. This may be
@@ -191,7 +191,7 @@ class PciDev : public DmaDevice
      *
      * @return a list of non-overlapping address ranges
      */
-    AddrRangeList getAddrRanges();
+    AddrRangeList getAddrRanges() const;
 
     /**
      * Constructor for PCI Dev. This function copies data from the
@@ -218,17 +218,12 @@ class PciDev : public DmaDevice
 
     virtual unsigned int drain(Event *de);
 
-    virtual Port *getPort(const std::string &if_name, int idx = -1)
+    virtual SlavePort &getSlavePort(const std::string &if_name, int idx = -1)
     {
         if (if_name == "config") {
-            if (configPort != NULL)
-                panic("pciconfig port already connected to.");
-            configPort = new PciConfigPort(this, params()->pci_bus,
-                    params()->pci_dev, params()->pci_func,
-                    params()->platform);
             return configPort;
         }
-        return DmaDevice::getPort(if_name, idx);
+        return DmaDevice::getSlavePort(if_name, idx);
     }
 
 };

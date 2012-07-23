@@ -42,7 +42,6 @@
 #include <iosfwd>
 #include <string>
 
-#include "base/fast_alloc.hh"
 #include "base/flags.hh"
 #include "base/misc.hh"
 #include "base/trace.hh"
@@ -61,12 +60,12 @@ extern EventQueue mainEventQueue;
  *
  * Caution, the order of members is chosen to maximize data packing.
  */
-class Event : public Serializable, public FastAlloc
+class Event : public Serializable
 {
     friend class EventQueue;
 
   protected:   
-    typedef short FlagsType;
+    typedef unsigned short FlagsType;
     typedef ::Flags<FlagsType> Flags;
 
     static const FlagsType PublicRead    = 0x003f; // public readable flags
@@ -432,17 +431,12 @@ class EventManager
     EventQueue *eventq;
 
   public:
-    EventManager(EventManager &em) : eventq(em.queue()) {}
-    EventManager(EventManager *em) : eventq(em ? em->queue() : NULL) {}
+    EventManager(EventManager &em) : eventq(em.eventq) {}
+    EventManager(EventManager *em) : eventq(em ? em->eventq : NULL) {}
     EventManager(EventQueue *eq) : eventq(eq) {}
 
     EventQueue *
-    queue() const
-    {
-        return eventq;
-    }
-
-    operator EventQueue *() const
+    eventQueue() const
     {
         return eventq;
     }
@@ -516,11 +510,11 @@ EventQueue::deschedule(Event *event)
     event->flags.clear(Event::Squashed);
     event->flags.clear(Event::Scheduled);
 
-    if (event->flags.isSet(Event::AutoDelete))
-        delete event;
-
     if (DTRACE(Event))
         event->trace("descheduled");
+
+    if (event->flags.isSet(Event::AutoDelete))
+        delete event;
 }
 
 inline void

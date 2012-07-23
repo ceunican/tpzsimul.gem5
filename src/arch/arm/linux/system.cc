@@ -58,64 +58,6 @@ using namespace Linux;
 LinuxArmSystem::LinuxArmSystem(Params *p)
     : ArmSystem(p)
 {
-}
-
-bool
-LinuxArmSystem::adderBootUncacheable(Addr a)
-{
-    Addr block = a & ~ULL(0x7F);
-    if (block == secDataPtrAddr || block == secDataAddr ||
-            block == penReleaseAddr)
-        return true;
-    return false;
-}
-
-void
-LinuxArmSystem::initState()
-{
-    // Moved from the constructor to here since it relies on the
-    // address map being resolved in the interconnect
-
-    // Call the initialisation of the super class
-    ArmSystem::initState();
-
-    // Load symbols at physical address, we might not want
-    // to do this perminately, for but early bootup work
-    // it is helpfulp.
-    kernel->loadGlobalSymbols(kernelSymtab, loadAddrMask);
-    kernel->loadGlobalSymbols(debugSymbolTable, loadAddrMask);
-
-    // Setup boot data structure
-    AtagCore *ac = new AtagCore;
-    ac->flags(1); // read-only
-    ac->pagesize(8192);
-    ac->rootdev(0);
-
-    AtagMem *am = new AtagMem;
-    am->memSize(params()->physmem->size());
-    am->memStart(params()->physmem->start());
-
-    AtagCmdline *ad = new AtagCmdline;
-    ad->cmdline(params()->boot_osflags);
-
-    DPRINTF(Loader, "boot command line %d bytes: %s\n", ad->size() <<2, params()->boot_osflags.c_str());
-
-    AtagNone *an = new AtagNone;
-
-    uint32_t size = ac->size() + am->size() + ad->size() + an->size();
-    uint32_t offset = 0;
-    uint8_t *boot_data = new uint8_t[size << 2];
-
-    offset += ac->copyOut(boot_data + offset);
-    offset += am->copyOut(boot_data + offset);
-    offset += ad->copyOut(boot_data + offset);
-    offset += an->copyOut(boot_data + offset);
-
-    DPRINTF(Loader, "Boot atags was %d bytes in total\n", size << 2);
-    DDUMP(Loader, boot_data, size << 2);
-
-    physProxy->writeBlob(ParamsList, boot_data, size << 2);
-
 #ifndef NDEBUG
     kernelPanicEvent = addKernelFuncEvent<BreakPCEvent>("panic");
     if (!kernelPanicEvent)
@@ -150,11 +92,75 @@ LinuxArmSystem::initState()
     secDataPtrAddr &= ~ULL(0x7F);
     secDataAddr &= ~ULL(0x7F);
     penReleaseAddr &= ~ULL(0x7F);
+}
+
+bool
+LinuxArmSystem::adderBootUncacheable(Addr a)
+{
+    Addr block = a & ~ULL(0x7F);
+    if (block == secDataPtrAddr || block == secDataAddr ||
+            block == penReleaseAddr)
+        return true;
+    return false;
+}
+
+void
+LinuxArmSystem::initState()
+{
+    // Moved from the constructor to here since it relies on the
+    // address map being resolved in the interconnect
+
+    // Call the initialisation of the super class
+    ArmSystem::initState();
+
+    // Load symbols at physical address, we might not want
+    // to do this permanently, for but early bootup work
+    // it is helpful.
+    if (params()->early_kernel_symbols) {
+        kernel->loadGlobalSymbols(kernelSymtab, loadAddrMask);
+        kernel->loadGlobalSymbols(debugSymbolTable, loadAddrMask);
+    }
+
+    // Setup boot data structure
+    AtagCore *ac = new AtagCore;
+    ac->flags(1); // read-only
+    ac->pagesize(8192);
+    ac->rootdev(0);
+
+    AddrRangeList atagRanges = physmem.getConfAddrRanges();
+    if (atagRanges.size() != 1) {
+        fatal("Expected a single ATAG memory entry but got %d\n",
+              atagRanges.size());
+    }
+    AtagMem *am = new AtagMem;
+    am->memSize(atagRanges.begin()->size());
+    am->memStart(atagRanges.begin()->start);
+
+    AtagCmdline *ad = new AtagCmdline;
+    ad->cmdline(params()->boot_osflags);
+
+    DPRINTF(Loader, "boot command line %d bytes: %s\n", ad->size() <<2, params()->boot_osflags.c_str());
+
+    AtagNone *an = new AtagNone;
+
+    uint32_t size = ac->size() + am->size() + ad->size() + an->size();
+    uint32_t offset = 0;
+    uint8_t *boot_data = new uint8_t[size << 2];
+
+    offset += ac->copyOut(boot_data + offset);
+    offset += am->copyOut(boot_data + offset);
+    offset += ad->copyOut(boot_data + offset);
+    offset += an->copyOut(boot_data + offset);
+
+    DPRINTF(Loader, "Boot atags was %d bytes in total\n", size << 2);
+    DDUMP(Loader, boot_data, size << 2);
+
+    physProxy.writeBlob(params()->atags_addr, boot_data, size << 2);
 
     for (int i = 0; i < threadContexts.size(); i++) {
         threadContexts[i]->setIntReg(0, 0);
         threadContexts[i]->setIntReg(1, params()->machine_type);
-        threadContexts[i]->setIntReg(2, ParamsList);
+        threadContexts[i]->setIntReg(2, params()->atags_addr);
     }
 }
 

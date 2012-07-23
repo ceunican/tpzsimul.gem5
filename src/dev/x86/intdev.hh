@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2008 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -51,19 +63,18 @@ typedef std::list<int> ApicList;
 class IntDev
 {
   protected:
-    class IntPort : public MessagePort
+    class IntSlavePort : public MessageSlavePort
     {
         IntDev * device;
         Tick latency;
-        Addr intAddr;
       public:
-        IntPort(const std::string &_name, MemObject * _parent,
-                IntDev *dev, Tick _latency) :
-            MessagePort(_name, _parent), device(dev), latency(_latency)
+        IntSlavePort(const std::string& _name, MemObject* _parent,
+                     IntDev* dev, Tick _latency) :
+            MessageSlavePort(_name, _parent), device(dev), latency(_latency)
         {
         }
 
-        AddrRangeList getAddrRanges()
+        AddrRangeList getAddrRanges() const
         {
             return device->getIntAddrRange();
         }
@@ -71,6 +82,18 @@ class IntDev
         Tick recvMessage(PacketPtr pkt)
         {
             return device->recvMessage(pkt);
+        }
+    };
+
+    class IntMasterPort : public MessageMasterPort
+    {
+        IntDev* device;
+        Tick latency;
+      public:
+        IntMasterPort(const std::string& _name, MemObject* _parent,
+                      IntDev* dev, Tick _latency) :
+            MessageMasterPort(_name, _parent), device(dev), latency(_latency)
+        {
         }
 
         Tick recvResponse(PacketPtr pkt)
@@ -84,17 +107,12 @@ class IntDev
                 TriggerIntMessage message, bool timing);
     };
 
-    IntPort * intPort;
+    IntMasterPort intMasterPort;
 
   public:
-    IntDev(MemObject * parent, Tick latency = 0)
+    IntDev(MemObject * parent, Tick latency = 0) :
+        intMasterPort(parent->name() + ".int_master", parent, this, latency)
     {
-        if (parent != NULL) {
-            intPort = new IntPort(parent->name() + ".int_port",
-                    parent, this, latency);
-        } else {
-            intPort = NULL;
-        }
     }
 
     virtual ~IntDev()
@@ -134,7 +152,7 @@ class IntDev
     }
 
     virtual AddrRangeList
-    getIntAddrRange()
+    getIntAddrRange() const
     {
         panic("intAddrRange not implemented.\n");
     }

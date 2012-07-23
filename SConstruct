@@ -35,12 +35,12 @@
 #
 # SCons top-level build description (SConstruct) file.
 #
-# While in this directory ('m5'), just type 'scons' to build the default
+# While in this directory ('gem5'), just type 'scons' to build the default
 # configuration (see below), or type 'scons build/<CONFIG>/<binary>'
-# to build some other configuration (e.g., 'build/ALPHA_FS/m5.opt' for
+# to build some other configuration (e.g., 'build/ALPHA/gem5.opt' for
 # the optimized full-system version).
 #
-# You can build M5 in a different directory as long as there is a
+# You can build gem5 in a different directory as long as there is a
 # 'build/<CONFIG>' somewhere along the target path.  The build system
 # expects that all configs under the same build directory are being
 # built for the same host system.
@@ -49,19 +49,19 @@
 #
 #   The following two commands are equivalent.  The '-u' option tells
 #   scons to search up the directory tree for this SConstruct file.
-#   % cd <path-to-src>/m5 ; scons build/ALPHA_FS/m5.debug
-#   % cd <path-to-src>/m5/build/ALPHA_FS; scons -u m5.debug
+#   % cd <path-to-src>/gem5 ; scons build/ALPHA/gem5.debug
+#   % cd <path-to-src>/gem5/build/ALPHA; scons -u gem5.debug
 #
 #   The following two commands are equivalent and demonstrate building
 #   in a directory outside of the source tree.  The '-C' option tells
 #   scons to chdir to the specified directory to find this SConstruct
 #   file.
-#   % cd <path-to-src>/m5 ; scons /local/foo/build/ALPHA_FS/m5.debug
-#   % cd /local/foo/build/ALPHA_FS; scons -C <path-to-src>/m5 m5.debug
+#   % cd <path-to-src>/gem5 ; scons /local/foo/build/ALPHA/gem5.debug
+#   % cd /local/foo/build/ALPHA; scons -C <path-to-src>/gem5 gem5.debug
 #
 # You can use 'scons -H' to print scons options.  If you're in this
-# 'm5' directory (or use -u or -C to tell scons where to find this
-# file), you can use 'scons -h' to print all the M5-specific build
+# 'gem5' directory (or use -u or -C to tell scons where to find this
+# file), you can use 'scons -h' to print all the gem5-specific build
 # options as well.
 #
 ###################################################
@@ -77,7 +77,7 @@ try:
 except SystemExit, e:
     print """
 For more details, see:
-    http://m5sim.org/wiki/index.php/Compiling_M5
+    http://gem5.org/Dependencies
 """
     raise
 
@@ -93,7 +93,7 @@ either (1) rearranging your PATH so that scons finds the non-default
 on the scons script.
 
 For more details, see:
-    http://m5sim.org/wiki/index.php/Using_a_non-default_Python_installation
+    http://gem5.org/wiki/index.php/Using_a_non-default_Python_installation
 """
     raise
 
@@ -113,13 +113,14 @@ import SCons
 import SCons.Node
 
 extra_python_paths = [
-    Dir('src/python').srcnode().abspath, # M5 includes
+    Dir('src/python').srcnode().abspath, # gem5 includes
     Dir('ext/ply').srcnode().abspath, # ply is used by several files
     ]
     
 sys.path[1:1] = extra_python_paths
 
 from m5.util import compareVersions, readCommand
+from m5.util.terminal import get_termcap
 
 help_texts = {
     "options" : "",
@@ -129,7 +130,19 @@ help_texts = {
 
 Export("help_texts")
 
-def AddM5Option(*args, **kwargs):
+
+# There's a bug in scons in that (1) by default, the help texts from
+# AddOption() are supposed to be displayed when you type 'scons -h'
+# and (2) you can override the help displayed by 'scons -h' using the
+# Help() function, but these two features are incompatible: once
+# you've overridden the help text using Help(), there's no way to get
+# at the help texts from AddOptions.  See:
+#     http://scons.tigris.org/issues/show_bug.cgi?id=2356
+#     http://scons.tigris.org/issues/show_bug.cgi?id=2611
+# This hack lets us extract the help text from AddOptions and
+# re-inject it via Help().  Ideally someday this bug will be fixed and
+# we can just use AddOption directly.
+def AddLocalOption(*args, **kwargs):
     col_width = 30
 
     help = "  " + ", ".join(args)
@@ -144,35 +157,28 @@ def AddM5Option(*args, **kwargs):
 
     AddOption(*args, **kwargs)
 
-AddM5Option('--colors', dest='use_colors', action='store_true',
-            help="Add color to abbreviated scons output")
-AddM5Option('--no-colors', dest='use_colors', action='store_false',
-            help="Don't add color to abbreviated scons output")
-AddM5Option('--default', dest='default', type='string', action='store',
-            help='Override which build_opts file to use for defaults')
-AddM5Option('--ignore-style', dest='ignore_style', action='store_true',
-            help='Disable style checking hooks')
-AddM5Option('--update-ref', dest='update_ref', action='store_true',
-            help='Update test reference outputs')
-AddM5Option('--verbose', dest='verbose', action='store_true',
-            help='Print full tool command lines')
+AddLocalOption('--colors', dest='use_colors', action='store_true',
+               help="Add color to abbreviated scons output")
+AddLocalOption('--no-colors', dest='use_colors', action='store_false',
+               help="Don't add color to abbreviated scons output")
+AddLocalOption('--default', dest='default', type='string', action='store',
+               help='Override which build_opts file to use for defaults')
+AddLocalOption('--ignore-style', dest='ignore_style', action='store_true',
+               help='Disable style checking hooks')
+AddLocalOption('--update-ref', dest='update_ref', action='store_true',
+               help='Update test reference outputs')
+AddLocalOption('--verbose', dest='verbose', action='store_true',
+               help='Print full tool command lines')
 
-use_colors = GetOption('use_colors')
-if use_colors:
-    from m5.util.terminal import termcap
-elif use_colors is None:
-    # option unspecified; default behavior is to use colors iff isatty
-    from m5.util.terminal import tty_termcap as termcap
-else:
-    from m5.util.terminal import no_termcap as termcap
+termcap = get_termcap(GetOption('use_colors'))
 
 ########################################################################
 #
 # Set up the main build environment.
 #
 ########################################################################
-use_vars = set([ 'AS', 'AR', 'CC', 'CXX', 'HOME', 'LD_LIBRARY_PATH', 'PATH',
-                 'PYTHONPATH', 'RANLIB' ])
+use_vars = set([ 'AS', 'AR', 'CC', 'CXX', 'HOME', 'LD_LIBRARY_PATH',
+                 'LIBRARY_PATH', 'PATH', 'PYTHONPATH', 'RANLIB', 'SWIG' ])
 
 use_env = {}
 for key,val in os.environ.iteritems():
@@ -180,6 +186,7 @@ for key,val in os.environ.iteritems():
         use_env[key] = val
 
 main = Environment(ENV=use_env)
+main.Decider('MD5-timestamp')
 main.root = Dir(".")         # The current directory (where this file lives).
 main.srcdir = Dir("src")     # The source directory
 
@@ -191,7 +198,7 @@ main.AppendENVPath('PYTHONPATH', extra_python_paths)
 #
 # Mercurial Stuff.
 #
-# If the M5 directory is a mercurial repository, we should do some
+# If the gem5 directory is a mercurial repository, we should do some
 # extra things.
 #
 ########################################################################
@@ -264,7 +271,7 @@ if not GetOption('ignore_style') and hgdir.exists() and sys.stdin.isatty():
 ###################################################
 
 # Find default configuration & binary.
-Default(environ.get('M5_DEFAULT_BINARY', 'build/ALPHA_SE/m5.debug'))
+Default(environ.get('M5_DEFAULT_BINARY', 'build/ALPHA/gem5.debug'))
 
 # helper function: find last occurrence of element in list
 def rfind(l, elt, offs = -1):
@@ -341,6 +348,7 @@ global_vars = Variables(global_vars_file, args=ARGUMENTS)
 global_vars.AddVariables(
     ('CC', 'C compiler', environ.get('CC', main['CC'])),
     ('CXX', 'C++ compiler', environ.get('CXX', main['CXX'])),
+    ('SWIG', 'SWIG tool', environ.get('SWIG', main['SWIG'])),
     ('BATCH', 'Use batch pool for build and tests', False),
     ('BATCH_CMD', 'Batch pool submission command name', 'qdo'),
     ('M5_BUILD_CACHE', 'Cache built objects in this directory', False),
@@ -449,6 +457,8 @@ class Transform(object):
 
 Export('Transform')
 
+# enable the regression script to use the termcap
+main['TERMCAP'] = termcap
 
 if GetOption('verbose'):
     def MakeAction(action, string, *args, **kwargs):
@@ -473,7 +483,7 @@ CXX_V = readCommand([main['CXX'],'-V'], exception=False)
 main['GCC'] = CXX_version and CXX_version.find('g++') >= 0
 main['SUNCC'] = CXX_V and CXX_V.find('Sun C++') >= 0
 main['ICC'] = CXX_V and CXX_V.find('Intel') >= 0
-main['CLANG'] = CXX_V and CXX_V.find('clang') >= 0
+main['CLANG'] = CXX_version and CXX_version.find('clang') >= 0
 if main['GCC'] + main['SUNCC'] + main['ICC'] + main['CLANG'] > 1:
     print 'Error: How can we have two at the same time?'
     Exit(1)
@@ -483,7 +493,6 @@ if main['GCC']:
     main.Append(CCFLAGS=['-pipe'])
     main.Append(CCFLAGS=['-fno-strict-aliasing'])
     main.Append(CCFLAGS=['-Wall', '-Wno-sign-compare', '-Wundef'])
-    main.Append(CXXFLAGS=['-Wno-deprecated'])
     # Read the GCC version to check for versions with bugs
     # Note CCVERSION doesn't work here because it is run with the CC
     # before we override it from the command line
@@ -493,6 +502,8 @@ if main['GCC']:
        not compareVersions(gcc_version, '4.4.2'):
         print 'Info: Tree vectorizer in GCC 4.4.1 & 4.4.2 is buggy, disabling.'
         main.Append(CCFLAGS=['-fno-tree-vectorize'])
+    if compareVersions(gcc_version, '4.6') >= 0:
+        main.Append(CXXFLAGS=['-std=c++0x'])
 elif main['ICC']:
     pass #Fix me... add warning flags once we clean up icc warnings
 elif main['SUNCC']:
@@ -520,9 +531,29 @@ elif main['CLANG']:
     main.Append(CCFLAGS=['-Wall', '-Wno-sign-compare', '-Wundef'])
     main.Append(CCFLAGS=['-Wno-tautological-compare'])
     main.Append(CCFLAGS=['-Wno-self-assign'])
+    # Ruby makes frequent use of extraneous parantheses in the printing
+    # of if-statements
+    main.Append(CCFLAGS=['-Wno-parentheses'])
+
+    if compareVersions(clang_version, "3") >= 0:
+        main.Append(CXXFLAGS=['-std=c++0x'])
 else:
-    print 'Error: Don\'t know what compiler options to use for your compiler.'
-    print '       Please fix SConstruct and src/SConscript and try again.'
+    print termcap.Yellow + termcap.Bold + 'Error' + termcap.Normal,
+    print "Don't know what compiler options to use for your compiler."
+    print termcap.Yellow + '       compiler:' + termcap.Normal, main['CXX']
+    print termcap.Yellow + '       version:' + termcap.Normal,
+    if not CXX_version:
+        print termcap.Yellow + termcap.Bold + "COMMAND NOT FOUND!" +\
+               termcap.Normal
+    else:
+        print CXX_version.replace('\n', '<nl>')
+    print "       If you're trying to use a compiler other than GCC, ICC, SunCC,"
+    print "       or clang, there appears to be something wrong with your"
+    print "       environment."
+    print "       "
+    print "       If you are trying to use a compiler other than those listed"
+    print "       above you will need to ease fix SConstruct and "
+    print "       src/SConscript to support that compiler."
     Exit(1)
 
 # Set up common yacc/bison flags (needed for Ruby)
@@ -549,14 +580,14 @@ if not main.has_key('SWIG'):
     Exit(1)
 
 # Check for appropriate SWIG version
-swig_version = readCommand(('swig', '-version'), exception='').split()
+swig_version = readCommand([main['SWIG'], '-version'], exception='').split()
 # First 3 words should be "SWIG Version x.y.z"
 if len(swig_version) < 3 or \
         swig_version[0] != 'SWIG' or swig_version[1] != 'Version':
     print 'Error determining SWIG version.'
     Exit(1)
 
-min_swig_version = '1.3.28'
+min_swig_version = '1.3.34'
 if compareVersions(swig_version[2], min_swig_version) < 0:
     print 'Error: SWIG version', min_swig_version, 'or newer required.'
     print '       Installed version:', swig_version[2]
@@ -732,6 +763,15 @@ have_posix_clock = \
     conf.CheckLibWithHeader('rt', 'time.h', 'C',
                             'clock_nanosleep(0,0,NULL,NULL);')
 
+if conf.CheckLib('tcmalloc_minimal'):
+    have_tcmalloc = True
+else:
+    have_tcmalloc = False
+    print termcap.Yellow + termcap.Bold + \
+          "You can get a 12% performance improvement by installing tcmalloc "\
+          "(libgoogle-perftools-dev package on Ubuntu or RedHat)." + \
+          termcap.Normal
+
 if not have_posix_clock:
     print "Can't find library for POSIX clocks."
 
@@ -816,11 +856,6 @@ sticky_vars.AddVariables(
     ListVariable('CPU_MODELS', 'CPU models',
                  sorted(n for n,m in CpuModel.dict.iteritems() if m.default),
                  sorted(CpuModel.list)),
-    BoolVariable('NO_FAST_ALLOC', 'Disable fast object allocator', False),
-    BoolVariable('FORCE_FAST_ALLOC',
-                 'Enable fast object allocator, even for m5.debug', False),
-    BoolVariable('FAST_ALLOC_STATS', 'Enable fast object allocator statistics',
-                 False),
     BoolVariable('EFENCE', 'Link with Electric Fence malloc debugger',
                  False),
     BoolVariable('SS_COMPATIBLE_FP',
@@ -831,13 +866,11 @@ sticky_vars.AddVariables(
                  False),
     BoolVariable('USE_POSIX_CLOCK', 'Use POSIX Clocks', have_posix_clock),
     BoolVariable('USE_FENV', 'Use <fenv.h> IEEE mode control', have_fenv),
-    BoolVariable('USE_CHECKER', 'Use checker for detailed CPU models', False),
     BoolVariable('CP_ANNOTATE', 'Enable critical path annotation capability', False),
     )
 
 # These variables get exported to #defines in config/*.hh (see src/SConscript).
-export_vars += ['USE_FENV', 'NO_FAST_ALLOC', 'FORCE_FAST_ALLOC',
-                'FAST_ALLOC_STATS', 'SS_COMPATIBLE_FP', 'USE_CHECKER',
+export_vars += ['USE_FENV', 'SS_COMPATIBLE_FP',
                 'TARGET_ISA', 'CP_ANNOTATE', 'USE_POSIX_CLOCK' ]
 
 ###################################################
@@ -1004,6 +1037,9 @@ for variant_path in variant_paths:
 
     if env['USE_SSE2']:
         env.Append(CCFLAGS=['-msse2'])
+
+    if have_tcmalloc:
+        env.Append(LIBS=['tcmalloc_minimal'])
 
     # The src/SConscript file sets up the build rules in 'env' according
     # to the configured variables.  It returns a list of environments,

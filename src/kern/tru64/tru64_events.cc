@@ -60,9 +60,10 @@ BadAddrEvent::process(ThreadContext *tc)
     AddrRangeIter iter;
     bool found = false;
 
-    Port* dataPort = tc->getCpuPtr()->getPort("dcache_port");
+    MasterPort &dataPort = tc->getCpuPtr()->getDataPort();
 
-    AddrRangeList resp = dataPort->getPeer()->getAddrRanges();
+    // get the address ranges of the connected slave port
+    AddrRangeList resp = dataPort.getAddrRanges();
     for (iter = resp.begin(); iter != resp.end(); iter++) {
         if (*iter == (K0Seg2Phys(a0) & PAddrImplMask))
             found = true;

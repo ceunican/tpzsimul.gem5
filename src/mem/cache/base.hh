@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2003-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -52,12 +64,13 @@
 #include "mem/cache/mshr_queue.hh"
 #include "mem/mem_object.hh"
 #include "mem/packet.hh"
+#include "mem/qport.hh"
 #include "mem/request.hh"
-#include "mem/tport.hh"
 #include "params/BaseCache.hh"
 #include "sim/eventq.hh"
 #include "sim/full_system.hh"
 #include "sim/sim_exit.hh"
+#include "sim/system.hh"
 
 class MSHR;
 /**
@@ -96,50 +109,107 @@ class BaseCache : public MemObject
 
   protected:
 
-    class CachePort : public SimpleTimingPort
+    /**
+     * A cache master port is used for the memory-side port of the
+     * cache, and in addition to the basic timing port that only sends
+     * response packets through a transmit list, it also offers the
+     * ability to schedule and send request packets (requests &
+     * writebacks). The send event is scheduled through requestBus,
+     * and the sendDeferredPacket of the timing port is modified to
+     * consider both the transmit list and the requests from the MSHR.
+     */
+    class CacheMasterPort : public QueuedMasterPort
     {
+
       public:
-        BaseCache *cache;
+
+        /**
+         * Schedule a send of a request packet (from the MSHR). Note
+         * that we could already have a retry or a transmit list of
+         * responses outstanding.
+         */
+        void requestBus(RequestCause cause, Tick time)
+        {
+            DPRINTF(CachePort, "Asserting bus request for cause %d\n", cause);
+            queue.schedSendEvent(time);
+        }
+
+        /**
+         * Schedule the transmissions of a response packet at a given
+         * point in time.
+         *
+         * @param pkt response packet
+         * @param when time to send the response
+         */
+        void respond(PacketPtr pkt, Tick time) {
+            queue.schedSendTiming(pkt, time, true);
+        }
 
       protected:
-        CachePort(const std::string &_name, BaseCache *_cache,
-                  const std::string &_label);
 
-        virtual unsigned deviceBlockSize() const;
+        CacheMasterPort(const std::string &_name, BaseCache *_cache,
+                        MasterPacketQueue &_queue) :
+            QueuedMasterPort(_name, _cache, _queue)
+        { }
 
-        bool recvRetryCommon();
+        /**
+         * Memory-side port always snoops.
+         *
+         * @return always true
+         */
+        virtual bool isSnooping() const { return true; }
+    };
 
-        typedef EventWrapper<Port, &Port::sendRetry>
-            SendRetryEvent;
-
-        const std::string label;
+    /**
+     * A cache slave port is used for the CPU-side port of the cache,
+     * and it is basically a simple timing port that uses a transmit
+     * list for responses to the CPU (or connected master). In
+     * addition, it has the functionality to block the port for
+     * incoming requests. If blocked, the port will issue a retry once
+     * unblocked.
+     */
+    class CacheSlavePort : public QueuedSlavePort
+    {
 
       public:
+
+        /** Do not accept any new requests. */
         void setBlocked();
 
+        /** Return to normal operation and accept new requests. */
         void clearBlocked();
 
-        bool checkFunctional(PacketPtr pkt);
+        /**
+         * Schedule the transmissions of a response packet at a given
+         * point in time.
+         *
+         * @param pkt response packet
+         * @param when time to send the response
+         */
+        void respond(PacketPtr pkt, Tick time) {
+            queue.schedSendTiming(pkt, time);
+        }
+
+      protected:
+
+        CacheSlavePort(const std::string &_name, BaseCache *_cache,
+                       const std::string &_label);
+
+        /** A normal packet queue used to store responses. */
+        SlavePacketQueue queue;
 
         bool blocked;
 
         bool mustSendRetry;
 
-        void requestBus(RequestCause cause, Tick time)
-        {
-            DPRINTF(CachePort, "Asserting bus request for cause %d\n", cause);
-            if (!waitingOnRetry) {
-                schedSendEvent(time);
-            }
-        }
+      private:
 
-        void respond(PacketPtr pkt, Tick time) {
-            schedSendTiming(pkt, time);
-        }
+        EventWrapper<SlavePort, &SlavePort::sendRetry> sendRetryEvent;
+
     };
 
-    CachePort *cpuSidePort;
-    CachePort *memSidePort;
+    CacheSlavePort *cpuSidePort;
+    CacheMasterPort *memSidePort;
 
   protected:
 
@@ -218,13 +288,12 @@ class BaseCache : public MemObject
     /**
      * The address range to which the cache responds on the CPU side.
      * Normally this is all possible memory addresses. */
-    Range<Addr> addrRange;
-
-    /** number of cpus sharing this cache - from config file */
-    int _numCpus;
+    AddrRangeList addrRanges;
 
   public:
-    int numCpus() { return _numCpus; }
+    /** System we are currently operating in. */
+    System *system;
+
     // Statistics
     /**
      * @addtogroup CacheStatistics
@@ -375,6 +444,9 @@ class BaseCache : public MemObject
 
     virtual void init();
 
+    virtual MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
+    virtual SlavePort &getSlavePort(const std::string &if_name, int idx = -1);
+
     /**
      * Query block size of a cache.
      * @return  The block size
@@ -389,7 +461,7 @@ class BaseCache : public MemObject
     Addr blockAlign(Addr addr) const { return (addr & ~(Addr(blkSize - 1))); }
 
 
-    const Range<Addr> &getAddrRange() const { return addrRange; }
+    const AddrRangeList &getAddrRanges() const { return addrRanges; }
 
     MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool requestBus)
     {
@@ -488,23 +560,10 @@ class BaseCache : public MemObject
 
     virtual bool inMissQueue(Addr addr) = 0;
 
-    void incMissCount(PacketPtr pkt, int id)
+    void incMissCount(PacketPtr pkt)
     {
-
-        if (pkt->cmd == MemCmd::Writeback) {
-            assert(id == -1);
-            misses[pkt->cmdToIndex()][0]++;
-            /* same thing for writeback hits as misses - no context id
-             * available, meanwhile writeback hit/miss stats are not used
-             * in any aggregate hit/miss calculations, so just lump them all
-             * in bucket 0 */
-        } else if (FullSystem && id == -1) {
-            // Device accesses have id -1
-            // lump device accesses into their own bucket
-            misses[pkt->cmdToIndex()][_numCpus]++;
-        } else {
-            misses[pkt->cmdToIndex()][id % _numCpus]++;
-        }
+        assert(pkt->req->masterId() < system->maxMasters());
+        misses[pkt->cmdToIndex()][pkt->req->masterId()]++;
 
         if (missCount) {
             --missCount;
@@ -512,26 +571,11 @@ class BaseCache : public MemObject
                 exitSimLoop("A cache reached the maximum miss count");
         }
     }
-    void incHitCount(PacketPtr pkt, int id)
+    void incHitCount(PacketPtr pkt)
     {
+        assert(pkt->req->masterId() < system->maxMasters());
+        hits[pkt->cmdToIndex()][pkt->req->masterId()]++;
 
-        /* Writeback requests don't have a context id associated with
-         * them, so attributing a hit to a -1 context id is obviously a
-         * problem.  I've noticed in the stats that hits are split into
-         * demand and non-demand hits - neither of which include writeback
-         * hits, so here, I'll just put the writeback hits into bucket 0
-         * since it won't mess with any other stats -hsul */
-        if (pkt->cmd == MemCmd::Writeback) {
-            assert(id == -1);
-            hits[pkt->cmdToIndex()][0]++;
-        } else if (FullSystem && id == -1) {
-            // Device accesses have id -1
-            // lump device accesses into their own bucket
-            hits[pkt->cmdToIndex()][_numCpus]++;
-        } else {
-            /* the % is necessary in case there are switch cpus */
-            hits[pkt->cmdToIndex()][id % _numCpus]++;
-        }
     }
 
 };

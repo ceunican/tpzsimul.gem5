@@ -216,7 +216,7 @@
                         default: Inst::UD2();
                     }
                 }
-                0x05: decode FullSystem {
+                0x05: decode FullSystemInt {
                     0: SyscallInst::syscall('xc->syscall(Rax)',
                             IsSyscall, IsNonSpeculative, IsSerializeAfter);
                     default: decode MODE_MODE {
@@ -398,7 +398,7 @@
                 0x1: Inst::RDTSC();
                 0x2: Inst::RDMSR();
                 0x3: rdpmc();
-                0x4: decode FullSystem {
+                0x4: decode FullSystemInt {
                     0: SyscallInst::sysenter('xc->syscall(Rax)',
                             IsSyscall, IsNonSpeculative, IsSerializeAfter);
                     default: sysenter();
@@ -669,7 +669,7 @@
                     }
                     // repne (0xF2)
                     0x8: decode OPCODE_OP_BOTTOM3 {
-                        0x4: WarnUnimpl::haddps_Vo_Wo();
+                        0x4: HADDPS(Vo,Wo);
                         0x5: WarnUnimpl::hsubps_Vo_Wo();
                         default: UD2();
                     }
@@ -721,12 +721,19 @@
                 0x1: pop_fs();
                 0x2: CPUIDInst::CPUID({{
                     CpuidResult result;
-                    success = doCpuid(xc->tcBase(), bits(Rax, 31, 0),
+                    bool success = doCpuid(xc->tcBase(), bits(Rax, 31, 0),
                         bits(Rcx, 31, 0), result);
-                    Rax = result.rax;
-                    Rbx = result.rbx;
-                    Rcx = result.rcx;
-                    Rdx = result.rdx;
+                    if (success) {
+                        Rax = result.rax;
+                        Rbx = result.rbx;
+                        Rcx = result.rcx;
+                        Rdx = result.rdx;
+                    } else {
+                        Rax = Rax;
+                        Rbx = Rbx;
+                        Rcx = Rcx;
+                        Rdx = Rdx;
+                    }
                     }});
                 0x3: Inst::BT(Ev,Gv);
                 0x4: Inst::SHLD(Ev,Gv,Ib);

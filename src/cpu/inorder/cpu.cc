@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2007 MIPS Technologies, Inc.
  * All rights reserved.
  *
@@ -34,6 +46,7 @@
 #include "arch/utility.hh"
 #include "base/bigint.hh"
 #include "config/the_isa.hh"
+#include "cpu/inorder/resources/cache_unit.hh"
 #include "cpu/inorder/resources/resource_list.hh"
 #include "cpu/inorder/cpu.hh"
 #include "cpu/inorder/first_stage.hh"
@@ -50,10 +63,11 @@
 #include "cpu/thread_context.hh"
 #include "debug/Activity.hh"
 #include "debug/InOrderCPU.hh"
+#include "debug/InOrderCachePort.hh"
 #include "debug/Interrupt.hh"
+#include "debug/Quiesce.hh"
 #include "debug/RefCount.hh"
 #include "debug/SkedCache.hh"
-#include "debug/Quiesce.hh"
 #include "params/InOrderCPU.hh"
 #include "sim/full_system.hh"
 #include "sim/process.hh"
@@ -67,6 +81,30 @@
 using namespace std;
 using namespace TheISA;
 using namespace ThePipeline;
+
+InOrderCPU::CachePort::CachePort(CacheUnit *_cacheUnit,
+                                 const std::string& name) :
+    CpuPort(_cacheUnit->name() + name, _cacheUnit->cpu),
+    cacheUnit(_cacheUnit)
+{ }
+
+bool
+InOrderCPU::CachePort::recvTimingResp(Packet *pkt)
+{
+    if (pkt->isError())
+        DPRINTF(InOrderCachePort, "Got error packet back for address: %x\n",
+                pkt->getAddr());
+    else
+        cacheUnit->processCacheCompletion(pkt);
+
+    return true;
+}
+
+void
+InOrderCPU::CachePort::recvRetry()
+{
+    cacheUnit->recvRetry();
+}
 
 InOrderCPU::TickEvent::TickEvent(InOrderCPU *c)
   : Event(CPU_Tick_Pri), cpu(c)
@@ -191,7 +229,10 @@ InOrderCPU::InOrderCPU(Params *params)
       _status(Idle),
       tickEvent(this),
       stageWidth(params->stageWidth),
+      resPool(new ResourcePool(this, params)),
       timeBuffer(2 , 2),
+      dataPort(resPool->getDataUnit(), ".dcache_port"),
+      instPort(resPool->getInstUnit(), ".icache_port"),
       removeInstsThisCycle(false),
       activityRec(params->name, NumStages, 10, params->activity),
       system(params->system),
@@ -206,8 +247,6 @@ InOrderCPU::InOrderCPU(Params *params)
       instsPerSwitch(0)
 {    
     cpu_params = params;
-
-    resPool = new ResourcePool(this, params);
 
     // Resize for Multithreading CPUs
     thread.resize(numThreads);
@@ -238,17 +277,6 @@ InOrderCPU::InOrderCPU(Params *params)
         } else {
             threadModel = Single;
         }
-    }
-
-    // Bind the fetch & data ports from the resource pool.
-    fetchPortIdx = resPool->getPortIdx(params->fetchMemPort);
-    if (fetchPortIdx == 0) {
-        fatal("Unable to find port to fetch instructions from.\n");
-    }
-
-    dataPortIdx = resPool->getPortIdx(params->dataMemPort);
-    if (dataPortIdx == 0) {
-        fatal("Unable to find port for data.\n");
     }
 
     for (ThreadID tid = 0; tid < numThreads; ++tid) {
@@ -353,6 +381,12 @@ InOrderCPU::InOrderCPU(Params *params)
 
         trapPending[tid] = false;
 
+    }
+
+    // InOrderCPU always requires an interrupt controller.
+    if (!params->defer_registration && !interrupts) {
+        fatal("InOrderCPU %s has no interrupt controller.\n"
+              "Ensure createInterruptController() is called.\n", name());
     }
 
     dummyReqInst = new InOrderDynInst(this, NULL, 0, 0, 0);
@@ -634,16 +668,21 @@ InOrderCPU::regStats()
     committedInsts
         .init(numThreads)
         .name(name() + ".committedInsts")
-        .desc("Number of Instructions Simulated (Per-Thread)");
+        .desc("Number of Instructions committed (Per-Thread)");
+
+    committedOps
+        .init(numThreads)
+        .name(name() + ".committedOps")
+        .desc("Number of Ops committed (Per-Thread)");
 
     smtCommittedInsts
         .init(numThreads)
         .name(name() + ".smtCommittedInsts")
-        .desc("Number of SMT Instructions Simulated (Per-Thread)");
+        .desc("Number of SMT Instructions committed (Per-Thread)");
 
     totalCommittedInsts
         .name(name() + ".committedInsts_total")
-        .desc("Number of Instructions Simulated (Total)");
+        .desc("Number of Instructions committed (Total)");
 
     cpi
         .name(name() + ".cpi")
@@ -744,21 +783,20 @@ InOrderCPU::tick()
 void
 InOrderCPU::init()
 {
-    if (!deferRegistration) {
-        registerThreadContexts();
+    BaseCPU::init();
+
+    for (ThreadID tid = 0; tid < numThreads; ++tid) {
+        // Set inSyscall so that the CPU doesn't squash when initially
+        // setting up registers.
+        thread[tid]->inSyscall = true;
+        // Initialise the ThreadContext's memory proxies
+        thread[tid]->initMemProxies(thread[tid]->getTC());
     }
 
-    // Set inSyscall so that the CPU doesn't squash when initially
-    // setting up registers.
-    for (ThreadID tid = 0; tid < numThreads; ++tid)
-        thread[tid]->inSyscall = true;
-
-    if (FullSystem) {
+    if (FullSystem && !params()->defer_registration) {
         for (ThreadID tid = 0; tid < numThreads; tid++) {
             ThreadContext *src_tc = threadContexts[tid];
             TheISA::initCPU(src_tc, src_tc->contextId());
-            // Initialise the ThreadContext's memory proxies
-            thread[tid]->initMemProxies(thread[tid]->getTC());
         }
     }
 
@@ -768,12 +806,6 @@ InOrderCPU::init()
 
     // Call Initializiation Routine for Resource Pool
     resPool->init();
-}
-
-Port*
-InOrderCPU::getPort(const std::string &if_name, int idx)
-{
-    return resPool->getPort(if_name, idx);
 }
 
 Fault
@@ -1437,19 +1469,26 @@ InOrderCPU::instDone(DynInstPtr inst, ThreadID tid)
     
     // Increment thread-state's instruction count
     thread[tid]->numInst++;
+    thread[tid]->numOp++;
 
     // Increment thread-state's instruction stats
     thread[tid]->numInsts++;
+    thread[tid]->numOps++;
 
     // Count committed insts per thread stats
-    committedInsts[tid]++;
+    if (!inst->isMicroop() || inst->isLastMicroop()) {
+        committedInsts[tid]++;
 
-    // Count total insts committed stat
-    totalCommittedInsts++;
+        // Count total insts committed stat
+        totalCommittedInsts++;
+    }
+
+    committedOps[tid]++;
 
     // Count SMT-committed insts per thread stat
     if (numActiveThreads() > 1) {
-        smtCommittedInsts[tid]++;
+        if (!inst->isMicroop() || inst->isLastMicroop())
+            smtCommittedInsts[tid]++;
     }
 
     // Instruction-Mix Stats
@@ -1470,7 +1509,7 @@ InOrderCPU::instDone(DynInstPtr inst, ThreadID tid)
     }
 
     // Check for instruction-count-based events.
-    comInstEventQueue[tid]->serviceEvents(thread[tid]->numInst);
+    comInstEventQueue[tid]->serviceEvents(thread[tid]->numOp);
 
     // Finally, remove instruction from CPU
     removeInst(inst);
@@ -1723,8 +1762,7 @@ InOrderCPU::syscall(int64_t callnum, ThreadID tid)
 TheISA::TLB*
 InOrderCPU::getITBPtr()
 {
-    CacheUnit *itb_res =
-        dynamic_cast<CacheUnit*>(resPool->getResource(fetchPortIdx));
+    CacheUnit *itb_res = resPool->getInstUnit();
     return itb_res->tlb();
 }
 
@@ -1732,38 +1770,26 @@ InOrderCPU::getITBPtr()
 TheISA::TLB*
 InOrderCPU::getDTBPtr()
 {
-    CacheUnit *dtb_res =
-        dynamic_cast<CacheUnit*>(resPool->getResource(dataPortIdx));
-    return dtb_res->tlb();
+    return resPool->getDataUnit()->tlb();
 }
 
-Decoder *
-InOrderCPU::getDecoderPtr()
+TheISA::Decoder *
+InOrderCPU::getDecoderPtr(unsigned tid)
 {
-    FetchUnit *fetch_res =
-        dynamic_cast<FetchUnit*>(resPool->getResource(fetchPortIdx));
-    return &fetch_res->decoder;
+    return resPool->getInstUnit()->decoder[tid];
 }
 
 Fault
 InOrderCPU::read(DynInstPtr inst, Addr addr,
                  uint8_t *data, unsigned size, unsigned flags)
 {
-    //@TODO: Generalize name "CacheUnit" to "MemUnit" just in case
-    //       you want to run w/out caches?
-    CacheUnit *cache_res = 
-        dynamic_cast<CacheUnit*>(resPool->getResource(dataPortIdx));
-
-    return cache_res->read(inst, addr, data, size, flags);
+    return resPool->getDataUnit()->read(inst, addr, data, size, flags);
 }
 
 Fault
 InOrderCPU::write(DynInstPtr inst, uint8_t *data, unsigned size,
                   Addr addr, unsigned flags, uint64_t *write_res)
 {
-    //@TODO: Generalize name "CacheUnit" to "MemUnit" just in case
-    //       you want to run w/out caches?
-    CacheUnit *cache_res =
-        dynamic_cast<CacheUnit*>(resPool->getResource(dataPortIdx));
-    return cache_res->write(inst, data, size, addr, flags, write_res);
+    return resPool->getDataUnit()->write(inst, data, size, addr, flags,
+                                         write_res);
 }

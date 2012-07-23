@@ -254,7 +254,7 @@ BaseRemoteGDB::Event::process(int revent)
 BaseRemoteGDB::BaseRemoteGDB(System *_system, ThreadContext *c, size_t cacheSize)
     : event(NULL), listener(NULL), number(-1), fd(-1),
       active(false), attached(false),
-      system(_system), pmem(_system->physmem), context(c),
+      system(_system), context(c),
       gdbregs(cacheSize)
 {
     memset(gdbregs.regs, 0, gdbregs.bytes());
@@ -461,11 +461,11 @@ BaseRemoteGDB::read(Addr vaddr, size_t size, char *data)
     DPRINTF(GDBRead, "read:  addr=%#x, size=%d", vaddr, size);
 
     if (FullSystem) {
-        FSTranslatingPortProxy *port = context->getVirtProxy();
-        port->readBlob(vaddr, (uint8_t*)data, size);
+        FSTranslatingPortProxy &proxy = context->getVirtProxy();
+        proxy.readBlob(vaddr, (uint8_t*)data, size);
     } else {
-        SETranslatingPortProxy *port = context->getMemProxy();
-        port->readBlob(vaddr, (uint8_t*)data, size);
+        SETranslatingPortProxy &proxy = context->getMemProxy();
+        proxy.readBlob(vaddr, (uint8_t*)data, size);
     }
 
 #if TRACING_ON
@@ -504,12 +504,11 @@ BaseRemoteGDB::write(Addr vaddr, size_t size, const char *data)
             DPRINTFNR("\n");
     }
     if (FullSystem) {
-        FSTranslatingPortProxy *port = context->getVirtProxy();
-        port->writeBlob(vaddr, (uint8_t*)data, size);
+        FSTranslatingPortProxy &proxy = context->getVirtProxy();
+        proxy.writeBlob(vaddr, (uint8_t*)data, size);
     } else {
-        SETranslatingPortProxy *port = context->getMemProxy();
-        port->writeBlob(vaddr, (uint8_t*)data, size);
-        delete port;
+        SETranslatingPortProxy &proxy = context->getMemProxy();
+        proxy.writeBlob(vaddr, (uint8_t*)data, size);
     }
 
     return true;

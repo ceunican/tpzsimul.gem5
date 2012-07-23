@@ -44,6 +44,7 @@
 #ifndef __CPU_SIMPLE_THREAD_HH__
 #define __CPU_SIMPLE_THREAD_HH__
 
+#include "arch/decoder.hh"
 #include "arch/isa.hh"
 #include "arch/isa_traits.hh"
 #include "arch/registers.hh"
@@ -51,8 +52,6 @@
 #include "arch/types.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
-#include "cpu/decode.hh"
 #include "cpu/thread_context.hh"
 #include "cpu/thread_state.hh"
 #include "debug/FloatRegs.hh"
@@ -66,7 +65,7 @@
 #include "sim/system.hh"
 
 class BaseCPU;
-
+class CheckerCPU;
 
 class FunctionProfile;
 class ProfileNode;
@@ -74,8 +73,8 @@ class ProfileNode;
 namespace TheISA {
     namespace Kernel {
         class Statistics;
-    };
-};
+    }
+}
 
 /**
  * The SimpleThread object provides a combination of the ThreadState
@@ -129,7 +128,7 @@ class SimpleThread : public ThreadState
     TheISA::TLB *itb;
     TheISA::TLB *dtb;
 
-    Decoder decoder;
+    TheISA::Decoder decoder;
 
     // constructor: initialize SimpleThread from given process structure
     // FS
@@ -137,8 +136,8 @@ class SimpleThread : public ThreadState
                  TheISA::TLB *_itb, TheISA::TLB *_dtb,
                  bool use_kernel_stats = true);
     // SE
-    SimpleThread(BaseCPU *_cpu, int _thread_num, Process *_process,
-                 TheISA::TLB *_itb, TheISA::TLB *_dtb);
+    SimpleThread(BaseCPU *_cpu, int _thread_num, System *_system,
+                 Process *_process, TheISA::TLB *_itb, TheISA::TLB *_dtb);
 
     SimpleThread();
 
@@ -198,21 +197,11 @@ class SimpleThread : public ThreadState
 
     TheISA::TLB *getDTBPtr() { return dtb; }
 
-#if USE_CHECKER
-    BaseCPU *getCheckerCpuPtr() { return NULL; }
-#endif
+    CheckerCPU *getCheckerCpuPtr() { return NULL; }
 
-    Decoder *getDecoderPtr() { return &decoder; }
+    TheISA::Decoder *getDecoderPtr() { return &decoder; }
 
     System *getSystemPtr() { return system; }
-
-    PortProxy* getPhysProxy() { return physProxy; }
-
-    /** Return a virtual port. This port cannot be cached locally in an object.
-     * After a CPU switch it may point to the wrong memory object which could
-     * mean stale data.
-     */
-    FSTranslatingPortProxy* getVirtProxy() { return virtProxy; }
 
     Status status() const { return _status; }
 
@@ -315,13 +304,11 @@ class SimpleThread : public ThreadState
         _pcState = val;
     }
 
-#if USE_CHECKER
     void
     pcStateNoRecord(const TheISA::PCState &val)
     {
         _pcState = val;
     }
-#endif
 
     Addr
     instAddr()

@@ -47,7 +47,6 @@
 #include <map>
 #include <queue>
 
-#include "arch/predecoder.hh"
 #include "arch/types.hh"
 #include "base/statistics.hh"
 #include "cpu/base.hh"
@@ -93,6 +92,9 @@ class CheckerCPU : public BaseCPU
     typedef TheISA::FloatReg FloatReg;
     typedef TheISA::FloatRegBits FloatRegBits;
     typedef TheISA::MiscReg MiscReg;
+
+    /** id attached to all issued requests */
+    MasterID masterId;
   public:
     virtual void init();
 
@@ -109,18 +111,24 @@ class CheckerCPU : public BaseCPU
 
     System *systemPtr;
 
-    void setIcachePort(Port *icache_port);
+    void setIcachePort(CpuPort *icache_port);
 
-    Port *icachePort;
+    CpuPort *icachePort;
 
-    void setDcachePort(Port *dcache_port);
+    void setDcachePort(CpuPort *dcache_port);
 
-    Port *dcachePort;
+    CpuPort *dcachePort;
 
-    virtual Port *getPort(const std::string &name, int idx)
+    CpuPort &getDataPort()
     {
         panic("Not supported on checker!");
-        return NULL;
+        return *dcachePort;
+    }
+
+    CpuPort &getInstPort()
+    {
+        panic("Not supported on checker!");
+        return *icachePort;
     }
 
   public:
@@ -147,9 +155,6 @@ class CheckerCPU : public BaseCPU
     // keep them all in a std::queue
     std::queue<Result> result;
 
-    // current instruction
-    TheISA::MachInst machInst;
-
     // Pointer to the one memory request.
     RequestPtr memReq;
 
@@ -165,7 +170,12 @@ class CheckerCPU : public BaseCPU
     TheISA::TLB* getITBPtr() { return itb; }
     TheISA::TLB* getDTBPtr() { return dtb; }
 
-    virtual Counter totalInstructions() const
+    virtual Counter totalInsts() const
+    {
+        return 0;
+    }
+
+    virtual Counter totalOps() const
     {
         return 0;
     }
@@ -291,6 +301,20 @@ class CheckerCPU : public BaseCPU
         int reg_idx = si->destRegIdx(idx) - TheISA::Ctrl_Base_DepTag;
         return thread->setMiscReg(reg_idx, val);
     }
+
+#if THE_ISA == MIPS_ISA
+    uint64_t readRegOtherThread(int misc_reg)
+    {
+        panic("MIPS MT not defined for CheckerCPU.\n");
+        return 0;
+    }
+
+    void setRegOtherThread(int misc_reg, const TheISA::MiscReg &val)
+    {
+        panic("MIPS MT not defined for CheckerCPU.\n");
+    }
+#endif
+
     /////////////////////////////////////////
 
     void recordPCChange(const TheISA::PCState &val)
@@ -373,8 +397,7 @@ class Checker : public CheckerCPU
 
   public:
     Checker(Params *p)
-        : CheckerCPU(p), updateThisCycle(false), unverifiedInst(NULL),
-          predecoder(NULL)
+        : CheckerCPU(p), updateThisCycle(false), unverifiedInst(NULL)
     { }
 
     void switchOut();
@@ -406,7 +429,6 @@ class Checker : public CheckerCPU
     bool updateThisCycle;
 
     DynInstPtr unverifiedInst;
-    TheISA::Predecoder predecoder;
 
     std::list<DynInstPtr> instList;
     typedef typename std::list<DynInstPtr>::iterator InstListIt;

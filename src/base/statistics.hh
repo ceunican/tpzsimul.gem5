@@ -1231,7 +1231,7 @@ class Vector2dBase : public DataWrapVec2d<Derived, Vector2dInfoProxy>
     operator[](off_type index)
     {
         off_type offset = index * y;
-        assert (index >= 0 && offset + index < size());
+        assert (index >= 0 && offset + y <= size());
         return Proxy(this->self(), offset, y);
     }
 
@@ -2289,9 +2289,31 @@ class BinaryNode : public Node
     total() const
     {
         const VResult &vec = this->result();
+        const VResult &lvec = l->result();
+        const VResult &rvec = r->result();
         Result total = 0.0;
-        for (off_type i = 0; i < size(); i++)
+        Result lsum = 0.0;
+        Result rsum = 0.0;
+        Op op;
+
+        assert(lvec.size() > 0 && rvec.size() > 0);
+        assert(lvec.size() == rvec.size() ||
+               lvec.size() == 1 || rvec.size() == 1);
+
+        /** If vectors are the same divide their sums (x0+x1)/(y0+y1) */
+        if (lvec.size() == rvec.size() && lvec.size() > 1) {
+            for (off_type i = 0; i < size(); ++i) {
+                lsum += lvec[i];
+                rsum += rvec[i];
+            }
+            return op(lsum, rsum);
+        }
+
+        /** Otherwise divide each item by the divisor */
+        for (off_type i = 0; i < size(); ++i) {
             total += vec[i];
+        }
+
         return total;
     }
 
@@ -3126,12 +3148,20 @@ sum(Temp val)
 /** Dump all statistics data to the registered outputs */
 void dump();
 void reset();
+void enable();
+bool enabled();
 
 /**
  * Register a callback that should be called whenever statistics are
  * reset
  */
 void registerResetCallback(Callback *cb);
+
+/**
+ * Register a callback that should be called whenever statistics are
+ * about to be dumped
+ */
+void registerDumpCallback(Callback *cb);
 
 std::list<Info *> &statsList();
 

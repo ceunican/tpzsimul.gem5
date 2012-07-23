@@ -47,7 +47,8 @@
 
 #include "mem/page_table.hh"
 #include "mem/port_proxy.hh"
-#include "sim/process.hh"
+
+class Process;
 
 /**
  * @file
@@ -79,21 +80,21 @@ class SETranslatingPortProxy : public PortProxy
     AllocType allocating;
 
   public:
-    SETranslatingPortProxy(Port& port, Process* p, AllocType alloc);
+    SETranslatingPortProxy(MasterPort& port, Process* p, AllocType alloc);
     virtual ~SETranslatingPortProxy();
 
-    bool tryReadBlob(Addr addr, uint8_t *p, int size);
-    bool tryWriteBlob(Addr addr, uint8_t *p, int size);
-    bool tryMemsetBlob(Addr addr, uint8_t val, int size);
-    bool tryWriteString(Addr addr, const char *str);
-    bool tryReadString(std::string &str, Addr addr);
+    bool tryReadBlob(Addr addr, uint8_t *p, int size) const;
+    bool tryWriteBlob(Addr addr, uint8_t *p, int size) const;
+    bool tryMemsetBlob(Addr addr, uint8_t val, int size) const;
+    bool tryWriteString(Addr addr, const char *str) const;
+    bool tryReadString(std::string &str, Addr addr) const;
 
-    virtual void readBlob(Addr addr, uint8_t *p, int size);
-    virtual void writeBlob(Addr addr, uint8_t *p, int size);
-    virtual void memsetBlob(Addr addr, uint8_t val, int size);
+    virtual void readBlob(Addr addr, uint8_t *p, int size) const;
+    virtual void writeBlob(Addr addr, uint8_t *p, int size) const;
+    virtual void memsetBlob(Addr addr, uint8_t val, int size) const;
 
-    void writeString(Addr addr, const char *str);
-    void readString(std::string &str, Addr addr);
+    void writeString(Addr addr, const char *str) const;
+    void readString(std::string &str, Addr addr) const;
 };
 
 #endif // __MEM_SE_TRANSLATING_PORT_PROXY_HH__

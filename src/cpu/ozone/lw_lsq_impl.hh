@@ -28,12 +28,11 @@
  * Authors: Kevin Lim
  */
 
-#include "arch/faults.hh"
 #include "base/str.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/ozone/lw_lsq.hh"
+#include "sim/fault_fwd.hh"
 
 template<class Impl>
 OzoneLWLSQ<Impl>::WritebackEvent::WritebackEvent(DynInstPtr &_inst, PacketPtr _pkt,
@@ -73,12 +72,6 @@ void
 OzoneLWLSQ<Impl>::DcachePort::recvFunctional(PacketPtr pkt)
 {
     warn("O3CPU doesn't update things on a recvFunctional");
-}
-
-template <class Impl>
-void
-OzoneLWLSQ<Impl>::DcachePort::recvRangeChange()
-{
 }
 
 template <class Impl>
@@ -181,11 +174,9 @@ OzoneLWLSQ<Impl>::setCPU(OzoneCPU *cpu_ptr)
     cpu = cpu_ptr;
     dcachePort.setName(this->name() + "-dport");
 
-#if USE_CHECKER
     if (cpu->checker) {
         cpu->checker->setDcachePort(&dcachePort);
     }
-#endif
 }
 
 template<class Impl>
@@ -586,7 +577,7 @@ OzoneLWLSQ<Impl>::writebackStores()
         MemCmd command =
             req->isSwap() ? MemCmd::SwapReq :
             (req->isLLSC() ? MemCmd::WriteReq : MemCmd::StoreCondReq);
-        PacketPtr data_pkt = new Packet(req, command, Packet::Broadcast);
+        PacketPtr data_pkt = new Packet(req, command);
         data_pkt->dataStatic(inst->memData);
 
         LSQSenderState *state = new LSQSenderState;
@@ -846,11 +837,9 @@ OzoneLWLSQ<Impl>::storePostSend(PacketPtr pkt, DynInstPtr &inst)
         // only works so long as the checker doesn't try to
         // verify the value in memory for stores.
         inst->setCompleted();
-#if USE_CHECKER
         if (cpu->checker) {
             cpu->checker->verify(inst);
         }
-#endif
     }
 }
 
@@ -914,11 +903,9 @@ OzoneLWLSQ<Impl>::completeStore(DynInstPtr &inst)
     --stores;
 
     inst->setCompleted();
-#if USE_CHECKER
     if (cpu->checker) {
         cpu->checker->verify(inst);
     }
-#endif
 }
 
 template <class Impl>

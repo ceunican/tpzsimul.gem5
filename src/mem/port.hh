@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -38,15 +38,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Ron Dreslinski
+ *          Andreas Hansson
+ *          William Wang
  */
 
 /**
  * @file
- * Port Object Declaration. Ports are used to interface memory objects to
- * each other.  They will always come in pairs, and we refer to the other
- * port object as the peer.  These are used to make the design more
- * modular so that a specific interface between every type of objcet doesn't
- * have to be created.
+ * Port Object Declaration.
  */
 
 #ifndef __MEM_PORT_HH__
@@ -54,13 +52,11 @@
 
 #include <list>
 
-#include "base/misc.hh"
 #include "base/range.hh"
-#include "base/types.hh"
 #include "mem/packet.hh"
-#include "mem/request.hh"
 
-/** This typedef is used to clean up getAddrRanges(). It's declared
+/**
+ * This typedef is used to clean up getAddrRanges(). It's declared
  * outside the Port object since it's also used by some mem objects.
  * Eventually we should move this typedef to wherever Addr is
  * defined.
@@ -68,196 +64,356 @@
 
 typedef std::list<Range<Addr> > AddrRangeList;
 typedef std::list<Range<Addr> >::iterator AddrRangeIter;
+typedef std::list<Range<Addr> >::const_iterator AddrRangeConstIter;
 
 class MemObject;
 
 /**
- * Ports are used to interface memory objects to
- * each other.  They will always come in pairs, and we refer to the other
- * port object as the peer.  These are used to make the design more
- * modular so that a specific interface between every type of objcet doesn't
- * have to be created.
- *
- * Recv accesor functions are being called from the peer interface.
- * Send accessor functions are being called from the device the port is
- * associated with, and it will call the peer recv. accessor function.
+ * Ports are used to interface memory objects to each other. A port is
+ * either a master or a slave and the connected peer is always of the
+ * opposite role. Each port has a name, an owner, and an identifier.
  */
 class Port
 {
-  protected:
+
+  private:
+
     /** Descriptive name (for DPRINTF output) */
-    mutable std::string portName;
+    std::string portName;
 
-    /** A pointer to the peer port.  Ports always come in pairs, that way they
-        can use a standardized interface to communicate between different
-        memory objects. */
-    Port *peer;
+  protected:
 
-    /** A pointer to the MemObject that owns this port. This may not be set. */
-    MemObject *owner;
-
-  public:
     /**
-     * Constructor.
-     *
-     * @param _name Port name for DPRINTF output.  Should include name
-     * of memory system object to which the port belongs.
-     * @param _owner Pointer to the MemObject that owns this port.
-     * Will not necessarily be set.
+     * A numeric identifier to distinguish ports in a vector, and set
+     * to InvalidPortID in case this port is not part of a vector.
      */
-    Port(const std::string &_name, MemObject *_owner);
+    const PortID id;
 
-    /** Return port name (for DPRINTF). */
-    const std::string &name() const { return portName; }
+    /** A reference to the MemObject that owns this port. */
+    MemObject& owner;
 
+    /**
+     * Abstract base class for ports
+     *
+     * @param _name Port name including the owners name
+     * @param _owner The MemObject that is the structural owner of this port
+     * @param _id A port identifier for vector ports
+     */
+    Port(const std::string& _name, MemObject& _owner, PortID _id);
+
+    /**
+     * Virtual destructor due to inheritance.
+     */
     virtual ~Port();
 
-    void setName(const std::string &name)
-    { portName = name; }
+  public:
 
-    /** Function to set the pointer for the peer port. */
-    virtual void setPeer(Port *port);
+    /** Return port name (for DPRINTF). */
+    const std::string name() const { return portName; }
 
-    /** Function to get the pointer to the peer port. */
-    Port *getPeer() { return peer; }
+    /** Get the port id. */
+    PortID getId() const { return id; }
 
-    /** Function to set the owner of this port. */
-    void setOwner(MemObject *_owner);
+};
 
-    /** Function to return the owner of this port. */
-    MemObject *getOwner() { return owner; }
+/** Forward declaration */
+class SlavePort;
 
-    bool isConnected() { return peer != NULL; }
+/**
+ * A MasterPort is a specialisation of a port. In addition to the
+ * basic functionality of sending packets to its slave peer, it also
+ * has functions specific to a master, e.g. to receive range changes
+ * or determine if the port is snooping or not.
+ */
+class MasterPort : public Port
+{
 
-  protected:
+    friend class SlavePort;
 
-    /** These functions are protected because they should only be
-     * called by a peer port, never directly by any outside object. */
+  private:
 
-    /** Called to recive a timing call from the peer port. */
-    virtual bool recvTiming(PacketPtr pkt) = 0;
-
-    /** Called to recive a atomic call from the peer port. */
-    virtual Tick recvAtomic(PacketPtr pkt) = 0;
-
-    /** Called to recive a functional call from the peer port. */
-    virtual void recvFunctional(PacketPtr pkt) = 0;
-
-    /** Called to recieve an address range change from the peer port. */
-    virtual void recvRangeChange() = 0;
-
-    /** Called by a peer port if the send was unsuccesful, and had to
-        wait.  This shouldn't be valid for response paths (IO Devices).
-        so it is set to panic if it isn't already defined.
-    */
-    virtual void recvRetry() { panic("??"); }
-
-    /** Called by a peer port in order to determine the block size of the
-        device connected to this port.  It sometimes doesn't make sense for
-        this function to be called, so it just returns 0. Anytthing that is
-        concerned with the size should just ignore that.
-    */
-    virtual unsigned deviceBlockSize() const { return 0; }
+    SlavePort* _slavePort;
 
   public:
 
-    /**
-     * Get a list of the non-overlapping address ranges we are
-     * responsible for. The default implementation returns an empty
-     * list and thus no address ranges. Any slave port must override
-     * this function and return a populated list with at least one
-     * item.
-     *
-     * @return a list of ranges responded to
-     */
-    virtual AddrRangeList getAddrRanges()
-    { AddrRangeList ranges; return ranges; }
+    MasterPort(const std::string& name, MemObject* owner,
+               PortID id = InvalidPortID);
+    virtual ~MasterPort();
+
+    void bind(SlavePort& slave_port);
+    SlavePort& getSlavePort() const;
+    bool isConnected() const;
 
     /**
-     * Determine if this port is snooping or not. The default
+     * Send an atomic request packet, where the data is moved and the
+     * state is updated in zero time, without interleaving with other
+     * memory accesses.
+     *
+     * @param pkt Packet to send.
+     *
+     * @return Estimated latency of access.
+     */
+    Tick sendAtomic(PacketPtr pkt);
+
+    /**
+     * Send a functional request packet, where the data is instantly
+     * updated everywhere in the memory system, without affecting the
+     * current state of any block or moving the block.
+     *
+     * @param pkt Packet to send.
+     */
+    void sendFunctional(PacketPtr pkt);
+
+    /**
+     * Attempt to send a timing request to the slave port by calling
+     * its corresponding receive function. If the send does not
+     * succeed, as indicated by the return value, then the sender must
+     * wait for a recvRetry at which point it can re-issue a
+     * sendTimingReq.
+     *
+     * @param pkt Packet to send.
+     *
+     * @return If the send was succesful or not.
+    */
+    bool sendTimingReq(PacketPtr pkt);
+
+    /**
+     * Attempt to send a timing snoop response packet to the slave
+     * port by calling its corresponding receive function. If the send
+     * does not succeed, as indicated by the return value, then the
+     * sender must wait for a recvRetry at which point it can re-issue
+     * a sendTimingSnoopResp.
+     *
+     * @param pkt Packet to send.
+     */
+    bool sendTimingSnoopResp(PacketPtr pkt);
+
+    /**
+     * Send a retry to the slave port that previously attempted a
+     * sendTimingResp to this master port and failed.
+     */
+    void sendRetry();
+
+    /**
+     * Determine if this master port is snooping or not. The default
      * implementation returns false and thus tells the neighbour we
-     * are not snooping. Any port that is to snoop (e.g. a cache
-     * connected to a bus) has to override this function.
+     * are not snooping. Any master port that wants to receive snoop
+     * requests (e.g. a cache connected to a bus) has to override this
+     * function.
      *
      * @return true if the port should be considered a snooper
      */
-    virtual bool isSnooping()
-    { return false; }
-
-    /** Function called by associated memory device (cache, memory, iodevice)
-        in order to send a timing request to the port.  Simply calls the peer
-        port receive function.
-        @return This function returns if the send was succesful in it's
-        recieve. If it was a failure, then the port will wait for a recvRetry
-        at which point it can possibly issue a successful sendTiming.  This is used in
-        case a cache has a higher priority request come in while waiting for
-        the bus to arbitrate.
-    */
-    bool sendTiming(PacketPtr pkt) { return peer->recvTiming(pkt); }
-
-    /** Function called by the associated device to send an atomic
-     *   access, an access in which the data is moved and the state is
-     *   updated in one cycle, without interleaving with other memory
-     *   accesses.  Returns estimated latency of access.
-     */
-    Tick sendAtomic(PacketPtr pkt)
-        { return peer->recvAtomic(pkt); }
-
-    /** Function called by the associated device to send a functional access,
-        an access in which the data is instantly updated everywhere in the
-        memory system, without affecting the current state of any block or
-        moving the block.
-    */
-    void sendFunctional(PacketPtr pkt)
-        { return peer->recvFunctional(pkt); }
+    virtual bool isSnooping() const { return false; }
 
     /**
-     * Called by the associated device to send a status range to the
-     * peer interface.
+     * Called by a peer port in order to determine the block size of
+     * the owner of this port.
      */
-    void sendRangeChange() const { peer->recvRangeChange(); }
-
-    /** When a timing access doesn't return a success, some time later the
-        Retry will be sent.
-    */
-    void sendRetry() { return peer->recvRetry(); }
+    virtual unsigned deviceBlockSize() const { return 0; }
 
     /** Called by the associated device if it wishes to find out the blocksize
         of the device on attached to the peer port.
     */
-    unsigned peerBlockSize() const { return peer->deviceBlockSize(); }
+    unsigned peerBlockSize() const;
 
-    /** This function is a wrapper around sendFunctional()
-        that breaks a larger, arbitrarily aligned access into
-        appropriate chunks.  The default implementation can use
-        getBlockSize() to determine the block size and go from there.
-    */
-    virtual void readBlob(Addr addr, uint8_t *p, int size);
-
-    /** This function is a wrapper around sendFunctional()
-        that breaks a larger, arbitrarily aligned access into
-        appropriate chunks.  The default implementation can use
-        getBlockSize() to determine the block size and go from there.
-    */
-    virtual void writeBlob(Addr addr, uint8_t *p, int size);
-
-    /** Fill size bytes starting at addr with byte value val.  This
-        should not need to be virtual, since it can be implemented in
-        terms of writeBlob().  However, it shouldn't be
-        performance-critical either, so it could be if we wanted to.
-    */
-    virtual void memsetBlob(Addr addr, uint8_t val, int size);
+    /**
+     * Get the address ranges of the connected slave port.
+     */
+    AddrRangeList getAddrRanges() const;
 
     /** Inject a PrintReq for the given address to print the state of
      * that address throughout the memory system.  For debugging.
      */
     void printAddr(Addr a);
 
+  protected:
+
+    /**
+     * Receive an atomic snoop request packet from the slave port.
+     */
+    virtual Tick recvAtomicSnoop(PacketPtr pkt)
+    {
+        panic("%s was not expecting an atomic snoop request\n", name());
+        return 0;
+    }
+
+    /**
+     * Receive a functional snoop request packet from the slave port.
+     */
+    virtual void recvFunctionalSnoop(PacketPtr pkt)
+    {
+        panic("%s was not expecting a functional snoop request\n", name());
+    }
+
+    /**
+     * Receive a timing response from the slave port.
+     */
+    virtual bool recvTimingResp(PacketPtr pkt) = 0;
+
+    /**
+     * Receive a timing snoop request from the slave port.
+     */
+    virtual void recvTimingSnoopReq(PacketPtr pkt)
+    {
+        panic("%s was not expecting a timing snoop request\n", name());
+    }
+
+    /**
+     * Called by the slave port if sendTimingReq or
+     * sendTimingSnoopResp was called on this master port (causing
+     * recvTimingReq and recvTimingSnoopResp to be called on the
+     * slave port) and was unsuccesful.
+     */
+    virtual void recvRetry() = 0;
+
+    /**
+     * Called to receive an address range change from the peer slave
+     * port. the default implementation ignored the change and does
+     * nothing. Override this function in a derived class if the owner
+     * needs to be aware of he laesddress ranges, e.g. in an
+     * interconnect component like a bus.
+     */
+    virtual void recvRangeChange() { }
+};
+
+/**
+ * A SlavePort is a specialisation of a port. In addition to the
+ * basic functionality of sending packets to its master peer, it also
+ * has functions specific to a slave, e.g. to send range changes
+ * and get the address ranges that the port responds to.
+ */
+class SlavePort : public Port
+{
+
+    friend class MasterPort;
+
   private:
 
-    /** Internal helper function for read/writeBlob().
+    MasterPort* _masterPort;
+
+  public:
+
+    SlavePort(const std::string& name, MemObject* owner,
+              PortID id = InvalidPortID);
+    virtual ~SlavePort();
+
+    void bind(MasterPort& master_port);
+    MasterPort& getMasterPort() const;
+    bool isConnected() const;
+
+    /**
+     * Send an atomic snoop request packet, where the data is moved
+     * and the state is updated in zero time, without interleaving
+     * with other memory accesses.
+     *
+     * @param pkt Snoop packet to send.
+     *
+     * @return Estimated latency of access.
      */
-    void blobHelper(Addr addr, uint8_t *p, int size, MemCmd cmd);
+    Tick sendAtomicSnoop(PacketPtr pkt);
+
+    /**
+     * Send a functional snoop request packet, where the data is
+     * instantly updated everywhere in the memory system, without
+     * affecting the current state of any block or moving the block.
+     *
+     * @param pkt Snoop packet to send.
+     */
+    void sendFunctionalSnoop(PacketPtr pkt);
+
+    /**
+     * Attempt to send a timing response to the master port by calling
+     * its corresponding receive function. If the send does not
+     * succeed, as indicated by the return value, then the sender must
+     * wait for a recvRetry at which point it can re-issue a
+     * sendTimingResp.
+     *
+     * @param pkt Packet to send.
+     *
+     * @return If the send was succesful or not.
+    */
+    bool sendTimingResp(PacketPtr pkt);
+
+    /**
+     * Attempt to send a timing snoop request packet to the master port
+     * by calling its corresponding receive function. Snoop requests
+     * always succeed and hence no return value is needed.
+     *
+     * @param pkt Packet to send.
+     */
+    void sendTimingSnoopReq(PacketPtr pkt);
+
+    /**
+     * Send a retry to the master port that previously attempted a
+     * sendTimingReq or sendTimingSnoopResp to this slave port and
+     * failed.
+     */
+    void sendRetry();
+
+    /**
+     * Called by a peer port in order to determine the block size of
+     * the owner of this port.
+     */
+    virtual unsigned deviceBlockSize() const { return 0; }
+
+    /** Called by the associated device if it wishes to find out the blocksize
+        of the device on attached to the peer port.
+    */
+    unsigned peerBlockSize() const;
+
+    /**
+     * Find out if the peer master port is snooping or not.
+     *
+     * @return true if the peer master port is snooping
+     */
+    bool isSnooping() const { return _masterPort->isSnooping(); }
+
+    /**
+     * Called by the owner to send a range change
+     */
+    void sendRangeChange() const { _masterPort->recvRangeChange(); }
+
+    /**
+     * Get a list of the non-overlapping address ranges the owner is
+     * responsible for. All slave ports must override this function
+     * and return a populated list with at least one item.
+     *
+     * @return a list of ranges responded to
+     */
+    virtual AddrRangeList getAddrRanges() const = 0;
+
+  protected:
+
+    /**
+     * Receive an atomic request packet from the master port.
+     */
+    virtual Tick recvAtomic(PacketPtr pkt) = 0;
+
+    /**
+     * Receive a functional request packet from the master port.
+     */
+    virtual void recvFunctional(PacketPtr pkt) = 0;
+
+    /**
+     * Receive a timing request from the master port.
+     */
+    virtual bool recvTimingReq(PacketPtr pkt) = 0;
+
+    /**
+     * Receive a timing snoop response from the master port.
+     */
+    virtual bool recvTimingSnoopResp(PacketPtr pkt)
+    {
+        panic("%s was not expecting a timing snoop response\n", name());
+    }
+
+    /**
+     * Called by the master port if sendTimingResp was called on this
+     * slave port (causing recvTimingResp to be called on the master
+     * port) and was unsuccesful.
+     */
+    virtual void recvRetry() = 0;
+
 };
 
 #endif //__MEM_PORT_HH__

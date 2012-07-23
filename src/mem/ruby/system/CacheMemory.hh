@@ -34,6 +34,9 @@
 #include <vector>
 
 #include "base/hashmap.hh"
+#include "base/statistics.hh"
+#include "mem/protocol/CacheResourceType.hh"
+#include "mem/protocol/CacheRequestType.hh"
 #include "mem/protocol/GenericRequestType.hh"
 #include "mem/protocol/RubyRequest.hh"
 #include "mem/ruby/common/DataBlock.hh"
@@ -41,6 +44,7 @@
 #include "mem/ruby/recorder/CacheRecorder.hh"
 #include "mem/ruby/slicc_interface/AbstractCacheEntry.hh"
 #include "mem/ruby/slicc_interface/RubySlicc_ComponentMapping.hh"
+#include "mem/ruby/system/BankedArray.hh"
 #include "mem/ruby/system/LRUPolicy.hh"
 #include "mem/ruby/system/PseudoLRUPolicy.hh"
 #include "params/RubyCache.hh"
@@ -56,8 +60,6 @@ class CacheMemory : public SimObject
     void init();
 
     // Public Methods
-    void printConfig(std::ostream& out);
-
     // perform a cache access and see if we hit or not.  Return true on a hit.
     bool tryCacheAccess(const Address& address, RubyRequestType type,
                         DataBlock*& data_ptr);
@@ -115,6 +117,18 @@ class CacheMemory : public SimObject
     void clearStats() const;
     void printStats(std::ostream& out) const;
 
+    void recordRequestType(CacheRequestType requestType);
+    void regStats();
+
+    Stats::Scalar numDataArrayReads;
+    Stats::Scalar numDataArrayWrites;
+    Stats::Scalar numTagArrayReads;
+    Stats::Scalar numTagArrayWrites;
+
+    bool checkResourceAvailable(CacheResourceType res, Address addr);
+
+    Stats::Scalar numTagArrayStalls;
+    Stats::Scalar numDataArrayStalls;
   private:
     // convert a Address to its location in the cache
     Index addressToCacheSet(const Address& address) const;
@@ -145,12 +159,16 @@ class CacheMemory : public SimObject
 
     CacheProfiler* m_profiler_ptr;
 
+    BankedArray dataArray;
+    BankedArray tagArray;
+
     int m_cache_size;
     std::string m_policy;
     int m_cache_num_sets;
     int m_cache_num_set_bits;
     int m_cache_assoc;
     int m_start_index_bit;
+    bool m_resource_stalls;
 };
 
 #endif // __MEM_RUBY_SYSTEM_CACHEMEMORY_HH__

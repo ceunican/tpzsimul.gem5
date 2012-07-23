@@ -44,12 +44,12 @@
 
 #include "arch/x86/pagetable.hh"
 #include "arch/x86/tlb.hh"
-#include "base/fast_alloc.hh"
 #include "base/types.hh"
 #include "mem/mem_object.hh"
 #include "mem/packet.hh"
 #include "params/X86PagetableWalker.hh"
 #include "sim/faults.hh"
+#include "sim/system.hh"
 
 class ThreadContext;
 
@@ -59,30 +59,33 @@ namespace X86ISA
     {
       protected:
         // Port for accessing memory
-        class WalkerPort : public Port
+        class WalkerPort : public MasterPort
         {
           public:
             WalkerPort(const std::string &_name, Walker * _walker) :
-                  Port(_name, _walker), walker(_walker)
+                  MasterPort(_name, _walker), walker(_walker)
             {}
 
           protected:
-            Walker * walker;
+            Walker *walker;
 
-            bool recvTiming(PacketPtr pkt);
-            Tick recvAtomic(PacketPtr pkt);
-            void recvFunctional(PacketPtr pkt);
-            void recvRangeChange();
+            bool recvTimingResp(PacketPtr pkt);
+
+            /**
+             * Snooping a coherence request, do nothing.
+             */
+            void recvTimingSnoopReq(PacketPtr pkt) { }
+            Tick recvAtomicSnoop(PacketPtr pkt) { return 0; }
+            void recvFunctionalSnoop(PacketPtr pkt) { }
             void recvRetry();
-            bool isSnooping() { return true; }
+            bool isSnooping() const { return true; }
         };
 
         friend class WalkerPort;
         WalkerPort port;
-        Port *getPort(const std::string &if_name, int idx = -1);
 
         // State to track each walk of the page table
-        class WalkerState : public FastAlloc
+        class WalkerState
         {
           private:
             enum State {
@@ -97,7 +100,7 @@ namespace X86ISA
             };
 
           protected:
-            Walker * walker;
+            Walker *walker;
             ThreadContext *tc;
             RequestPtr req;
             State state;
@@ -115,7 +118,6 @@ namespace X86ISA
             bool timing;
             bool retrying;
             bool started;
-
           public:
             WalkerState(Walker * _walker, BaseTLB::Translation *_translation,
                     RequestPtr _req, bool _isFunctional = false) :
@@ -129,7 +131,7 @@ namespace X86ISA
             void initState(ThreadContext * _tc, BaseTLB::Mode _mode,
                            bool _isTiming = false);
             Fault startWalk();
-            Fault startFunctional(Addr &addr, Addr &pageSize);
+            Fault startFunctional(Addr &addr, unsigned &logBytes);
             bool recvPacket(PacketPtr pkt);
             bool isRetrying();
             bool wasStarted();
@@ -166,15 +168,17 @@ namespace X86ISA
         Fault start(ThreadContext * _tc, BaseTLB::Translation *translation,
                 RequestPtr req, BaseTLB::Mode mode);
         Fault startFunctional(ThreadContext * _tc, Addr &addr,
-                Addr &pageSize, BaseTLB::Mode mode);
+                unsigned &logBytes, BaseTLB::Mode mode);
+        MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
 
       protected:
         // The TLB we're supposed to load.
         TLB * tlb;
         System * sys;
+        MasterID masterId;
 
         // Functions for dealing with packets.
-        bool recvTiming(PacketPtr pkt);
+        bool recvTimingResp(PacketPtr pkt);
         void recvRetry();
         bool sendTiming(WalkerState * sendingState, PacketPtr pkt);
 
@@ -187,9 +191,16 @@ namespace X86ISA
 
         typedef X86PagetableWalkerParams Params;
 
+        const Params *
+        params() const
+        {
+            return static_cast<const Params *>(_params);
+        }
+
         Walker(const Params *params) :
             MemObject(params), port(name() + ".port", this),
-            funcState(this, NULL, NULL, true), tlb(NULL), sys(params->system)
+            funcState(this, NULL, NULL, true), tlb(NULL), sys(params->system),
+            masterId(sys->getMasterId(name()))
         {
         }
     };

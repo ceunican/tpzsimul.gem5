@@ -43,10 +43,9 @@ def config_cache(options, system):
             system.l2 = L2Cache(size = options.l2_size, assoc = options.l2_assoc,
                                 block_size=options.cacheline_size)
 
-        system.tol2bus = Bus()
-        system.l2.cpu_side = system.tol2bus.port
-        system.l2.mem_side = system.membus.port
-        system.l2.num_cpus = options.num_cpus
+        system.tol2bus = CoherentBus()
+        system.l2.cpu_side = system.tol2bus.master
+        system.l2.mem_side = system.membus.slave
 
     for i in xrange(options.num_cpus):
         if options.caches:
@@ -71,6 +70,7 @@ def config_cache(options, system):
                                                       PageTableWalkerCache())
             else:
                 system.cpu[i].addPrivateSplitL1Caches(icache, dcache)
+        system.cpu[i].createInterruptController()
         if options.l2cache:
             system.cpu[i].connectAllPorts(system.tol2bus, system.membus)
         else:

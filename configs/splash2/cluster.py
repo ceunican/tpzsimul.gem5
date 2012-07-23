@@ -173,7 +173,7 @@ if options.timing:
     for j in xrange(options.numclusters):
         clusters[j].id = j
     for cluster in clusters:
-        cluster.clusterbus = Bus(clock=busFrequency)
+        cluster.clusterbus = CoherentBus(clock=busFrequency)
         all_l1buses += [cluster.clusterbus]
         cluster.cpus = [TimingSimpleCPU(cpu_id = i + cluster.id,
                                         clock=options.frequency)
@@ -186,7 +186,7 @@ elif options.detailed:
     for j in xrange(options.numclusters):
         clusters[j].id = j
     for cluster in clusters:
-        cluster.clusterbus = Bus(clock=busFrequency)
+        cluster.clusterbus = CoherentBus(clock=busFrequency)
         all_l1buses += [cluster.clusterbus]
         cluster.cpus = [DerivO3CPU(cpu_id = i + cluster.id,
                                    clock=options.frequency)
@@ -199,7 +199,7 @@ else:
     for j in xrange(options.numclusters):
         clusters[j].id = j
     for cluster in clusters:
-        cluster.clusterbus = Bus(clock=busFrequency)
+        cluster.clusterbus = CoherentBus(clock=busFrequency)
         all_l1buses += [cluster.clusterbus]
         cluster.cpus = [AtomicSimpleCPU(cpu_id = i + cluster.id,
                                         clock=options.frequency)
@@ -211,29 +211,30 @@ else:
 # ----------------------
 # Create a system, and add system wide objects
 # ----------------------
-system = System(cpu = all_cpus, l1_ = all_l1s, l1bus_ = all_l1buses, physmem = PhysicalMemory(),
-                membus = Bus(clock = busFrequency))
+system = System(cpu = all_cpus, l1_ = all_l1s, l1bus_ = all_l1buses,
+                physmem = SimpleMemory(),
+                membus = CoherentBus(clock = busFrequency))
 
-system.toL2bus = Bus(clock = busFrequency)
+system.toL2bus = CoherentBus(clock = busFrequency)
 system.l2 = L2(size = options.l2size, assoc = 8)
 
 # ----------------------
 # Connect the L2 cache and memory together
 # ----------------------
 
-system.physmem.port = system.membus.port
-system.l2.cpu_side = system.toL2bus.port
-system.l2.mem_side = system.membus.port
+system.physmem.port = system.membus.master
+system.l2.cpu_side = system.toL2bus.slave
+system.l2.mem_side = system.membus.master
 
 # ----------------------
 # Connect the L2 cache and clusters together
 # ----------------------
 for cluster in clusters:
-    cluster.l1.cpu_side = cluster.clusterbus.port
-    cluster.l1.mem_side = system.toL2bus.port
+    cluster.l1.cpu_side = cluster.clusterbus.master
+    cluster.l1.mem_side = system.toL2bus.slave
     for cpu in cluster.cpus:
-        cpu.icache_port = cluster.clusterbus.port
-        cpu.dcache_port = cluster.clusterbus.port
+        cpu.icache_port = cluster.clusterbus.slave
+        cpu.dcache_port = cluster.clusterbus.slave
 
 # ----------------------
 # Define the root

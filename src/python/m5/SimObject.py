@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2004-2006 The Regents of The University of Michigan
 # Copyright (c) 2010 Advanced Micro Devices, Inc.
 # All rights reserved.
@@ -27,14 +39,10 @@
 #
 # Authors: Steve Reinhardt
 #          Nathan Binkert
+#          Andreas Hansson
 
 import sys
 from types import FunctionType, MethodType, ModuleType
-
-try:
-    import pydot
-except:
-    pydot = False
 
 import m5
 from m5.util import *
@@ -46,7 +54,7 @@ from m5.params import *
 # There are a few things we need that aren't in params.__all__ since
 # normal users don't need them
 from m5.params import ParamDesc, VectorParamDesc, \
-     isNullPointer, SimObjectVector
+     isNullPointer, SimObjectVector, Port
 
 from m5.proxy import *
 from m5.proxy import isproxy
@@ -160,10 +168,15 @@ class MetaSimObject(type):
         cls._port_refs = multidict() # port ref objects
         cls._instantiated = False # really instantiated, cloned, or subclassed
 
-        # We don't support multiple inheritance.  If you want to, you
-        # must fix multidict to deal with it properly.
-        if len(bases) > 1:
-            raise TypeError, "SimObjects do not support multiple inheritance"
+        # We don't support multiple inheritance of sim objects.  If you want
+        # to, you must fix multidict to deal with it properly. Non sim-objects
+        # are ok, though
+        bTotal = 0
+        for c in bases:
+            if isinstance(c, MetaSimObject):
+                bTotal += 1
+            if bTotal > 1:
+                raise TypeError, "SimObjects do not support multiple inheritance"
 
         base = bases[0]
 
@@ -386,6 +399,7 @@ class MetaSimObject(type):
         # will also be inherited from the base class's param struct
         # here).
         params = cls._params.local.values()
+        ports = cls._ports.local
 
         code('%module(package="m5.internal") param_$cls')
         code()
@@ -394,6 +408,19 @@ class MetaSimObject(type):
         for param in params:
             param.cxx_predecls(code)
         cls.export_method_cxx_predecls(code)
+        code('''\
+/**
+  * This is a workaround for bug in swig. Prior to gcc 4.6.1 the STL
+  * headers like vector, string, etc. used to automatically pull in
+  * the cstddef header but starting with gcc 4.6.1 they no longer do.
+  * This leads to swig generated a file that does not compile so we
+  * explicitly include cstddef. Additionally, including version 2.0.4,
+  * swig uses ptrdiff_t without the std:: namespace prefix which is
+  * required with gcc 4.6.1. We explicitly provide access to it.
+  */
+#include <cstddef>
+using std::ptrdiff_t;
+''')
         code('%}')
         code()
 
@@ -441,6 +468,7 @@ class MetaSimObject(type):
         # will also be inherited from the base class's param struct
         # here).
         params = cls._params.local.values()
+        ports = cls._ports.local
         try:
             ptypes = [p.ptype for p in params]
         except:
@@ -481,6 +509,8 @@ class EventQueue;
 ''')
         for param in params:
             param.cxx_predecls(code)
+        for port in ports.itervalues():
+            port.cxx_predecls(code)
         code()
 
         if cls._base:
@@ -517,6 +547,9 @@ class EventQueue;
             ''')
         for param in params:
             param.cxx_decl(code)
+        for port in ports.itervalues():
+            port.cxx_decl(code)
+
         code.dedent()
         code('};')
 
@@ -832,6 +865,10 @@ class SimObject(object):
             if isinstance(child, ptype) and not isproxy(child) and \
                not isNullPointer(child):
                 all[child] = True
+            if isSimObject(child):
+                # also add results from the child itself
+                child_all, done = child.find_all(ptype)
+                all.update(dict(zip(child_all, [done] * len(child_all))))
         # search param space
         for pname,pdesc in self._params.iteritems():
             if issubclass(pdesc.ptype, ptype):
@@ -899,32 +936,40 @@ class SimObject(object):
             d.type = self.type
         if hasattr(self, 'cxx_class'):
             d.cxx_class = self.cxx_class
+        # Add the name and path of this object to be able to link to
+        # the stats
+        d.name = self.get_name()
+        d.path = self.path()
 
         for param in sorted(self._params.keys()):
             value = self._values.get(param)
-            try:
-                # Use native type for those supported by JSON and 
-                # strings for everything else. skipkeys=True seems
-                # to not work as well as one would hope
-                if type(self._values[param].value) in \
-                        [str, unicode, int, long, float, bool, None]:
-                    d[param] = self._values[param].value
-                else:
-                    d[param] = str(self._values[param])
+            if value != None:
+                try:
+                    # Use native type for those supported by JSON and
+                    # strings for everything else. skipkeys=True seems
+                    # to not work as well as one would hope
+                    if type(self._values[param].value) in \
+                            [str, unicode, int, long, float, bool, None]:
+                        d[param] = self._values[param].value
+                    else:
+                        d[param] = str(self._values[param])
 
-            except AttributeError:
-                pass
+                except AttributeError:
+                    pass
 
         for n in sorted(self._children.keys()):
-            d[self._children[n].get_name()] =  self._children[n].get_config_as_dict()
+            child = self._children[n]
+            # Use the name of the attribute (and not get_name()) as
+            # the key in the JSON dictionary to capture the hierarchy
+            # in the Python code that assembled this system
+            d[n] = child.get_config_as_dict()
 
         for port_name in sorted(self._ports.keys()):
             port = self._port_refs.get(port_name, None)
             if port != None:
-                # Might want to actually make this reference the object
-                # in the future, although execing the string problem would
-                # get some of the way there
-                d[port_name] = port.ini_str()
+                # Represent each port with a dictionary containing the
+                # prominent attributes
+                d[port_name] = port.get_config_as_dict()
 
         return d
 
@@ -960,7 +1005,11 @@ class SimObject(object):
         for port_name in port_names:
             port = self._port_refs.get(port_name, None)
             if port != None:
-                setattr(cc_params, port_name, port)
+                port_count = len(port)
+            else:
+                port_count = 0
+            setattr(cc_params, 'port_' + port_name + '_connection_count',
+                    port_count)
         self._ccParams = cc_params
         return self._ccParams
 
@@ -1017,49 +1066,6 @@ class SimObject(object):
 
     def takeOverFrom(self, old_cpu):
         self._ccObject.takeOverFrom(old_cpu._ccObject)
-
-    # generate output file for 'dot' to display as a pretty graph.
-    # this code is currently broken.
-    def outputDot(self, dot):
-        label = "{%s|" % self.path
-        if isSimObject(self.realtype):
-            label +=  '%s|' % self.type
-
-        if self.children:
-            # instantiate children in same order they were added for
-            # backward compatibility (else we can end up with cpu1
-            # before cpu0).
-            for c in self.children:
-                dot.add_edge(pydot.Edge(self.path,c.path, style="bold"))
-
-        simobjs = []
-        for param in self.params:
-            try:
-                if param.value is None:
-                    raise AttributeError, 'Parameter with no value'
-
-                value = param.value
-                string = param.string(value)
-            except Exception, e:
-                msg = 'exception in %s:%s\n%s' % (self.name, param.name, e)
-                e.args = (msg, )
-                raise
-
-            if isSimObject(param.ptype) and string != "Null":
-                simobjs.append(string)
-            else:
-                label += '%s = %s\\n' % (param.name, string)
-
-        for so in simobjs:
-            label += "|<%s> %s" % (so, so)
-            dot.add_edge(pydot.Edge("%s:%s" % (self.path, so), so,
-                                    tailport="w"))
-        label += '}'
-        dot.add_node(pydot.Node(self.path,shape="Mrecord",label=label))
-
-        # recursively dump out children
-        for c in self.children:
-            c.outputDot(dot)
 
 # Function to provide to C++ so it can look up instances based on paths
 def resolveSimObject(name):

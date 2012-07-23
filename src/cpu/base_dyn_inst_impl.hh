@@ -48,7 +48,6 @@
 #include "base/cprintf.hh"
 #include "base/trace.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/base_dyn_inst.hh"
 #include "cpu/exetrace.hh"
 #include "debug/DynInst.hh"
@@ -56,37 +55,17 @@
 #include "mem/request.hh"
 #include "sim/faults.hh"
 
-#define NOHASH
-#ifndef NOHASH
-
-#include "base/hashmap.hh"
-
-unsigned int MyHashFunc(const BaseDynInst *addr)
-{
-    unsigned a = (unsigned)addr;
-    unsigned hash = (((a >> 14) ^ ((a >> 2) & 0xffff))) & 0x7FFFFFFF;
-
-    return hash;
-}
-
-typedef m5::hash_map<const BaseDynInst *, const BaseDynInst *, MyHashFunc>
-my_hash_t;
-
-my_hash_t thishash;
-#endif
-
 template <class Impl>
 BaseDynInst<Impl>::BaseDynInst(StaticInstPtr _staticInst,
                                StaticInstPtr _macroop,
                                TheISA::PCState _pc, TheISA::PCState _predPC,
                                InstSeqNum seq_num, ImplCPU *cpu)
-  : staticInst(_staticInst), macroop(_macroop), traceData(NULL), cpu(cpu)
+  : staticInst(_staticInst), cpu(cpu), traceData(NULL), macroop(_macroop)
 {
     seqNum = seq_num;
 
     pc = _pc;
     predPC = _predPC;
-    predTaken = false;
 
     initVars();
 }
@@ -94,7 +73,7 @@ BaseDynInst<Impl>::BaseDynInst(StaticInstPtr _staticInst,
 template <class Impl>
 BaseDynInst<Impl>::BaseDynInst(StaticInstPtr _staticInst,
                                StaticInstPtr _macroop)
-    : staticInst(_staticInst), macroop(_macroop), traceData(NULL)
+    : staticInst(_staticInst), traceData(NULL), macroop(_macroop)
 {
     seqNum = 0;
     initVars();
@@ -106,25 +85,14 @@ BaseDynInst<Impl>::initVars()
 {
     memData = NULL;
     effAddr = 0;
-    effAddrValid = false;
     physEffAddr = 0;
-
-    translationStarted = false;
-    translationCompleted = false;
-    possibleLoadViolation = false;
-    hitExternalSnoop  = false;
-
-    isUncacheable = false;
-    reqMade = false;
     readyRegs = 0;
-
-    recordResult = true;
 
     status.reset();
 
-    eaCalcDone = false;
-    memOpDone = false;
-    predicate = true;
+    instFlags.reset();
+    instFlags[RecordResult] = true;
+    instFlags[Predicate] = true;
 
     lqIdx = -1;
     sqIdx = -1;
@@ -158,9 +126,7 @@ BaseDynInst<Impl>::initVars()
     cpu->snList.insert(seqNum);
 #endif
 
-#if USE_CHECKER
     reqToVerify = NULL;
-#endif
 }
 
 template <class Impl>
@@ -187,10 +153,8 @@ BaseDynInst<Impl>::~BaseDynInst()
     cpu->snList.erase(seqNum);
 #endif
 
-#if USE_CHECKER
     if (reqToVerify)
         delete reqToVerify;
-#endif // USE_CHECKER
 }
 
 #ifdef DEBUG

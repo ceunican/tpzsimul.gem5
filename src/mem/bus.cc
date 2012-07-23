@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -39,6 +39,7 @@
  *
  * Authors: Ali Saidi
  *          Andreas Hansson
+ *          William Wang
  */
 
 /**
@@ -46,18 +47,19 @@
  * Definition of a bus object.
  */
 
+#include "base/intmath.hh"
 #include "base/misc.hh"
 #include "base/trace.hh"
 #include "debug/Bus.hh"
 #include "debug/BusAddrRanges.hh"
-#include "debug/MMU.hh"
 #include "mem/bus.hh"
 
-Bus::Bus(const BusParams *p)
-    : MemObject(p), busId(p->bus_id), clock(p->clock),
-      headerCycles(p->header_cycles), width(p->width), tickNextIdle(0),
-      drainEvent(NULL), busIdle(this), inRetry(false), defaultPortId(-1),
-      useDefaultRange(p->use_default_range), defaultBlockSize(p->block_size),
+BaseBus::BaseBus(const BaseBusParams *p)
+    : MemObject(p), clock(p->clock),
+      headerCycles(p->header_cycles), width(p->width),
+      defaultPortID(InvalidPortID),
+      useDefaultRange(p->use_default_range),
+      defaultBlockSize(p->block_size),
       cachedBlockSize(0), cachedBlockSizeValid(false)
 {
     //width, clock period, and header cycles must be positive
@@ -67,79 +69,53 @@ Bus::Bus(const BusParams *p)
         fatal("Bus clock period must be positive\n");
     if (headerCycles <= 0)
         fatal("Number of header cycles must be positive\n");
-    clearPortCache();
 }
 
-Port *
-Bus::getPort(const std::string &if_name, int idx)
+BaseBus::~BaseBus()
 {
-    std::string portName;
-    int id = interfaces.size();
-    if (if_name == "default") {
-        if (defaultPortId == -1) {
-            defaultPortId = id;
-            portName = csprintf("%s-default", name());
-        } else
-            fatal("Default port already set on %s\n", name());
+    for (MasterPortIter m = masterPorts.begin(); m != masterPorts.end();
+         ++m) {
+        delete *m;
+    }
+
+    for (SlavePortIter s = slavePorts.begin(); s != slavePorts.end();
+         ++s) {
+        delete *s;
+    }
+}
+
+MasterPort &
+BaseBus::getMasterPort(const std::string &if_name, int idx)
+{
+    if (if_name == "master" && idx < masterPorts.size()) {
+        // the master port index translates directly to the vector position
+        return *masterPorts[idx];
+    } else  if (if_name == "default") {
+        return *masterPorts[defaultPortID];
     } else {
-        portName = csprintf("%s-p%d", name(), id);
-    }
-    BusPort *bp = new BusPort(portName, this, id);
-    interfaces.push_back(bp);
-    cachedBlockSizeValid = false;
-    return bp;
-}
-
-void
-Bus::init()
-{
-    std::vector<BusPort*>::iterator intIter;
-
-    // iterate over our interfaces and determine which of our neighbours
-    // are snooping and add them as snoopers
-    for (intIter = interfaces.begin(); intIter != interfaces.end();
-         intIter++) {
-        if ((*intIter)->getPeer()->isSnooping()) {
-            DPRINTF(BusAddrRanges, "Adding snooping neighbour %s\n",
-                    (*intIter)->getPeer()->name());
-            snoopPorts.push_back(*intIter);
-        }
+        return MemObject::getMasterPort(if_name, idx);
     }
 }
 
-Bus::BusFreeEvent::BusFreeEvent(Bus *_bus)
-    : bus(_bus)
-{}
-
-void
-Bus::BusFreeEvent::process()
+SlavePort &
+BaseBus::getSlavePort(const std::string &if_name, int idx)
 {
-    bus->recvRetry(-1);
-}
-
-const char *
-Bus::BusFreeEvent::description() const
-{
-    return "bus became available";
+    if (if_name == "slave" && idx < slavePorts.size()) {
+        // the slave port index translates directly to the vector position
+        return *slavePorts[idx];
+    } else {
+        return MemObject::getSlavePort(if_name, idx);
+    }
 }
 
 Tick
-Bus::calcPacketTiming(PacketPtr pkt)
+BaseBus::calcPacketTiming(PacketPtr pkt)
 {
-    // Bring tickNextIdle up to the present tick.
-    // There is some potential ambiguity where a cycle starts, which
-    // might make a difference when devices are acting right around a
-    // cycle boundary. Using a < allows things which happen exactly on
-    // a cycle boundary to take up only the following cycle. Anything
-    // that happens later will have to "wait" for the end of that
-    // cycle, and then start using the bus after that.
-    if (tickNextIdle < curTick()) {
-        tickNextIdle = curTick();
-        if (tickNextIdle % clock != 0)
-            tickNextIdle = curTick() - (curTick() % clock) + clock;
-    }
+    // determine the current time rounded to the closest following
+    // clock edge
+    Tick now = divCeil(curTick(), clock) * clock;
 
-    Tick headerTime = tickNextIdle + headerCycles * clock;
+    Tick headerTime = now + headerCycles * clock;
 
     // The packet will be sent. Figure out how long it occupies the bus, and
     // how much of that time is for the first "word", aka bus width.
@@ -161,153 +137,191 @@ Bus::calcPacketTiming(PacketPtr pkt)
     return headerTime;
 }
 
-void Bus::occupyBus(Tick until)
+template <typename PortClass>
+BaseBus::Layer<PortClass>::Layer(BaseBus& _bus, const std::string& _name,
+                                 Tick _clock) :
+    bus(_bus), _name(_name), state(IDLE), clock(_clock), drainEvent(NULL),
+    releaseEvent(this)
 {
-    if (until == 0) {
-        // shortcut for express snoop packets
-        return;
-    }
-
-    tickNextIdle = until;
-    reschedule(busIdle, tickNextIdle, true);
-
-    DPRINTF(Bus, "The bus is now occupied from tick %d to %d\n",
-            curTick(), tickNextIdle);
 }
 
-/** Function called by the port when the bus is receiving a Timing
- * transaction.*/
-bool
-Bus::recvTiming(PacketPtr pkt)
+template <typename PortClass>
+void BaseBus::Layer<PortClass>::occupyLayer(Tick until)
 {
-    short src = pkt->getSrc();
+    // ensure the state is busy or in retry and never idle at this
+    // point, as the bus should transition from idle as soon as it has
+    // decided to forward the packet to prevent any follow-on calls to
+    // sendTiming seeing an unoccupied bus
+    assert(state != IDLE);
 
-    BusPort *src_port = interfaces[src];
+    // note that we do not change the bus state here, if we are going
+    // from idle to busy it is handled by tryTiming, and if we
+    // are in retry we should remain in retry such that
+    // succeededTiming still sees the accurate state
 
-    // If the bus is busy, or other devices are in line ahead of the current
-    // one, put this device on the retry list.
-    if (!pkt->isExpressSnoop() &&
-        (tickNextIdle > curTick() ||
-         (retryList.size() && (!inRetry || src_port != retryList.front()))))
-    {
-        addToRetryList(src_port);
-        DPRINTF(Bus, "recvTiming: src %d dst %d %s 0x%x BUSY\n",
-                src, pkt->getDest(), pkt->cmdString(), pkt->getAddr());
+    // until should never be 0 as express snoops never occupy the bus
+    assert(until != 0);
+    bus.schedule(releaseEvent, until);
+
+    DPRINTF(BaseBus, "The bus is now busy from tick %d to %d\n",
+            curTick(), until);
+}
+
+template <typename PortClass>
+bool
+BaseBus::Layer<PortClass>::tryTiming(PortClass* port)
+{
+    // first we see if the bus is busy, next we check if we are in a
+    // retry with a port other than the current one
+    if (state == BUSY || (state == RETRY && port != retryList.front())) {
+        // put the port at the end of the retry list
+        retryList.push_back(port);
         return false;
     }
 
-    DPRINTF(Bus, "recvTiming: src %d dst %d %s 0x%x\n",
-            src, pkt->getDest(), pkt->cmdString(), pkt->getAddr());
+    // update the state which is shared for request, response and
+    // snoop responses, if we were idle we are now busy, if we are in
+    // a retry, then do not change
+    if (state == IDLE)
+        state = BUSY;
 
-    Tick headerFinishTime = pkt->isExpressSnoop() ? 0 : calcPacketTiming(pkt);
-    Tick packetFinishTime = pkt->isExpressSnoop() ? 0 : pkt->finishTime;
-
-    short dest = pkt->getDest();
-    int dest_port_id;
-    Port *dest_port;
-
-    if (dest == Packet::Broadcast) {
-        dest_port_id = findPort(pkt->getAddr());
-        dest_port = interfaces[dest_port_id];
-        SnoopIter s_end = snoopPorts.end();
-        for (SnoopIter s_iter = snoopPorts.begin(); s_iter != s_end; s_iter++) {
-            BusPort *p = *s_iter;
-            if (p != dest_port && p != src_port) {
-                // cache is not allowed to refuse snoop
-                bool success M5_VAR_USED = p->sendTiming(pkt);
-                assert(success);
-            }
-        }
-    } else {
-        assert(dest < interfaces.size());
-        assert(dest != src); // catch infinite loops
-        dest_port_id = dest;
-        dest_port = interfaces[dest_port_id];
-    }
-
-    if (dest_port_id == src) {
-        // Must be forwarded snoop up from below...
-        assert(dest == Packet::Broadcast);
-    } else {
-        // send to actual target
-        if (!dest_port->sendTiming(pkt))  {
-            // Packet not successfully sent. Leave or put it on the retry list.
-            // illegal to block responses... can lead to deadlock
-            assert(!pkt->isResponse());
-            // It's also illegal to force a transaction to retry after
-            // someone else has committed to respond.
-            assert(!pkt->memInhibitAsserted());
-            DPRINTF(Bus, "recvTiming: src %d dst %d %s 0x%x TGT RETRY\n",
-                    src, pkt->getDest(), pkt->cmdString(), pkt->getAddr());
-            addToRetryList(src_port);
-            occupyBus(headerFinishTime);
-            return false;
-        }
-        // send OK, fall through... pkt may have been deleted by
-        // target at this point, so it should *not* be referenced
-        // again.  We'll set it to NULL here just to be safe.
-        pkt = NULL;
-    }
-
-    occupyBus(packetFinishTime);
-
-    // Packet was successfully sent.
-    // Also take care of retries
-    if (inRetry) {
-        DPRINTF(Bus, "Remove retry from list %d\n", src);
-        retryList.front()->onRetryList(false);
-        retryList.pop_front();
-        inRetry = false;
-    }
     return true;
 }
 
+template <typename PortClass>
 void
-Bus::recvRetry(int id)
+BaseBus::Layer<PortClass>::succeededTiming(Tick busy_time)
 {
-    // If there's anything waiting, and the bus isn't busy...
-    if (retryList.size() && curTick() >= tickNextIdle) {
-        //retryingPort = retryList.front();
-        inRetry = true;
-        DPRINTF(Bus, "Sending a retry to %s\n", retryList.front()->getPeer()->name());
-        retryList.front()->sendRetry();
-        // If inRetry is still true, sendTiming wasn't called
-        if (inRetry)
-        {
-            retryList.front()->onRetryList(false);
-            retryList.pop_front();
-            inRetry = false;
-
-            //Bring tickNextIdle up to the present
-            while (tickNextIdle < curTick())
-                tickNextIdle += clock;
-
-            //Burn a cycle for the missed grant.
-            tickNextIdle += clock;
-
-            reschedule(busIdle, tickNextIdle, true);
-        }
+    // if a retrying port succeeded, also take it off the retry list
+    if (state == RETRY) {
+        DPRINTF(BaseBus, "Remove retry from list %s\n",
+                retryList.front()->name());
+        retryList.pop_front();
+        state = BUSY;
     }
-    //If we weren't able to drain before, we might be able to now.
-    if (drainEvent && retryList.size() == 0 && curTick() >= tickNextIdle) {
+
+    // we should either have gone from idle to busy in the
+    // tryTiming test, or just gone from a retry to busy
+    assert(state == BUSY);
+
+    // occupy the bus accordingly
+    occupyLayer(busy_time);
+}
+
+template <typename PortClass>
+void
+BaseBus::Layer<PortClass>::failedTiming(PortClass* port, Tick busy_time)
+{
+    // if we are not in a retry, i.e. busy (but never idle), or we are
+    // in a retry but not for the current port, then add the port at
+    // the end of the retry list
+    if (state != RETRY || port != retryList.front()) {
+        retryList.push_back(port);
+    }
+
+    // even if we retried the current one and did not succeed,
+    // we are no longer retrying but instead busy
+    state = BUSY;
+
+    // occupy the bus accordingly
+    occupyLayer(busy_time);
+}
+
+template <typename PortClass>
+void
+BaseBus::Layer<PortClass>::releaseLayer()
+{
+    // releasing the bus means we should now be idle
+    assert(state == BUSY);
+    assert(!releaseEvent.scheduled());
+
+    // update the state
+    state = IDLE;
+
+    // bus is now idle, so if someone is waiting we can retry
+    if (!retryList.empty()) {
+        // note that we block (return false on recvTiming) both
+        // because the bus is busy and because the destination is
+        // busy, and in the latter case the bus may be released before
+        // we see a retry from the destination
+        retryWaiting();
+    } else if (drainEvent) {
+        //If we weren't able to drain before, do it now.
         drainEvent->process();
         // Clear the drain event once we're done with it.
         drainEvent = NULL;
     }
 }
 
-int
-Bus::findPort(Addr addr)
+template <typename PortClass>
+void
+BaseBus::Layer<PortClass>::retryWaiting()
+{
+    // this should never be called with an empty retry list
+    assert(!retryList.empty());
+
+    // we always go to retrying from idle
+    assert(state == IDLE);
+
+    // update the state which is shared for request, response and
+    // snoop responses
+    state = RETRY;
+
+    // note that we might have blocked on the receiving port being
+    // busy (rather than the bus itself) and now call retry before the
+    // destination called retry on the bus
+    retryList.front()->sendRetry();
+
+    // If the bus is still in the retry state, sendTiming wasn't
+    // called in zero time (e.g. the cache does this)
+    if (state == RETRY) {
+        retryList.pop_front();
+
+        //Burn a cycle for the missed grant.
+
+        // update the state which is shared for request, response and
+        // snoop responses
+        state = BUSY;
+
+        // determine the current time rounded to the closest following
+        // clock edge
+        Tick now = divCeil(curTick(), clock) * clock;
+
+        occupyLayer(now + clock);
+    }
+}
+
+template <typename PortClass>
+void
+BaseBus::Layer<PortClass>::recvRetry()
+{
+    // we got a retry from a peer that we tried to send something to
+    // and failed, but we sent it on the account of someone else, and
+    // that source port should be on our retry list, however if the
+    // bus layer is released before this happens and the retry (from
+    // the bus point of view) is successful then this no longer holds
+    // and we could in fact have an empty retry list
+    if (retryList.empty())
+        return;
+
+    // if the bus layer is idle
+    if (state == IDLE) {
+        // note that we do not care who told us to retry at the moment, we
+        // merely let the first one on the retry list go
+        retryWaiting();
+    }
+}
+
+PortID
+BaseBus::findPort(Addr addr)
 {
     /* An interval tree would be a better way to do this. --ali. */
-    int dest_id;
-
-    dest_id = checkPortCache(addr);
-    if (dest_id != -1)
+    PortID dest_id = checkPortCache(addr);
+    if (dest_id != InvalidPortID)
         return dest_id;
 
     // Check normal port ranges
-    PortIter i = portMap.find(RangeSize(addr,1));
+    PortMapConstIter i = portMap.find(RangeSize(addr,1));
     if (i != portMap.end()) {
         dest_id = i->second;
         updatePortCache(dest_id, i->first.start, i->first.end);
@@ -316,152 +330,48 @@ Bus::findPort(Addr addr)
 
     // Check if this matches the default range
     if (useDefaultRange) {
-        AddrRangeIter a_end = defaultRange.end();
-        for (AddrRangeIter i = defaultRange.begin(); i != a_end; i++) {
+        AddrRangeConstIter a_end = defaultRange.end();
+        for (AddrRangeConstIter i = defaultRange.begin(); i != a_end; i++) {
             if (*i == addr) {
-                DPRINTF(Bus, "  found addr %#llx on default\n", addr);
-                return defaultPortId;
+                DPRINTF(BusAddrRanges, "  found addr %#llx on default\n",
+                        addr);
+                return defaultPortID;
             }
         }
-
-        panic("Unable to find destination for addr %#llx\n", addr);
+    } else if (defaultPortID != InvalidPortID) {
+        DPRINTF(BusAddrRanges, "Unable to find destination for addr %#llx, "
+                "will use default port\n", addr);
+        return defaultPortID;
     }
 
-    DPRINTF(Bus, "Unable to find destination for addr %#llx, "
-            "will use default port\n", addr);
-    return defaultPortId;
-}
-
-
-/** Function called by the port when the bus is receiving a Atomic
- * transaction.*/
-Tick
-Bus::recvAtomic(PacketPtr pkt)
-{
-    DPRINTF(Bus, "recvAtomic: packet src %d dest %d addr 0x%x cmd %s\n",
-            pkt->getSrc(), pkt->getDest(), pkt->getAddr(), pkt->cmdString());
-    assert(pkt->getDest() == Packet::Broadcast);
-    assert(pkt->isRequest());
-
-    // Variables for recording original command and snoop response (if
-    // any)... if a snooper respondes, we will need to restore
-    // original command so that additional snoops can take place
-    // properly
-    MemCmd orig_cmd = pkt->cmd;
-    MemCmd snoop_response_cmd = MemCmd::InvalidCmd;
-    Tick snoop_response_latency = 0;
-    int orig_src = pkt->getSrc();
-
-    int target_port_id = findPort(pkt->getAddr());
-    BusPort *target_port = interfaces[target_port_id];
-
-    SnoopIter s_end = snoopPorts.end();
-    for (SnoopIter s_iter = snoopPorts.begin(); s_iter != s_end; s_iter++) {
-        BusPort *p = *s_iter;
-        // same port should not have both target addresses and snooping
-        assert(p != target_port);
-        if (p->getId() != pkt->getSrc()) {
-            Tick latency = p->sendAtomic(pkt);
-            if (pkt->isResponse()) {
-                // response from snoop agent
-                assert(pkt->cmd != orig_cmd);
-                assert(pkt->memInhibitAsserted());
-                // should only happen once
-                assert(snoop_response_cmd == MemCmd::InvalidCmd);
-                // save response state
-                snoop_response_cmd = pkt->cmd;
-                snoop_response_latency = latency;
-                // restore original packet state for remaining snoopers
-                pkt->cmd = orig_cmd;
-                pkt->setSrc(orig_src);
-                pkt->setDest(Packet::Broadcast);
-            }
-        }
-    }
-
-    Tick response_latency = 0;
-
-    // we can get requests sent up from the memory side of the bus for
-    // snooping... don't send them back down!
-    if (target_port_id != pkt->getSrc()) {
-        response_latency = target_port->sendAtomic(pkt);
-    }
-
-    // if we got a response from a snooper, restore it here
-    if (snoop_response_cmd != MemCmd::InvalidCmd) {
-        // no one else should have responded
-        assert(!pkt->isResponse());
-        assert(pkt->cmd == orig_cmd);
-        pkt->cmd = snoop_response_cmd;
-        response_latency = snoop_response_latency;
-    }
-
-    // why do we have this packet field and the return value both???
-    pkt->finishTime = curTick() + response_latency;
-    return response_latency;
-}
-
-/** Function called by the port when the bus is receiving a Functional
- * transaction.*/
-void
-Bus::recvFunctional(PacketPtr pkt)
-{
-    assert(pkt->getDest() == Packet::Broadcast);
-
-    int port_id = findPort(pkt->getAddr());
-    Port *port = interfaces[port_id];
-    // The packet may be changed by another bus on snoops, restore the
-    // id after each
-    int src_id = pkt->getSrc();
-
-    if (!pkt->isPrint()) {
-        // don't do DPRINTFs on PrintReq as it clutters up the output
-        DPRINTF(Bus,
-                "recvFunctional: packet src %d dest %d addr 0x%x cmd %s\n",
-                src_id, port_id, pkt->getAddr(),
-                pkt->cmdString());
-    }
-
-    assert(pkt->isRequest()); // hasn't already been satisfied
-
-    SnoopIter s_end = snoopPorts.end();
-    for (SnoopIter s_iter = snoopPorts.begin(); s_iter != s_end; s_iter++) {
-        BusPort *p = *s_iter;
-        if (p != port && p->getId() != src_id) {
-            p->sendFunctional(pkt);
-        }
-        if (pkt->isResponse()) {
-            break;
-        }
-        pkt->setSrc(src_id);
-    }
-
-    // If the snooping hasn't found what we were looking for and it is not
-    // a forwarded snoop from below, keep going.
-    if (!pkt->isResponse() && port_id != pkt->getSrc()) {
-        port->sendFunctional(pkt);
-    }
+    // we should use the range for the default port and it did not
+    // match, or the default port is not set
+    fatal("Unable to find destination for addr %#llx on bus %s\n", addr,
+          name());
 }
 
 /** Function called by the port when the bus is receiving a range change.*/
 void
-Bus::recvRangeChange(int id)
+BaseBus::recvRangeChange(PortID master_port_id)
 {
     AddrRangeList ranges;
     AddrRangeIter iter;
 
-    if (inRecvRangeChange.count(id))
+    if (inRecvRangeChange.count(master_port_id))
         return;
-    inRecvRangeChange.insert(id);
+    inRecvRangeChange.insert(master_port_id);
 
-    DPRINTF(BusAddrRanges, "received RangeChange from device id %d\n", id);
+    DPRINTF(BusAddrRanges, "received RangeChange from device id %d\n",
+            master_port_id);
 
     clearPortCache();
-    if (id == defaultPortId) {
+    if (master_port_id == defaultPortID) {
         defaultRange.clear();
         // Only try to update these ranges if the user set a default responder.
         if (useDefaultRange) {
-            AddrRangeList ranges = interfaces[id]->getPeer()->getAddrRanges();
+            // get the address ranges of the connected slave port
+            AddrRangeList ranges =
+                masterPorts[master_port_id]->getAddrRanges();
             for(iter = ranges.begin(); iter != ranges.end(); iter++) {
                 defaultRange.push_back(*iter);
                 DPRINTF(BusAddrRanges, "Adding range %#llx - %#llx for default range\n",
@@ -470,61 +380,61 @@ Bus::recvRangeChange(int id)
         }
     } else {
 
-        assert(id < interfaces.size() && id >= 0);
-        BusPort *port = interfaces[id];
+        assert(master_port_id < masterPorts.size() && master_port_id >= 0);
+        MasterPort *port = masterPorts[master_port_id];
 
         // Clean out any previously existent ids
-        for (PortIter portIter = portMap.begin();
+        for (PortMapIter portIter = portMap.begin();
              portIter != portMap.end(); ) {
-            if (portIter->second == id)
+            if (portIter->second == master_port_id)
                 portMap.erase(portIter++);
             else
                 portIter++;
         }
 
-        ranges = port->getPeer()->getAddrRanges();
+        // get the address ranges of the connected slave port
+        ranges = port->getAddrRanges();
 
         for (iter = ranges.begin(); iter != ranges.end(); iter++) {
             DPRINTF(BusAddrRanges, "Adding range %#llx - %#llx for id %d\n",
-                    iter->start, iter->end, id);
-            if (portMap.insert(*iter, id) == portMap.end()) {
-                int conflict_id = portMap.find(*iter)->second;
+                    iter->start, iter->end, master_port_id);
+            if (portMap.insert(*iter, master_port_id) == portMap.end()) {
+                PortID conflict_id = portMap.find(*iter)->second;
                 fatal("%s has two ports with same range:\n\t%s\n\t%s\n",
-                      name(), interfaces[id]->getPeer()->name(),
-                      interfaces[conflict_id]->getPeer()->name());
+                      name(),
+                      masterPorts[master_port_id]->getSlavePort().name(),
+                      masterPorts[conflict_id]->getSlavePort().name());
             }
         }
     }
-    DPRINTF(MMU, "port list has %d entries\n", portMap.size());
+    DPRINTF(BusAddrRanges, "port list has %d entries\n", portMap.size());
 
-    // tell all our peers that our address range has changed.
-    // Don't tell the device that caused this change, it already knows
-    std::vector<BusPort*>::const_iterator intIter;
+    // tell all our neighbouring master ports that our address range
+    // has changed
+    for (SlavePortConstIter p = slavePorts.begin(); p != slavePorts.end();
+         ++p)
+        (*p)->sendRangeChange();
 
-    for (intIter = interfaces.begin(); intIter != interfaces.end(); intIter++)
-        if ((*intIter)->getId() != id)
-            (*intIter)->sendRangeChange();
-
-    inRecvRangeChange.erase(id);
+    inRecvRangeChange.erase(master_port_id);
 }
 
 AddrRangeList
-Bus::getAddrRanges(int id)
+BaseBus::getAddrRanges() const
 {
     AddrRangeList ranges;
 
     DPRINTF(BusAddrRanges, "received address range request, returning:\n");
 
-    for (AddrRangeIter dflt_iter = defaultRange.begin();
+    for (AddrRangeConstIter dflt_iter = defaultRange.begin();
          dflt_iter != defaultRange.end(); dflt_iter++) {
         ranges.push_back(*dflt_iter);
         DPRINTF(BusAddrRanges, "  -- Dflt: %#llx : %#llx\n",dflt_iter->start,
                 dflt_iter->end);
     }
-    for (PortIter portIter = portMap.begin();
+    for (PortMapConstIter portIter = portMap.begin();
          portIter != portMap.end(); portIter++) {
         bool subset = false;
-        for (AddrRangeIter dflt_iter = defaultRange.begin();
+        for (AddrRangeConstIter dflt_iter = defaultRange.begin();
              dflt_iter != defaultRange.end(); dflt_iter++) {
             if ((portIter->first.start < dflt_iter->start &&
                 portIter->first.end >= dflt_iter->start) ||
@@ -539,7 +449,7 @@ Bus::getAddrRanges(int id)
                     portIter->first.start, portIter->first.end);
             }
         }
-        if (portIter->second != id && !subset) {
+        if (!subset) {
             ranges.push_back(portIter->first);
             DPRINTF(BusAddrRanges, "  -- %#llx : %#llx\n",
                     portIter->first.start, portIter->first.end);
@@ -549,39 +459,24 @@ Bus::getAddrRanges(int id)
     return ranges;
 }
 
-bool
-Bus::isSnooping(int id)
-{
-    // in essence, answer the question if there are other snooping
-    // ports rather than the port that is asking
-    bool snoop = false;
-    for (SnoopIter s_iter = snoopPorts.begin(); s_iter != snoopPorts.end();
-         s_iter++) {
-        if ((*s_iter)->getId() != id) {
-            snoop = true;
-            break;
-        }
-    }
-    return snoop;
-}
-
 unsigned
-Bus::findBlockSize(int id)
+BaseBus::findBlockSize()
 {
     if (cachedBlockSizeValid)
         return cachedBlockSize;
 
     unsigned max_bs = 0;
 
-    PortIter p_end = portMap.end();
-    for (PortIter p_iter = portMap.begin(); p_iter != p_end; p_iter++) {
-        unsigned tmp_bs = interfaces[p_iter->second]->peerBlockSize();
+    for (MasterPortConstIter m = masterPorts.begin(); m != masterPorts.end();
+         ++m) {
+        unsigned tmp_bs = (*m)->peerBlockSize();
         if (tmp_bs > max_bs)
             max_bs = tmp_bs;
     }
-    SnoopIter s_end = snoopPorts.end();
-    for (SnoopIter s_iter = snoopPorts.begin(); s_iter != s_end; s_iter++) {
-        unsigned tmp_bs = (*s_iter)->peerBlockSize();
+
+    for (SlavePortConstIter s = slavePorts.begin(); s != slavePorts.end();
+         ++s) {
+        unsigned tmp_bs = (*s)->peerBlockSize();
         if (tmp_bs > max_bs)
             max_bs = tmp_bs;
     }
@@ -595,29 +490,24 @@ Bus::findBlockSize(int id)
     return max_bs;
 }
 
-
+template <typename PortClass>
 unsigned int
-Bus::drain(Event * de)
+BaseBus::Layer<PortClass>::drain(Event * de)
 {
     //We should check that we're not "doing" anything, and that noone is
     //waiting. We might be idle but have someone waiting if the device we
     //contacted for a retry didn't actually retry.
-    if (retryList.size() || (curTick() < tickNextIdle && busIdle.scheduled())) {
+    if (!retryList.empty() || state != IDLE) {
         drainEvent = de;
         return 1;
     }
     return 0;
 }
 
-void
-Bus::startup()
-{
-    if (tickNextIdle < curTick())
-        tickNextIdle = (curTick() / clock) * clock + clock;
-}
-
-Bus *
-BusParams::create()
-{
-    return new Bus(this);
-}
+/**
+ * Bus layer template instantiations. Could be removed with _impl.hh
+ * file, but since there are only two given options (MasterPort and
+ * SlavePort) it seems a bit excessive at this point.
+ */
+template class BaseBus::Layer<SlavePort>;
+template class BaseBus::Layer<MasterPort>;

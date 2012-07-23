@@ -52,6 +52,7 @@
 #include "cpu/static_inst.hh"
 #include "cpu/thread_context.hh"
 #include "params/CheckerCPU.hh"
+#include "sim/full_system.hh"
 #include "sim/tlb.hh"
 
 using namespace std;
@@ -60,10 +61,11 @@ using namespace TheISA;
 void
 CheckerCPU::init()
 {
+    masterId = systemPtr->getMasterId(name());
 }
 
 CheckerCPU::CheckerCPU(Params *p)
-    : BaseCPU(p), thread(NULL), tc(NULL)
+    : BaseCPU(p, true), thread(NULL), tc(NULL)
 {
     memReq = NULL;
     curStaticInst = NULL;
@@ -83,11 +85,7 @@ CheckerCPU::CheckerCPU(Params *p)
     dtb = p->dtb;
     systemPtr = NULL;
     workload = p->workload;
-    // XXX: This is a hack to get this to work some
-    thread = new SimpleThread(this, /* thread_num */ 0, workload[0], itb, dtb);
-
-    tc = thread->getTC();
-    threadContexts.push_back(tc);
+    thread = NULL;
 
     updateOnError = true;
 }
@@ -101,22 +99,29 @@ CheckerCPU::setSystem(System *system)
 {
     systemPtr = system;
 
-    thread = new SimpleThread(this, 0, systemPtr, itb, dtb, false);
+    if (FullSystem) {
+        thread = new SimpleThread(this, 0, systemPtr, itb, dtb, false);
+    } else {
+        thread = new SimpleThread(this, 0, systemPtr,
+                                  workload.size() ? workload[0] : NULL,
+                                  itb, dtb);
+    }
 
     tc = thread->getTC();
     threadContexts.push_back(tc);
-    delete thread->kernelStats;
     thread->kernelStats = NULL;
+    // Thread should never be null after this
+    assert(thread != NULL);
 }
 
 void
-CheckerCPU::setIcachePort(Port *icache_port)
+CheckerCPU::setIcachePort(CpuPort *icache_port)
 {
     icachePort = icache_port;
 }
 
 void
-CheckerCPU::setDcachePort(Port *dcache_port)
+CheckerCPU::setDcachePort(CpuPort *dcache_port)
 {
     dcachePort = dcache_port;
 }
@@ -149,7 +154,7 @@ CheckerCPU::readMem(Addr addr, uint8_t *data, unsigned size, unsigned flags)
     // Need to account for multiple accesses like the Atomic and TimingSimple
     while (1) {
         memReq = new Request();
-        memReq->setVirt(0, addr, size, flags, thread->pcState().instAddr());
+        memReq->setVirt(0, addr, size, flags, masterId, thread->pcState().instAddr());
 
         // translate to physical address
         fault = dtb->translateFunctional(memReq, tc, BaseTLB::Read);
@@ -165,9 +170,9 @@ CheckerCPU::readMem(Addr addr, uint8_t *data, unsigned size, unsigned flags)
         if (fault == NoFault &&
             !memReq->getFlags().isSet(Request::NO_ACCESS)) {
             PacketPtr pkt = new Packet(memReq,
-                              memReq->isLLSC() ?
-                              MemCmd::LoadLockedReq : MemCmd::ReadReq,
-                              Packet::Broadcast);
+                                       memReq->isLLSC() ?
+                                       MemCmd::LoadLockedReq :
+                                       MemCmd::ReadReq);
 
             pkt->dataStatic(data);
 
@@ -240,7 +245,7 @@ CheckerCPU::writeMem(uint8_t *data, unsigned size,
     // Need to account for a multiple access like Atomic and Timing CPUs
     while (1) {
         memReq = new Request();
-        memReq->setVirt(0, addr, size, flags, thread->pcState().instAddr());
+        memReq->setVirt(0, addr, size, flags, masterId, thread->pcState().instAddr());
 
         // translate to physical address
         fault = dtb->translateFunctional(memReq, tc, BaseTLB::Write);
@@ -259,13 +264,14 @@ CheckerCPU::writeMem(uint8_t *data, unsigned size,
          * enabled.  This is left as future work for the Checker: LSQ snooping
          * and memory validation after stores have committed.
          */
+        bool was_prefetch = memReq->isPrefetch();
 
         delete memReq;
 
         //If we don't need to access a second cache line, stop now.
         if (fault != NoFault || secondAddr <= addr)
         {
-            if (fault != NoFault && memReq->isPrefetch()) {
+            if (fault != NoFault && was_prefetch) {
               fault = NoFault;
             }
             break;

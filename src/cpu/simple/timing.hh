@@ -153,20 +153,24 @@ class TimingSimpleCPU : public BaseSimpleCPU
 
       protected:
 
+        /**
+         * Snooping a coherence request, do nothing.
+         */
+        virtual void recvTimingSnoopReq(PacketPtr pkt) { }
+
         TimingSimpleCPU* cpu;
 
         struct TickEvent : public Event
         {
             PacketPtr pkt;
             TimingSimpleCPU *cpu;
-            CpuPort *port;
 
             TickEvent(TimingSimpleCPU *_cpu) : pkt(NULL), cpu(_cpu) {}
             const char *description() const { return "Timing CPU tick"; }
             void schedule(PacketPtr _pkt, Tick t);
         };
 
-        EventWrapper<Port, &Port::sendRetry> retryEvent;
+        EventWrapper<MasterPort, &MasterPort::sendRetry> retryEvent;
     };
 
     class IcachePort : public TimingCPUPort
@@ -174,13 +178,13 @@ class TimingSimpleCPU : public BaseSimpleCPU
       public:
 
         IcachePort(TimingSimpleCPU *_cpu)
-            : TimingCPUPort(_cpu->name() + "-iport", _cpu),
+            : TimingCPUPort(_cpu->name() + ".icache_port", _cpu),
               tickEvent(_cpu)
         { }
 
       protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
 
         virtual void recvRetry();
 
@@ -202,12 +206,13 @@ class TimingSimpleCPU : public BaseSimpleCPU
       public:
 
         DcachePort(TimingSimpleCPU *_cpu)
-            : TimingCPUPort(_cpu->name() + "-dport", _cpu), tickEvent(_cpu)
+            : TimingCPUPort(_cpu->name() + ".dcache_port", _cpu),
+              tickEvent(_cpu)
         { }
 
       protected:
 
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
 
         virtual void recvRetry();
 
@@ -231,9 +236,15 @@ class TimingSimpleCPU : public BaseSimpleCPU
 
     Tick previousTick;
 
-  public:
+  protected:
 
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+     /** Return a reference to the data port. */
+    virtual CpuPort &getDataPort() { return dcachePort; }
+
+    /** Return a reference to the instruction port. */
+    virtual CpuPort &getInstPort() { return icachePort; }
+
+  public:
 
     virtual void serialize(std::ostream &os);
     virtual void unserialize(Checkpoint *cp, const std::string &section);

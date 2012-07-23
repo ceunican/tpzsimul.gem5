@@ -430,7 +430,7 @@ class IGbE : public EtherDevice
         Addr tsoMss;
         Addr tsoTotalLen;
         Addr tsoUsedLen;
-        Addr tsoPrevSeq;;
+        Addr tsoPrevSeq;
         Addr tsoPktPayloadBytes;
         bool tsoLoadedHeader;
         bool tsoPktHasHeader;
@@ -518,7 +518,7 @@ class IGbE : public EtherDevice
     }
 
     IGbE(const Params *params);
-    ~IGbE() {}
+    ~IGbE();
     virtual void init();
 
     virtual EtherInt *getEthPort(const std::string &if_name, int idx);

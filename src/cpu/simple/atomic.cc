@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2002-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -39,6 +51,7 @@
 #include "debug/SimpleCPU.hh"
 #include "mem/packet.hh"
 #include "mem/packet_access.hh"
+#include "mem/physical.hh"
 #include "params/AtomicSimpleCPU.hh"
 #include "sim/faults.hh"
 #include "sim/system.hh"
@@ -65,26 +78,15 @@ AtomicSimpleCPU::TickEvent::description() const
     return "AtomicSimpleCPU tick";
 }
 
-Port *
-AtomicSimpleCPU::getPort(const string &if_name, int idx)
-{
-    if (if_name == "dcache_port")
-        return &dcachePort;
-    else if (if_name == "icache_port")
-        return &icachePort;
-    else if (if_name == "physmem_port") {
-        hasPhysMemPort = true;
-        return &physmemPort;
-    }
-    else
-        panic("No Such Port\n");
-}
-
 void
 AtomicSimpleCPU::init()
 {
     BaseCPU::init();
-    if (FullSystem) {
+
+    // Initialise the ThreadContext's memory proxies
+    tcBase()->initMemProxies(tcBase());
+
+    if (FullSystem && !params()->defer_registration) {
         ThreadID size = threadContexts.size();
         for (ThreadID i = 0; i < size; ++i) {
             ThreadContext *tc = threadContexts[i];
@@ -93,13 +95,6 @@ AtomicSimpleCPU::init()
         }
     }
 
-    // Initialise the ThreadContext's memory proxies
-    tcBase()->initMemProxies(tcBase());
-
-    if (hasPhysMemPort) {
-        AddrRangeList pmAddrList = physmemPort.getPeer()->getAddrRanges();
-        physMemAddr = *pmAddrList.begin();
-    }
     // Atomic doesn't do MT right now, so contextId == threadId
     ifetch_req.setThreadContext(_cpuId, 0); // Add thread ID if we add MT
     data_read_req.setThreadContext(_cpuId, 0); // Add thread ID here too
@@ -110,8 +105,9 @@ AtomicSimpleCPU::AtomicSimpleCPU(AtomicSimpleCPUParams *p)
     : BaseSimpleCPU(p), tickEvent(this), width(p->width), locked(false),
       simulate_data_stalls(p->simulate_data_stalls),
       simulate_inst_stalls(p->simulate_inst_stalls),
-      icachePort(name() + "-iport", this), dcachePort(name() + "-iport", this),
-      physmemPort(name() + "-iport", this), hasPhysMemPort(false)
+      icachePort(name() + ".icache_port", this),
+      dcachePort(name() + ".dcache_port", this),
+      fastmem(p->fastmem)
 {
     _status = Idle;
 }
@@ -269,7 +265,7 @@ AtomicSimpleCPU::readMem(Addr addr, uint8_t * data,
     dcache_latency = 0;
 
     while (1) {
-        req->setVirt(0, addr, size, flags, thread->pcState().instAddr());
+        req->setVirt(0, addr, size, flags, dataMasterId(), thread->pcState().instAddr());
 
         // translate to physical address
         Fault fault = thread->dtb->translateAtomic(req, tc, BaseTLB::Read);
@@ -277,15 +273,15 @@ AtomicSimpleCPU::readMem(Addr addr, uint8_t * data,
         // Now do the access.
         if (fault == NoFault && !req->getFlags().isSet(Request::NO_ACCESS)) {
             Packet pkt = Packet(req,
-                    req->isLLSC() ? MemCmd::LoadLockedReq : MemCmd::ReadReq,
-                    Packet::Broadcast);
+                                req->isLLSC() ? MemCmd::LoadLockedReq :
+                                MemCmd::ReadReq);
             pkt.dataStatic(data);
 
             if (req->isMmappedIpr())
                 dcache_latency += TheISA::handleIprRead(thread->getTC(), &pkt);
             else {
-                if (hasPhysMemPort && pkt.getAddr() == physMemAddr)
-                    dcache_latency += physmemPort.sendAtomic(&pkt);
+                if (fastmem && system->isMemAddr(pkt.getAddr()))
+                    system->getPhysMem().access(&pkt);
                 else
                     dcache_latency += dcachePort.sendAtomic(&pkt);
             }
@@ -357,7 +353,7 @@ AtomicSimpleCPU::writeMem(uint8_t *data, unsigned size,
     dcache_latency = 0;
 
     while(1) {
-        req->setVirt(0, addr, size, flags, thread->pcState().instAddr());
+        req->setVirt(0, addr, size, flags, dataMasterId(), thread->pcState().instAddr());
 
         // translate to physical address
         Fault fault = thread->dtb->translateAtomic(req, tc, BaseTLB::Write);
@@ -379,15 +375,15 @@ AtomicSimpleCPU::writeMem(uint8_t *data, unsigned size,
             }
 
             if (do_access && !req->getFlags().isSet(Request::NO_ACCESS)) {
-                Packet pkt = Packet(req, cmd, Packet::Broadcast);
+                Packet pkt = Packet(req, cmd);
                 pkt.dataStatic(data);
 
                 if (req->isMmappedIpr()) {
                     dcache_latency +=
                         TheISA::handleIprWrite(thread->getTC(), &pkt);
                 } else {
-                    if (hasPhysMemPort && pkt.getAddr() == physMemAddr)
-                        dcache_latency += physmemPort.sendAtomic(&pkt);
+                    if (fastmem && system->isMemAddr(pkt.getAddr()))
+                        system->getPhysMem().access(&pkt);
                     else
                         dcache_latency += dcachePort.sendAtomic(&pkt);
                 }
@@ -470,20 +466,19 @@ AtomicSimpleCPU::tick()
             dcache_access = false; // assume no dcache access
 
             if (needToFetch) {
-                // This is commented out because the predecoder would act like
+                // This is commented out because the decoder would act like
                 // a tiny cache otherwise. It wouldn't be flushed when needed
                 // like the I cache. It should be flushed, and when that works
                 // this code should be uncommented.
                 //Fetch more instruction memory if necessary
-                //if(predecoder.needMoreBytes())
+                //if(decoder.needMoreBytes())
                 //{
                     icache_access = true;
-                    Packet ifetch_pkt = Packet(&ifetch_req, MemCmd::ReadReq,
-                                               Packet::Broadcast);
+                    Packet ifetch_pkt = Packet(&ifetch_req, MemCmd::ReadReq);
                     ifetch_pkt.dataStatic(&inst);
 
-                    if (hasPhysMemPort && ifetch_pkt.getAddr() == physMemAddr)
-                        icache_latency = physmemPort.sendAtomic(&ifetch_pkt);
+                    if (fastmem && system->isMemAddr(ifetch_pkt.getAddr()))
+                        system->getPhysMem().access(&ifetch_pkt);
                     else
                         icache_latency = icachePort.sendAtomic(&ifetch_pkt);
 

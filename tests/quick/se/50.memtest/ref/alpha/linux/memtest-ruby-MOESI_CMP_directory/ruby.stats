@@ -1,60 +1,24 @@
-
-================ Begin RubySystem Configuration Print ================
-
-RubySystem config:
-  random_seed: 1234
-  randomization: 0
-  cycle_period: 1
-  block_size_bytes: 64
-  block_size_bits: 6
-  memory_size_bytes: 134217728
-  memory_size_bits: 27
-
-Network Configuration
----------------------
-network: SIMPLE_NETWORK
-topology: 
-
-virtual_net_0: active, unordered
-virtual_net_1: active, unordered
-virtual_net_2: active, unordered
-virtual_net_3: inactive
-virtual_net_4: inactive
-virtual_net_5: inactive
-virtual_net_6: inactive
-virtual_net_7: inactive
-virtual_net_8: inactive
-virtual_net_9: inactive
-
-
-Profiler Configuration
-----------------------
-periodic_stats_period: 1000000
-
-================ End RubySystem Configuration Print ================
-
-
-Real time: Jan/23/2012 04:26:05
+Real time: Jul/10/2012 17:44:07
 
 Profiler Stats
 --------------
-Elapsed_time_in_seconds: 233
-Elapsed_time_in_minutes: 3.88333
-Elapsed_time_in_hours: 0.0647222
-Elapsed_time_in_days: 0.00269676
+Elapsed_time_in_seconds: 384
+Elapsed_time_in_minutes: 6.4
+Elapsed_time_in_hours: 0.106667
+Elapsed_time_in_days: 0.00444444
 
-Virtual_time_in_seconds: 232.61
-Virtual_time_in_minutes: 3.87683
-Virtual_time_in_hours:   0.0646139
-Virtual_time_in_days:    0.00269225
+Virtual_time_in_seconds: 384.6
+Virtual_time_in_minutes: 6.41
+Virtual_time_in_hours:   0.106833
+Virtual_time_in_days:    0.00445139
 
 Ruby_current_time: 19400856
 Ruby_start_time: 0
 Ruby_cycles: 19400856
 
-mbytes_resident: 42.1172
-mbytes_total: 339.848
-resident_ratio: 0.12393
+mbytes_resident: 59.9727
+mbytes_total: 371.66
+resident_ratio: 0.161375
 
 ruby_cycles_executed: [ 19400857 19400857 19400857 19400857 19400857 19400857 19400857 19400857 ]
 
@@ -116,13 +80,13 @@ Total_nonPF_delay_cycles: [binsize: 1 max: 0 count: 0 average: NaN |standard dev
 Resource Usage
 --------------
 page_size: 4096
-user_time: 232
+user_time: 384
 system_time: 0
-page_reclaims: 11111
+page_reclaims: 16520
 page_faults: 0
 swaps: 0
 block_inputs: 0
-block_outputs: 192
+block_outputs: 0
 
 Network Stats
 -------------

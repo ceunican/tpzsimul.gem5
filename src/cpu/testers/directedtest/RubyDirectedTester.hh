@@ -47,30 +47,31 @@ class DirectedGenerator;
 class RubyDirectedTester : public MemObject
 {
   public:
-    class CpuPort : public SimpleTimingPort
+    class CpuPort : public MasterPort
     {
       private:
         RubyDirectedTester *tester;
 
       public:
-        CpuPort(const std::string &_name, RubyDirectedTester *_tester, uint32_t _idx)
-            : SimpleTimingPort(_name, _tester), tester(_tester), idx(_idx)
+        CpuPort(const std::string &_name, RubyDirectedTester *_tester,
+                PortID _id)
+            : MasterPort(_name, _tester, _id), tester(_tester)
         {}
 
-        uint32_t idx;
-
       protected:
-        virtual bool recvTiming(PacketPtr pkt);
-        virtual Tick recvAtomic(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
+        virtual void recvRetry()
+        { panic("%s does not expect a retry\n", name()); }
     };
 
     typedef RubyDirectedTesterParams Params;
     RubyDirectedTester(const Params *p);
     ~RubyDirectedTester();
 
-    virtual Port *getPort(const std::string &if_name, int idx = -1);
+    virtual MasterPort &getMasterPort(const std::string &if_name,
+                                      int idx = -1);
 
-    Port* getCpuPort(int idx);
+    MasterPort* getCpuPort(int idx);
 
     virtual void init();
 
@@ -110,7 +111,7 @@ class RubyDirectedTester : public MemObject
     RubyDirectedTester& operator=(const RubyDirectedTester& obj);
 
     uint64 m_requests_completed;
-    std::vector<CpuPort*> ports;
+    std::vector<MasterPort*> ports;
     uint64 m_requests_to_complete;
     DirectedGenerator* generator;
 };

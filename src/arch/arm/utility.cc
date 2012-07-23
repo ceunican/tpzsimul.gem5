@@ -43,7 +43,8 @@
 #include "arch/arm/tlb.hh"
 #include "arch/arm/utility.hh"
 #include "arch/arm/vtophys.hh"
-#include "config/use_checker.hh"
+#include "cpu/checker/cpu.hh"
+#include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "mem/fs_translating_port_proxy.hh"
 #include "sim/full_system.hh"
@@ -54,9 +55,9 @@ void
 initCPU(ThreadContext *tc, int cpuId)
 {
     // Reset CP15?? What does that mean -- ali
-    
+
     // FPEXC.EN = 0
-    
+
     static Fault reset = new Reset;
     reset->invoke(tc);
 }
@@ -91,18 +92,18 @@ getArgument(ThreadContext *tc, int &number, uint16_t size, bool fp)
         }
     } else {
         Addr sp = tc->readIntReg(StackPointerReg);
-        FSTranslatingPortProxy* vp = tc->getVirtProxy();
+        FSTranslatingPortProxy &vp = tc->getVirtProxy();
         uint64_t arg;
         if (size == sizeof(uint64_t)) {
             // If the argument is even it must be aligned
             if ((number % 2) != 0)
                 number++;
-            arg = vp->read<uint64_t>(sp +
+            arg = vp.read<uint64_t>(sp +
                     (number-NumArgumentRegs) * sizeof(uint32_t));
             // since two 32 bit args == 1 64 bit arg, increment number
             number++;
         } else {
-            arg = vp->read<uint32_t>(sp +
+            arg = vp.read<uint32_t>(sp +
                            (number-NumArgumentRegs) * sizeof(uint32_t));
         }
         return arg;
@@ -114,11 +115,13 @@ skipFunction(ThreadContext *tc)
 {
     TheISA::PCState newPC = tc->pcState();
     newPC.set(tc->readIntReg(ReturnAddressReg) & ~ULL(1));
-#if USE_CHECKER
-    tc->pcStateNoRecord(newPC);
-#else
-    tc->pcState(newPC);
-#endif
+
+    CheckerCPU *checker = tc->getCheckerCpuPtr();
+    if (checker) {
+        tc->pcStateNoRecord(newPC);
+    } else {
+        tc->pcState(newPC);
+    }
 }
 
 void

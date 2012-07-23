@@ -47,6 +47,7 @@
 
 class Network;
 class Profiler;
+class MemoryControl;
 
 class RubySystem : public SimObject
 {
@@ -106,7 +107,6 @@ class RubySystem : public SimObject
         return m_mem_vec_ptr;
     }
 
-    static void printConfig(std::ostream& out);
     static void printStats(std::ostream& out);
     void clearStats() const;
 
@@ -128,6 +128,14 @@ class RubySystem : public SimObject
     void registerProfiler(Profiler*);
     void registerAbstractController(AbstractController*);
     void registerSparseMemory(SparseMemory*);
+    void registerMemController(MemoryControl *mc);
+
+    bool eventQueueEmpty() { return eventq->empty(); }
+    void enqueueRubyEvent(Tick tick)
+    {
+        RubyEvent* e = new RubyEvent(this);
+        schedule(e, tick);
+    }
 
   private:
     // Private copy constructor and assignment operator
@@ -153,6 +161,8 @@ class RubySystem : public SimObject
     static uint64 m_memory_size_bytes;
     static int m_memory_size_bits;
     static Network* m_network_ptr;
+
+    MemoryControl *m_memory_controller;
 
   public:
     static Profiler* m_profiler_ptr;

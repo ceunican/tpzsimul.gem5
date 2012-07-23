@@ -44,6 +44,7 @@
 #include <list>
 #include <string>
 
+#include "arch/isa_traits.hh"
 #include "arch/vtophys.hh"
 #include "base/refcnt.hh"
 #include "config/the_isa.hh"
@@ -68,7 +69,7 @@ Checker<Impl>::advancePC(Fault fault)
     if (fault != NoFault) {
         curMacroStaticInst = StaticInst::nullStaticInstPtr;
         fault->invoke(tc, curStaticInst);
-        predecoder.reset();
+        thread->decoder.reset();
     } else {
         if (curStaticInst) {
             if (curStaticInst->isLastMicroop())
@@ -112,7 +113,7 @@ Checker<Impl>::handlePendingInt()
               "a non-interuptable instruction!", curTick());
     }
     boundaryInst = NULL;
-    predecoder.reset();
+    thread->decoder.reset();
     curMacroStaticInst = StaticInst::nullStaticInstPtr;
 }
 
@@ -201,9 +202,9 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
 
         // maintain $r0 semantics
         thread->setIntReg(ZeroReg, 0);
-#ifdef TARGET_ALPHA
-        thread->setFloatRegDouble(ZeroReg, 0.0);
-#endif // TARGET_ALPHA
+#if THE_ISA == ALPHA_ISA
+        thread->setFloatReg(ZeroReg, 0.0);
+#endif
 
         // Check if any recent PC changes match up with anything we
         // expect to happen.  This is mostly to check if traps or
@@ -238,16 +239,19 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
             Addr fetch_PC = thread->instAddr();
             fetch_PC = (fetch_PC & PCMask) + fetchOffset;
 
+            MachInst machInst;
+
             // If not in the middle of a macro instruction
             if (!curMacroStaticInst) {
                 // set up memory request for instruction fetch
                 memReq = new Request(unverifiedInst->threadNumber, fetch_PC,
                                      sizeof(MachInst),
                                      0,
+                                     masterId,
                                      fetch_PC, thread->contextId(),
                                      unverifiedInst->threadNumber);
                 memReq->setVirt(0, fetch_PC, sizeof(MachInst),
-                                Request::INST_FETCH, thread->instAddr());
+                                Request::INST_FETCH, masterId, thread->instAddr());
 
 
                 fault = itb->translateFunctional(memReq, tc, BaseTLB::Execute);
@@ -279,9 +283,7 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
                         break;
                     }
                 } else {
-                    PacketPtr pkt = new Packet(memReq,
-                                               MemCmd::ReadReq,
-                                               Packet::Broadcast);
+                    PacketPtr pkt = new Packet(memReq, MemCmd::ReadReq);
 
                     pkt->dataStatic(&machInst);
                     icachePort->sendFunctional(pkt);
@@ -304,22 +306,18 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
                     StaticInstPtr instPtr = NULL;
 
                     //Predecode, ie bundle up an ExtMachInst
-                    predecoder.setTC(thread->getTC());
+                    thread->decoder.setTC(thread->getTC());
                     //If more fetch data is needed, pass it in.
                     Addr fetchPC = (pcState.instAddr() & PCMask) + fetchOffset;
-                    predecoder.moreBytes(pcState, fetchPC, machInst);
+                    thread->decoder.moreBytes(pcState, fetchPC, machInst);
 
                     //If an instruction is ready, decode it.
                     //Otherwise, we'll have to fetch beyond the
                     //MachInst at the current pc.
-                    if (predecoder.extMachInstReady()) {
+                    if (thread->decoder.instReady()) {
                         fetchDone = true;
-                        ExtMachInst newMachInst =
-                            predecoder.getExtMachInst(pcState);
+                        instPtr = thread->decoder.decode(pcState);
                         thread->pcState(pcState);
-                        instPtr = thread->decoder.decode(newMachInst,
-                                                         pcState.instAddr());
-                        machInst = newMachInst;
                     } else {
                         fetchDone = false;
                         fetchOffset += sizeof(TheISA::MachInst);
@@ -342,8 +340,8 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
                 }
             }
         }
-        // reset predecoder on Checker
-        predecoder.reset();
+        // reset decoder on Checker
+        thread->decoder.reset();
 
         // Check Checker and CPU get same instruction, and record
         // any faults the CPU may have had.
@@ -399,11 +397,13 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
 
         // Take any faults here
         if (fault != NoFault) {
-            fault->invoke(tc, curStaticInst);
-            willChangePC = true;
-            newPCState = thread->pcState();
-            DPRINTF(Checker, "Fault, PC is now %s\n", newPCState);
-            curMacroStaticInst = StaticInst::nullStaticInstPtr;
+            if (FullSystem) {
+                fault->invoke(tc, curStaticInst);
+                willChangePC = true;
+                newPCState = thread->pcState();
+                DPRINTF(Checker, "Fault, PC is now %s\n", newPCState);
+                curMacroStaticInst = StaticInst::nullStaticInstPtr;
+            }
         } else {
            advancePC(fault);
         }
@@ -473,13 +473,9 @@ Checker<Impl>::validateInst(DynInstPtr &inst)
         }
     }
 
-    MachInst mi = static_cast<MachInst>(inst->staticInst->machInst);
-
-    if (mi != machInst) {
-        panic("%lli: Binary instructions do not match! Inst: %#x, "
-             "checker: %#x",
-             curTick(), mi, machInst);
-        handleError(inst);
+    if (curStaticInst != inst->staticInst) {
+        warn("%lli: StaticInstPtrs don't match. (%s, %s).\n", curTick(),
+                curStaticInst->getName(), inst->staticInst->getName());
     }
 }
 

@@ -80,6 +80,21 @@ def setCPUClass(options):
 
     return (TmpClass, test_mem_mode, CPUClass)
 
+def setWorkCountOptions(system, options):
+    if options.work_item_id != None:
+        system.work_item_id = options.work_item_id
+    if options.work_begin_cpu_id_exit != None:
+        system.work_begin_cpu_id_exit = options.work_begin_cpu_id_exit
+    if options.work_end_exit_count != None:
+        system.work_end_exit_count = options.work_end_exit_count
+    if options.work_end_checkpoint_count != None:
+        system.work_end_ckpt_count = options.work_end_checkpoint_count
+    if options.work_begin_exit_count != None:
+        system.work_begin_exit_count = options.work_begin_exit_count
+    if options.work_begin_checkpoint_count != None:
+        system.work_begin_ckpt_count = options.work_begin_checkpoint_count
+    if options.work_cpus_checkpoint_count != None:
+        system.work_cpus_ckpt_count = options.work_cpus_checkpoint_count
 
 def run(options, root, testsys, cpu_class):
     if options.maxtick:
@@ -125,10 +140,13 @@ def run(options, root, testsys, cpu_class):
                 testsys.cpu[i].max_insts_any_thread = int(options.fast_forward)
             switch_cpus[i].system =  testsys
             switch_cpus[i].workload = testsys.cpu[i].workload
-            switch_cpus[i].clock = testsys.cpu[0].clock
+            switch_cpus[i].clock = testsys.cpu[i].clock
             # simulation period
             if options.maxinsts:
                 switch_cpus[i].max_insts_any_thread = options.maxinsts
+            # Add checker cpu if selected
+            if options.checker:
+                switch_cpus[i].addCheckerCpu()
 
         testsys.switch_cpus = switch_cpus
         switch_cpu_list = [(testsys.cpu[i], switch_cpus[i]) for i in xrange(np)]
@@ -149,8 +167,8 @@ def run(options, root, testsys, cpu_class):
             switch_cpus_1[i].system =  testsys
             switch_cpus[i].workload = testsys.cpu[i].workload
             switch_cpus_1[i].workload = testsys.cpu[i].workload
-            switch_cpus[i].clock = testsys.cpu[0].clock
-            switch_cpus_1[i].clock = testsys.cpu[0].clock
+            switch_cpus[i].clock = testsys.cpu[i].clock
+            switch_cpus_1[i].clock = testsys.cpu[i].clock
 
             # if restoring, make atomic cpu simulate only a few instructions
             if options.checkpoint_restore != None:
@@ -175,6 +193,11 @@ def run(options, root, testsys, cpu_class):
             # simulation period
             if options.maxinsts:
                 switch_cpus_1[i].max_insts_any_thread = options.maxinsts
+
+            # attach the checker cpu if selected
+            if options.checker:
+                switch_cpus[i].addCheckerCpu()
+                switch_cpus_1[i].addCheckerCpu()
 
         testsys.switch_cpus = switch_cpus
         testsys.switch_cpus_1 = switch_cpus_1

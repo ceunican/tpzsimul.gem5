@@ -197,19 +197,20 @@ else:
 # ----------------------
 # Create a system, and add system wide objects
 # ----------------------
-system = System(cpu = cpus, physmem = PhysicalMemory(),
-                membus = Bus(clock = busFrequency))
+system = System(cpu = cpus, physmem = SimpleMemory(),
+                membus = CoherentBus(clock = busFrequency))
 
-system.toL2bus = Bus(clock = busFrequency)
+system.toL2bus = CoherentBus(clock = busFrequency)
 system.l2 = L2(size = options.l2size, assoc = 8)
 
 # ----------------------
 # Connect the L2 cache and memory together
 # ----------------------
 
-system.physmem.port = system.membus.port
-system.l2.cpu_side = system.toL2bus.port
-system.l2.mem_side = system.membus.port
+system.physmem.port = system.membus.master
+system.l2.cpu_side = system.toL2bus.master
+system.l2.mem_side = system.membus.slave
+system.system_port = system.membus.slave
 
 # ----------------------
 # Connect the L2 cache and clusters together

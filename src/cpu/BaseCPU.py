@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2005-2008 The Regents of The University of Michigan
 # Copyright (c) 2011 Regents of the University of California
 # All rights reserved.
@@ -27,6 +39,7 @@
 #
 # Authors: Nathan Binkert
 #          Rick Strong
+#          Andreas Hansson
 
 import sys
 
@@ -34,7 +47,7 @@ from m5.defines import buildEnv
 from m5.params import *
 from m5.proxy import *
 
-from Bus import Bus
+from Bus import CoherentBus
 from InstTracer import InstTracer
 from ExeTracer import ExeTracer
 from MemObject import MemObject
@@ -87,33 +100,32 @@ class BaseCPU(MemObject):
         dtb = Param.SparcTLB(SparcTLB(), "Data TLB")
         itb = Param.SparcTLB(SparcTLB(), "Instruction TLB")
         interrupts = Param.SparcInterrupts(
-                SparcInterrupts(), "Interrupt Controller")
+                NULL, "Interrupt Controller")
     elif buildEnv['TARGET_ISA'] == 'alpha':
         dtb = Param.AlphaTLB(AlphaDTB(), "Data TLB")
         itb = Param.AlphaTLB(AlphaITB(), "Instruction TLB")
         interrupts = Param.AlphaInterrupts(
-                AlphaInterrupts(), "Interrupt Controller")
+                NULL, "Interrupt Controller")
     elif buildEnv['TARGET_ISA'] == 'x86':
         dtb = Param.X86TLB(X86TLB(), "Data TLB")
         itb = Param.X86TLB(X86TLB(), "Instruction TLB")
-        _localApic = X86LocalApic(pio_addr=0x2000000000000000)
-        interrupts = Param.X86LocalApic(_localApic, "Interrupt Controller")
+        interrupts = Param.X86LocalApic(NULL, "Interrupt Controller")
     elif buildEnv['TARGET_ISA'] == 'mips':
         dtb = Param.MipsTLB(MipsTLB(), "Data TLB")
         itb = Param.MipsTLB(MipsTLB(), "Instruction TLB")
         interrupts = Param.MipsInterrupts(
-                MipsInterrupts(), "Interrupt Controller")
+                NULL, "Interrupt Controller")
     elif buildEnv['TARGET_ISA'] == 'arm':
         dtb = Param.ArmTLB(ArmTLB(), "Data TLB")
         itb = Param.ArmTLB(ArmTLB(), "Instruction TLB")
         interrupts = Param.ArmInterrupts(
-                ArmInterrupts(), "Interrupt Controller")
+                NULL, "Interrupt Controller")
     elif buildEnv['TARGET_ISA'] == 'power':
         UnifiedTLB = Param.Bool(True, "Is this a Unified TLB?")
         dtb = Param.PowerTLB(PowerTLB(), "Data TLB")
         itb = Param.PowerTLB(PowerTLB(), "Instruction TLB")
         interrupts = Param.PowerInterrupts(
-                PowerInterrupts(), "Interrupt Controller")
+                NULL, "Interrupt Controller")
     else:
         print "Don't know what TLB to use for ISA %s" % \
             buildEnv['TARGET_ISA']
@@ -138,24 +150,47 @@ class BaseCPU(MemObject):
 
     tracer = Param.InstTracer(default_tracer, "Instruction tracer")
 
-    icache_port = Port("Instruction Port")
-    dcache_port = Port("Data Port")
+    icache_port = MasterPort("Instruction Port")
+    dcache_port = MasterPort("Data Port")
     _cached_ports = ['icache_port', 'dcache_port']
 
     if buildEnv['TARGET_ISA'] in ['x86', 'arm']:
         _cached_ports += ["itb.walker.port", "dtb.walker.port"]
 
-    _uncached_ports = []
+    _uncached_slave_ports = []
+    _uncached_master_ports = []
     if buildEnv['TARGET_ISA'] == 'x86':
-        _uncached_ports = ["interrupts.pio", "interrupts.int_port"]
+        _uncached_slave_ports += ["interrupts.pio", "interrupts.int_slave"]
+        _uncached_master_ports += ["interrupts.int_master"]
+
+    def createInterruptController(self):
+        if buildEnv['TARGET_ISA'] == 'sparc':
+            self.interrupts = SparcInterrupts()
+        elif buildEnv['TARGET_ISA'] == 'alpha':
+            self.interrupts = AlphaInterrupts()
+        elif buildEnv['TARGET_ISA'] == 'x86':
+            _localApic = X86LocalApic(pio_addr=0x2000000000000000)
+            self.interrupts = _localApic
+        elif buildEnv['TARGET_ISA'] == 'mips':
+            self.interrupts = MipsInterrupts()
+        elif buildEnv['TARGET_ISA'] == 'arm':
+            self.interrupts = ArmInterrupts()
+        elif buildEnv['TARGET_ISA'] == 'power':
+            self.interrupts = PowerInterrupts()
+        else:
+            print "Don't know what Interrupt Controller to use for ISA %s" % \
+                buildEnv['TARGET_ISA']
+            sys.exit(1)
 
     def connectCachedPorts(self, bus):
         for p in self._cached_ports:
-            exec('self.%s = bus.port' % p)
+            exec('self.%s = bus.slave' % p)
 
     def connectUncachedPorts(self, bus):
-        for p in self._uncached_ports:
-            exec('self.%s = bus.port' % p)
+        for p in self._uncached_slave_ports:
+            exec('self.%s = bus.master' % p)
+        for p in self._uncached_master_ports:
+            exec('self.%s = bus.slave' % p)
 
     def connectAllPorts(self, cached_bus, uncached_bus = None):
         self.connectCachedPorts(cached_bus)
@@ -179,16 +214,20 @@ class BaseCPU(MemObject):
                                        "dtb_walker_cache.mem_side"]
             else:
                 self._cached_ports += ["itb.walker.port", "dtb.walker.port"]
+
             # Checker doesn't need its own tlb caches because it does
             # functional accesses only
-            if buildEnv['USE_CHECKER']:
+            if self.checker != NULL:
                 self._cached_ports += ["checker.itb.walker.port", \
                                        "checker.dtb.walker.port"]
 
     def addTwoLevelCacheHierarchy(self, ic, dc, l2c, iwc = None, dwc = None):
         self.addPrivateSplitL1Caches(ic, dc, iwc, dwc)
-        self.toL2Bus = Bus()
+        self.toL2Bus = CoherentBus()
         self.connectCachedPorts(self.toL2Bus)
         self.l2cache = l2c
-        self.l2cache.cpu_side = self.toL2Bus.port
+        self.toL2Bus.master = self.l2cache.cpu_side
         self._cached_ports = ['l2cache.mem_side']
+
+    def addCheckerCpu(self):
+        pass

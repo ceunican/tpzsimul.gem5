@@ -44,45 +44,17 @@
 #include "mem/request.hh"
 #include "sim/sim_events.hh"
 #include "sim/stats.hh"
+#include "sim/system.hh"
 
 using namespace std;
 
 int TESTER_NETWORK=0;
 
 bool
-NetworkTest::CpuPort::recvTiming(PacketPtr pkt)
+NetworkTest::CpuPort::recvTimingResp(PacketPtr pkt)
 {
-    if (pkt->isResponse()) {
-        networktest->completeRequest(pkt);
-    } else {
-        // must be snoop upcall
-        assert(pkt->isRequest());
-        assert(pkt->getDest() == Packet::Broadcast);
-    }
+    networktest->completeRequest(pkt);
     return true;
-}
-
-Tick
-NetworkTest::CpuPort::recvAtomic(PacketPtr pkt)
-{
-    panic("NetworkTest doesn't expect recvAtomic call!");
-    // Will not be used
-    assert(pkt->isRequest());
-    assert(pkt->getDest() == Packet::Broadcast);
-    return curTick();
-}
-
-void
-NetworkTest::CpuPort::recvFunctional(PacketPtr pkt)
-{
-    panic("NetworkTest doesn't expect recvFunctional call!");
-    // Will not be used
-    return;
-}
-
-void
-NetworkTest::CpuPort::recvRangeChange()
-{
 }
 
 void
@@ -94,7 +66,7 @@ NetworkTest::CpuPort::recvRetry()
 void
 NetworkTest::sendPkt(PacketPtr pkt)
 {
-    if (!cachePort.sendTiming(pkt)) {
+    if (!cachePort.sendTimingReq(pkt)) {
         retryPkt = pkt; // RubyPort will retry sending
     }
     numPacketsSent++;
@@ -113,7 +85,8 @@ NetworkTest::NetworkTest(const Params *p)
       maxPackets(p->max_packets),
       trafficType(p->traffic_type),
       injRate(p->inj_rate),
-      precision(p->precision)
+      precision(p->precision),
+      masterId(p->system->getMasterId(name()))
 {
     // set up counters
     noResponseCycles = 0;
@@ -124,13 +97,13 @@ NetworkTest::NetworkTest(const Params *p)
             name(), id);
 }
 
-Port *
-NetworkTest::getPort(const std::string &if_name, int idx)
+MasterPort &
+NetworkTest::getMasterPort(const std::string &if_name, int idx)
 {
     if (if_name == "test")
-        return &cachePort;
+        return cachePort;
     else
-        panic("No Such Port\n");
+        return MemObject::getMasterPort(if_name, idx);
 }
 
 void
@@ -263,21 +236,20 @@ NetworkTest::generatePkt()
     if (randomReqType == 0) {
         // generate packet for virtual network 0
         requestType = MemCmd::ReadReq;
-        req->setPhys(paddr, access_size, flags);
+        req->setPhys(paddr, access_size, flags, masterId);
     } else if (randomReqType == 1) {
         // generate packet for virtual network 1
         requestType = MemCmd::ReadReq;
         flags.set(Request::INST_FETCH);
-        req->setVirt(0, 0x0, access_size, flags, 0x0);
+        req->setVirt(0, 0x0, access_size, flags, 0x0, masterId);
         req->setPaddr(paddr);
     } else {  // if (randomReqType == 2)
         // generate packet for virtual network 2
         requestType = MemCmd::WriteReq;
-        req->setPhys(paddr, access_size, flags);
+        req->setPhys(paddr, access_size, flags, masterId);
     }
 
     req->setThreadContext(id,0);
-    uint8_t *result = new uint8_t[8];
 
     //No need to do functional simulation
     //We just do timing simulation of the network
@@ -286,11 +258,9 @@ NetworkTest::generatePkt()
             "Generated packet with destination %d, embedded in address %x\n",
             destination, req->getPaddr());
 
-    PacketPtr pkt = new Packet(req, requestType, 0);
-    pkt->setSrc(0); //Not used
+    PacketPtr pkt = new Packet(req, requestType);
     pkt->dataDynamicArray(new uint8_t[req->getSize()]);
-    NetworkTestSenderState *state = new NetworkTestSenderState(result);
-    pkt->senderState = state;
+    pkt->senderState = NULL;
 
     sendPkt(pkt);
 }
@@ -298,7 +268,7 @@ NetworkTest::generatePkt()
 void
 NetworkTest::doRetry()
 {
-    if (cachePort.sendTiming(retryPkt)) {
+    if (cachePort.sendTimingReq(retryPkt)) {
         retryPkt = NULL;
     }
 }

@@ -55,7 +55,6 @@
 #include "arch/types.hh"
 #include "base/statistics.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/cpu_policy.hh"
 #include "cpu/o3/scoreboard.hh"
@@ -142,14 +141,15 @@ class FullO3CPU : public BaseO3CPU
       public:
         /** Default constructor. */
         IcachePort(DefaultFetch<Impl> *_fetch, FullO3CPU<Impl>* _cpu)
-            : CpuPort(_fetch->name() + "-iport", _cpu), fetch(_fetch)
+            : CpuPort(_cpu->name() + ".icache_port", _cpu), fetch(_fetch)
         { }
 
       protected:
 
         /** Timing version of receive.  Handles setting fetch to the
          * proper status to start fetching. */
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
+        virtual void recvTimingSnoopReq(PacketPtr pkt) { }
 
         /** Handles doing a retry of a failed fetch. */
         virtual void recvRetry();
@@ -168,7 +168,7 @@ class FullO3CPU : public BaseO3CPU
       public:
         /** Default constructor. */
         DcachePort(LSQ<Impl> *_lsq, FullO3CPU<Impl>* _cpu)
-            : CpuPort(_lsq->name() + "-dport", _cpu), lsq(_lsq)
+            : CpuPort(_cpu->name() + ".dcache_port", _cpu), lsq(_lsq)
         { }
 
       protected:
@@ -176,7 +176,8 @@ class FullO3CPU : public BaseO3CPU
         /** Timing version of receive.  Handles writing back and
          * completing the load or store that has returned from
          * memory. */
-        virtual bool recvTiming(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt);
+        virtual void recvTimingSnoopReq(PacketPtr pkt);
 
         /** Handles doing a retry of the previous send. */
         virtual void recvRetry();
@@ -187,8 +188,7 @@ class FullO3CPU : public BaseO3CPU
          *
          * @return true since we have to snoop
          */
-        virtual bool isSnooping()
-        { return true; }
+        virtual bool isSnooping() const { return true; }
     };
 
     class TickEvent : public Event
@@ -361,9 +361,6 @@ class FullO3CPU : public BaseO3CPU
         this->dtb->demapPage(vaddr, asn);
     }
 
-    /** Returns a specific port. */
-    Port *getPort(const std::string &if_name, int idx);
-
     /** Ticks CPU, calling tick() on each stage, and checking the overall
      *  activity to see if the CPU should deschedule itself.
      */
@@ -389,7 +386,10 @@ class FullO3CPU : public BaseO3CPU
     void removeThread(ThreadID tid);
 
     /** Count the Total Instructions Committed in the CPU. */
-    virtual Counter totalInstructions() const;
+    virtual Counter totalInsts() const;
+
+    /** Count the Total Ops (including micro ops) committed in the CPU. */
+    virtual Counter totalOps() const;
 
     /** Add Thread to Active Threads List. */
     void activateContext(ThreadID tid, int delay);
@@ -547,7 +547,7 @@ class FullO3CPU : public BaseO3CPU
     ListIt addInst(DynInstPtr &inst);
 
     /** Function to tell the CPU that an instruction has completed. */
-    void instDone(ThreadID tid);
+    void instDone(ThreadID tid, DynInstPtr &inst);
 
     /** Remove an instruction from the front end of the list.  There's
      *  no restriction on location of the instruction.
@@ -720,13 +720,11 @@ class FullO3CPU : public BaseO3CPU
     /** The global sequence number counter. */
     InstSeqNum globalSeqNum;//[Impl::MaxThreads];
 
-#if USE_CHECKER
     /** Pointer to the checker, which can dynamically verify
      * instruction results at run time.  This can be set to NULL if it
      * is not being used.
      */
     Checker<Impl> *checker;
-#endif
 
     /** Pointer to the system. */
     System *system;
@@ -778,10 +776,10 @@ class FullO3CPU : public BaseO3CPU
     }
 
     /** Used by the fetch unit to get a hold of the instruction port. */
-    Port* getIcachePort() { return &icachePort; }
+    virtual CpuPort &getInstPort() { return icachePort; }
 
     /** Get the dcache port (used to find block size for translations). */
-    Port* getDcachePort() { return &dcachePort; }
+    virtual CpuPort &getDataPort() { return dcachePort; }
 
     Addr lockAddr;
 
@@ -797,6 +795,8 @@ class FullO3CPU : public BaseO3CPU
     Stats::Scalar quiesceCycles;
     /** Stat for the number of committed instructions per thread. */
     Stats::Vector committedInsts;
+    /** Stat for the number of committed ops (including micro ops) per thread. */
+    Stats::Vector committedOps;
     /** Stat for the total number of committed instructions. */
     Stats::Scalar totalCommittedInsts;
     /** Stat for the CPI per thread. */

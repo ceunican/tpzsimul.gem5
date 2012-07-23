@@ -42,11 +42,13 @@
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/base.hh"
 #include "mem/request.hh"
+#include "sim/system.hh"
 
-BasePrefetcher::BasePrefetcher(const BaseCacheParams *p)
-    : size(p->prefetcher_size), pageStop(!p->prefetch_past_page),
-      serialSquash(p->prefetch_serial_squash),
-      onlyData(p->prefetch_data_accesses_only)
+BasePrefetcher::BasePrefetcher(const Params *p)
+    : SimObject(p), size(p->size), latency(p->latency), degree(p->degree),
+      useMasterId(p->use_master_id), pageStop(!p->cross_pages),
+      serialSquash(p->serial_squash), onlyData(p->data_accesses_only),
+      system(p->sys), masterId(system->getMasterId(name()))
 {
 }
 
@@ -55,54 +57,53 @@ BasePrefetcher::setCache(BaseCache *_cache)
 {
     cache = _cache;
     blkSize = cache->getBlockSize();
-    _name = cache->name() + "-pf";
 }
 
 void
-BasePrefetcher::regStats(const std::string &name)
+BasePrefetcher::regStats()
 {
     pfIdentified
-        .name(name + ".prefetcher.num_hwpf_identified")
+        .name(name() + ".prefetcher.num_hwpf_identified")
         .desc("number of hwpf identified")
         ;
 
     pfMSHRHit
-        .name(name + ".prefetcher.num_hwpf_already_in_mshr")
+        .name(name() + ".prefetcher.num_hwpf_already_in_mshr")
         .desc("number of hwpf that were already in mshr")
         ;
 
     pfCacheHit
-        .name(name + ".prefetcher.num_hwpf_already_in_cache")
+        .name(name() + ".prefetcher.num_hwpf_already_in_cache")
         .desc("number of hwpf that were already in the cache")
         ;
 
     pfBufferHit
-        .name(name + ".prefetcher.num_hwpf_already_in_prefetcher")
+        .name(name() + ".prefetcher.num_hwpf_already_in_prefetcher")
         .desc("number of hwpf that were already in the prefetch queue")
         ;
 
     pfRemovedFull
-        .name(name + ".prefetcher.num_hwpf_evicted")
+        .name(name() + ".prefetcher.num_hwpf_evicted")
         .desc("number of hwpf removed due to no buffer left")
         ;
 
     pfRemovedMSHR
-        .name(name + ".prefetcher.num_hwpf_removed_MSHR_hit")
+        .name(name() + ".prefetcher.num_hwpf_removed_MSHR_hit")
         .desc("number of hwpf removed because MSHR allocated")
         ;
 
     pfIssued
-        .name(name + ".prefetcher.num_hwpf_issued")
+        .name(name() + ".prefetcher.num_hwpf_issued")
         .desc("number of hwpf issued")
         ;
 
     pfSpanPage
-        .name(name + ".prefetcher.num_hwpf_span_page")
+        .name(name() + ".prefetcher.num_hwpf_span_page")
         .desc("number of hwpf spanning a virtual page")
         ;
 
     pfSquashed
-        .name(name + ".prefetcher.num_hwpf_squashed_from_miss")
+        .name(name() + ".prefetcher.num_hwpf_squashed_from_miss")
         .desc("number of hwpf that got squashed due to a miss "
               "aborting calculation time")
         ;
@@ -181,7 +182,7 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick time)
             pfRemovedMSHR++;
             delete (*iter)->req;
             delete (*iter);
-            pf.erase(iter);
+            iter = pf.erase(iter);
             if (pf.empty())
                 cache->deassertMemSideBusRequest(BaseCache::Request_PF);
         }
@@ -193,15 +194,17 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick time)
         // Needed for serial calculators like GHB
         if (serialSquash) {
             iter = pf.end();
-            iter--;
+            if (iter != pf.begin())
+                iter--;
             while (!pf.empty() && ((*iter)->time >= time)) {
                 pfSquashed++;
                 DPRINTF(HWPrefetch, "Squashing old prefetch addr: 0x%x\n",
                         (*iter)->getAddr());
                 delete (*iter)->req;
                 delete (*iter);
-                pf.erase(iter);
-                iter--;
+                iter = pf.erase(iter);
+                if (iter != pf.begin())
+                    iter--;
             }
             if (pf.empty())
                 cache->deassertMemSideBusRequest(BaseCache::Request_PF);
@@ -231,9 +234,9 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick time)
             }
 
             // create a prefetch memreq
-            Request *prefetchReq = new Request(*addrIter, blkSize, 0);
+            Request *prefetchReq = new Request(*addrIter, blkSize, 0, masterId);
             PacketPtr prefetch =
-                new Packet(prefetchReq, MemCmd::HardPFReq, Packet::Broadcast);
+                new Packet(prefetchReq, MemCmd::HardPFReq);
             prefetch->allocate();
             prefetch->req->setThreadContext(pkt->req->contextId(),
                                             pkt->req->threadId());
@@ -276,3 +279,5 @@ BasePrefetcher::samePage(Addr a, Addr b)
 {
     return roundDown(a, TheISA::VMPageSize) == roundDown(b, TheISA::VMPageSize);
 }
+
+

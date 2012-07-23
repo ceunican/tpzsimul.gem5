@@ -34,7 +34,6 @@
 #include <sstream>
 #include <string>
 
-#include "arch/faults.hh"
 #include "base/bigint.hh"
 #include "base/cp_annotate.hh"
 #include "base/cprintf.hh"
@@ -45,6 +44,7 @@
 #include "cpu/exetrace.hh"
 #include "debug/InOrderDynInst.hh"
 #include "mem/request.hh"
+#include "sim/fault_fwd.hh"
 #include "sim/full_system.hh"
 
 using namespace std;
@@ -68,7 +68,7 @@ InOrderDynInst::InOrderDynInst(InOrderCPU *cpu,
     inFrontEnd(true), frontSked(NULL), backSked(NULL),
     squashingStage(0), predictTaken(false), procDelaySlotOnMispred(false),
     fetchMemReq(NULL), dataMemReq(NULL), instEffAddr(0), eaCalcDone(false),
-    lqIdx(0), sqIdx(0), instListIt(NULL), onInstList(false)
+    lqIdx(0), sqIdx(0), onInstList(false)
 {
     for(int i = 0; i < MaxInstSrcRegs; i++) {
         _readySrcRegIdx[i] = false;
@@ -591,24 +591,3 @@ InOrderDynInst::dump(std::string &outstring)
 
     outstring = s.str();
 }
-
-
-#define NOHASH
-#ifndef NOHASH
-
-#include "base/hashmap.hh"
-
-unsigned int MyHashFunc(const InOrderDynInst *addr)
-{
-    unsigned a = (unsigned)addr;
-    unsigned hash = (((a >> 14) ^ ((a >> 2) & 0xffff))) & 0x7FFFFFFF;
-
-    return hash;
-}
-
-typedef m5::hash_map<const InOrderDynInst *, const InOrderDynInst *,
-                     MyHashFunc>
-my_hash_t;
-
-my_hash_t thishash;
-#endif

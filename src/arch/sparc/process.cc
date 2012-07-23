@@ -161,7 +161,10 @@ Sparc32LiveProcess::initState()
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // The process runs in user mode with 32 bit addresses
-    tc->setMiscReg(MISCREG_PSTATE, 0x0a);
+    PSTATE pstate = 0;
+    pstate.ie = 1;
+    pstate.am = 1;
+    tc->setMiscReg(MISCREG_PSTATE, pstate);
 
     argsInit(32 / 8, VMPageSize);
 }
@@ -173,7 +176,9 @@ Sparc64LiveProcess::initState()
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // The process runs in user mode
-    tc->setMiscReg(MISCREG_PSTATE, 0x02);
+    PSTATE pstate = 0;
+    pstate.ie = 1;
+    tc->setMiscReg(MISCREG_PSTATE, pstate);
 
     argsInit(sizeof(IntReg), VMPageSize);
 }
@@ -354,31 +359,31 @@ SparcLiveProcess::argsInit(int pageSize)
 
     // Write out the sentry void *
     uint64_t sentry_NULL = 0;
-    initVirtMem->writeBlob(sentry_base,
+    initVirtMem.writeBlob(sentry_base,
             (uint8_t*)&sentry_NULL, sentry_size);
 
     // Write the file name
-    initVirtMem->writeString(file_name_base, filename.c_str());
+    initVirtMem.writeString(file_name_base, filename.c_str());
 
     // Copy the aux stuff
     for (int x = 0; x < auxv.size(); x++) {
-        initVirtMem->writeBlob(auxv_array_base + x * 2 * intSize,
+        initVirtMem.writeBlob(auxv_array_base + x * 2 * intSize,
                 (uint8_t*)&(auxv[x].a_type), intSize);
-        initVirtMem->writeBlob(auxv_array_base + (x * 2 + 1) * intSize,
+        initVirtMem.writeBlob(auxv_array_base + (x * 2 + 1) * intSize,
                 (uint8_t*)&(auxv[x].a_val), intSize);
     }
 
     // Write out the terminating zeroed auxilliary vector
     const IntType zero = 0;
-    initVirtMem->writeBlob(auxv_array_base + intSize * 2 * auxv.size(),
+    initVirtMem.writeBlob(auxv_array_base + intSize * 2 * auxv.size(),
             (uint8_t*)&zero, intSize);
-    initVirtMem->writeBlob(auxv_array_base + intSize * (2 * auxv.size() + 1),
+    initVirtMem.writeBlob(auxv_array_base + intSize * (2 * auxv.size() + 1),
             (uint8_t*)&zero, intSize);
 
     copyStringArray(envp, envp_array_base, env_data_base, initVirtMem);
     copyStringArray(argv, argv_array_base, arg_data_base, initVirtMem);
 
-    initVirtMem->writeBlob(argc_base, (uint8_t*)&guestArgc, intSize);
+    initVirtMem.writeBlob(argc_base, (uint8_t*)&guestArgc, intSize);
 
     // Set up space for the trap handlers into the processes address space.
     // Since the stack grows down and there is reserved address space abov
@@ -411,9 +416,9 @@ Sparc64LiveProcess::argsInit(int intSize, int pageSize)
     SparcLiveProcess::argsInit<uint64_t>(pageSize);
 
     // Stuff the trap handlers into the process address space
-    initVirtMem->writeBlob(fillStart,
+    initVirtMem.writeBlob(fillStart,
             (uint8_t*)fillHandler64, sizeof(MachInst) * numFillInsts);
-    initVirtMem->writeBlob(spillStart,
+    initVirtMem.writeBlob(spillStart,
             (uint8_t*)spillHandler64, sizeof(MachInst) *  numSpillInsts);
 }
 
@@ -423,9 +428,9 @@ Sparc32LiveProcess::argsInit(int intSize, int pageSize)
     SparcLiveProcess::argsInit<uint32_t>(pageSize);
 
     // Stuff the trap handlers into the process address space
-    initVirtMem->writeBlob(fillStart,
+    initVirtMem.writeBlob(fillStart,
             (uint8_t*)fillHandler32, sizeof(MachInst) * numFillInsts);
-    initVirtMem->writeBlob(spillStart,
+    initVirtMem.writeBlob(spillStart,
             (uint8_t*)spillHandler32, sizeof(MachInst) *  numSpillInsts);
 }
 
@@ -447,7 +452,7 @@ void Sparc32LiveProcess::flushWindows(ThreadContext *tc)
             for (int index = 16; index < 32; index++) {
                 uint32_t regVal = tc->readIntReg(index);
                 regVal = htog(regVal);
-                if (!tc->getMemProxy()->tryWriteBlob(
+                if (!tc->getMemProxy().tryWriteBlob(
                         sp + (index - 16) * 4, (uint8_t *)&regVal, 4)) {
                     warn("Failed to save register to the stack when "
                             "flushing windows.\n");
@@ -482,7 +487,7 @@ Sparc64LiveProcess::flushWindows(ThreadContext *tc)
             for (int index = 16; index < 32; index++) {
                 IntReg regVal = tc->readIntReg(index);
                 regVal = htog(regVal);
-                if (!tc->getMemProxy()->tryWriteBlob(
+                if (!tc->getMemProxy().tryWriteBlob(
                         sp + 2047 + (index - 16) * 8, (uint8_t *)&regVal, 8)) {
                     warn("Failed to save register to the stack when "
                             "flushing windows.\n");
@@ -533,27 +538,22 @@ SparcLiveProcess::setSyscallReturn(ThreadContext *tc,
     // check for error condition.  SPARC syscall convention is to
     // indicate success/failure in reg the carry bit of the ccr
     // and put the return value itself in the standard return value reg ().
+    PSTATE pstate = tc->readMiscRegNoEffect(MISCREG_PSTATE);
     if (return_value.successful()) {
         // no error, clear XCC.C
         tc->setIntReg(NumIntArchRegs + 2,
                 tc->readIntReg(NumIntArchRegs + 2) & 0xEE);
-        // tc->setMiscRegNoEffect(MISCREG_CCR, tc->readMiscRegNoEffect(MISCREG_CCR) & 0xEE);
         IntReg val = return_value.value();
-        if (bits(tc->readMiscRegNoEffect(
-                        SparcISA::MISCREG_PSTATE), 3, 3)) {
+        if (pstate.am)
             val = bits(val, 31, 0);
-        }
         tc->setIntReg(ReturnValueReg, val);
     } else {
         // got an error, set XCC.C
         tc->setIntReg(NumIntArchRegs + 2,
                 tc->readIntReg(NumIntArchRegs + 2) | 0x11);
-        // tc->setMiscRegNoEffect(MISCREG_CCR, tc->readMiscRegNoEffect(MISCREG_CCR) | 0x11);
         IntReg val = -return_value.value();
-        if (bits(tc->readMiscRegNoEffect(
-                        SparcISA::MISCREG_PSTATE), 3, 3)) {
+        if (pstate.am)
             val = bits(val, 31, 0);
-        }
         tc->setIntReg(ReturnValueReg, val);
     }
 }

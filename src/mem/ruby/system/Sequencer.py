@@ -34,16 +34,19 @@ from MemObject import MemObject
 class RubyPort(MemObject):
     type = 'RubyPort'
     abstract = True
-    port = VectorPort("M5 port")
+    slave = VectorSlavePort("CPU slave port")
+    master = VectorMasterPort("CPU master port")
     version = Param.Int(0, "")
-    pio_port = Port("Ruby_pio_port")
-    physmem = Param.PhysicalMemory("")
-    physMemPort = Port("port to physical memory")
+    pio_port = MasterPort("Ruby_pio_port")
     using_ruby_tester = Param.Bool(False, "")
     using_network_tester = Param.Bool(False, "")
     access_phys_mem = Param.Bool(True,
         "should the rubyport atomically update phys_mem")
     ruby_system = Param.RubySystem("")
+    system = Param.System(Parent.any, "system object")
+    support_data_reqs = Param.Bool(True, "data cache requests supported")
+    support_inst_reqs = Param.Bool(True, "inst cache requests supported")
+
 
 class RubyPortProxy(RubyPort):
     type = 'RubyPortProxy'

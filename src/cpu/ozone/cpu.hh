@@ -60,7 +60,6 @@ class Checkpoint;
 class EndQuiesceEvent;
 class MemoryController;
 class MemObject;
-class PhysicalMemory;
 class Process;
 class Request;
 
@@ -107,19 +106,17 @@ class OzoneCPU : public BaseCPU
 
         System *getSystemPtr() { return cpu->system; }
 
-        PhysicalMemory *getPhysMemPtr() { return cpu->physmem; }
-
         TheISA::Kernel::Statistics *getKernelStats()
         { return thread->getKernelStats(); }
 
         Process *getProcessPtr() { return thread->getProcessPtr(); }
 
-        PortProxy* getPhysProxy() { return thread->getPhysProxy(); }
+        PortProxy &getPhysProxy() { return thread->getPhysProxy(); }
 
-        FSTranslatingPortProxy* getVirtProxy()
+        FSTranslatingPortProxy &getVirtProxy()
         { return thread->getVirtProxy(); }
 
-        SETranslatingPortProxy* getMemProxy() { return thread->getMemProxy(); }
+        SETranslatingPortProxy &getMemProxy() { return thread->getMemProxy(); }
 
         Status status() const { return thread->status(); }
 
@@ -314,9 +311,6 @@ class OzoneCPU : public BaseCPU
     TheISA::TLB *itb;
     TheISA::TLB *dtb;
     System *system;
-    PhysicalMemory *physmem;
-
-    virtual Port *getPort(const std::string &name, int idx);
 
     FrontEnd *frontEnd;
 

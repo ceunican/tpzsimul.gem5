@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -44,6 +44,36 @@
 
 namespace ArmISA
 {
+
+MiscRegIndex
+decodeCP14Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
+{
+    switch(crn) {
+      case 0:
+        switch (opc2) {
+          case 0:
+            switch (crm) {
+              case 0:
+                return MISCREG_DBGDIDR;
+              case 1:
+                return MISCREG_DBGDSCR_INT;
+              default:
+                warn("CP14 unimplemented crn[%d], opc1[%d], crm[%d], opc2[%d]",
+                     crn, opc1, crm, opc2);
+                return NUM_MISCREGS;
+            }
+          default:
+                warn("CP14 unimplemented crn[%d], opc1[%d], crm[%d], opc2[%d]",
+                     crn, opc1, crm, opc2);
+                return NUM_MISCREGS;
+        }
+      default:
+        warn("CP14 unimplemented crn[%d], opc1[%d], crm[%d], opc2[%d]",
+             crn, opc1, crm, opc2);
+        return NUM_MISCREGS;
+    }
+
+}
 
 MiscRegIndex
 decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
@@ -362,6 +392,7 @@ decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
                   case 7:
                     return MISCREG_PMCEID1;
                 }
+                break;
               case 13:
                 switch (opc2) {
                   case 0:
@@ -371,6 +402,7 @@ decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
                   case 2:
                     return MISCREG_PMXEVCNTR;
                 }
+                break;
               case 14:
                 switch (opc2) {
                   case 0:
@@ -380,6 +412,7 @@ decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
                   case 2:
                     return MISCREG_PMINTENCLR;
                 }
+                break;
             }
         } else if (opc1 == 1) {
             switch (crm) {
@@ -392,6 +425,7 @@ decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
                          crn,crm, opc1,opc2);
                     break;
                 }
+                break;
               default:
                 return MISCREG_L2LATENCY;
             }
@@ -469,4 +503,4 @@ decodeCP15Reg(unsigned crn, unsigned opc1, unsigned crm, unsigned opc2)
     return NUM_MISCREGS;
 }
 
-};
+}

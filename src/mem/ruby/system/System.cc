@@ -33,11 +33,12 @@
 
 #include "base/intmath.hh"
 #include "base/output.hh"
-#include "debug/RubySystem.hh"
+#include "debug/RubyCacheTrace.hh"
 #include "mem/ruby/common/Address.hh"
 #include "mem/ruby/network/Network.hh"
 #include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/system/System.hh"
+#include "sim/eventq.hh"
 #include "sim/simulate.hh"
 
 using namespace std;
@@ -124,35 +125,17 @@ RubySystem::registerSparseMemory(SparseMemory* s)
     m_sparse_memory_vector.push_back(s);
 }
 
+void
+RubySystem::registerMemController(MemoryControl *mc) {
+    m_memory_controller = mc;
+}
+
 RubySystem::~RubySystem()
 {
     delete m_network_ptr;
     delete m_profiler_ptr;
     if (m_mem_vec_ptr)
         delete m_mem_vec_ptr;
-}
-
-void
-RubySystem::printSystemConfig(ostream & out)
-{
-    out << "RubySystem config:" << endl
-        << "  random_seed: " << m_random_seed << endl
-        << "  randomization: " << m_randomization << endl
-        << "  cycle_period: " << m_clock << endl
-        << "  block_size_bytes: " << m_block_size_bytes << endl
-        << "  block_size_bits: " << m_block_size_bits << endl
-        << "  memory_size_bytes: " << m_memory_size_bytes << endl
-        << "  memory_size_bits: " << m_memory_size_bits << endl;
-}
-
-void
-RubySystem::printConfig(ostream& out)
-{
-    out << "\n================ Begin RubySystem Configuration Print ================\n\n";
-    printSystemConfig(out);
-    m_network_ptr->printConfig(out);
-    m_profiler_ptr->printConfig(out);
-    out << "\n================ End RubySystem Configuration Print ================\n\n";
 }
 
 void
@@ -224,6 +207,7 @@ RubySystem::serialize(std::ostream &os)
         }
     }
 
+    DPRINTF(RubyCacheTrace, "Recording Cache Trace\n");
     // Create the CacheRecorder and record the cache trace
     m_cache_recorder = new CacheRecorder(NULL, 0, sequencer_map);
 
@@ -231,15 +215,19 @@ RubySystem::serialize(std::ostream &os)
         m_abs_cntrl_vec[cntrl]->recordCacheTrace(cntrl, m_cache_recorder);
     }
 
+    DPRINTF(RubyCacheTrace, "Cache Trace Complete\n");
     // save the current tick value
     Tick curtick_original = curTick();
     // save the event queue head
     Event* eventq_head = eventq->replaceHead(NULL);
+    DPRINTF(RubyCacheTrace, "Recording current tick %ld and event queue\n",
+            curtick_original);
 
     // Schedule an event to start cache cooldown
-    RubyEvent* e = new RubyEvent(this);
-    schedule(e,curTick());
+    DPRINTF(RubyCacheTrace, "Starting cache flush\n");
+    enqueueRubyEvent(curTick());
     simulate();
+    DPRINTF(RubyCacheTrace, "Cache flush complete\n");
 
     // Restore eventq head
     eventq_head = eventq->replaceHead(eventq_head);
@@ -378,13 +366,15 @@ RubySystem::startup()
         curTick(0);
 
         // Schedule an event to start cache warmup
-        RubyEvent* e = new RubyEvent(this);
-        schedule(e,curTick());
+        enqueueRubyEvent(curTick());
         simulate();
 
         delete m_cache_recorder;
         m_cache_recorder = NULL;
         m_warmup_enabled = false;
+        // reset DRAM so that it's not waiting for events on the old event
+        // queue
+        m_memory_controller->reset();
         // Restore eventq head
         eventq_head = eventq->replaceHead(eventq_head);
         // Restore curTick
@@ -475,7 +465,5 @@ void
 RubyExitCallback::process()
 {
     std::ostream *os = simout.create(stats_filename);
-    RubySystem::printConfig(*os);
-    *os << endl;
     RubySystem::printStats(*os);
 }

@@ -63,7 +63,7 @@ class IOCache(BaseCache):
     mshrs = 20
     size = '1kB'
     tgts_per_mshr = 12
-    addr_range=AddrRange(0, size='8GB')
+    addr_ranges = [AddrRange(0, size='8GB')]
     forward_snoops = False
     is_top_level = True
 
@@ -72,23 +72,24 @@ cpus = [ TimingSimpleCPU(cpu_id=i) for i in xrange(2) ]
 #the system
 system = FSConfig.makeLinuxAlphaSystem('timing')
 system.iocache = IOCache()
-system.iocache.cpu_side = system.iobus.port
-system.iocache.mem_side = system.membus.port
+system.iocache.cpu_side = system.iobus.master
+system.iocache.mem_side = system.membus.slave
 
 system.cpu = cpus
 #create the l1/l2 bus
-system.toL2Bus = Bus()
+system.toL2Bus = CoherentBus()
 
 #connect up the l2 cache
 system.l2c = L2(size='4MB', assoc=8)
-system.l2c.cpu_side = system.toL2Bus.port
-system.l2c.mem_side = system.membus.port
-system.l2c.num_cpus = 2
+system.l2c.cpu_side = system.toL2Bus.master
+system.l2c.mem_side = system.membus.slave
 
 #connect up the cpu and l1s
 for c in cpus:
     c.addPrivateSplitL1Caches(L1(size = '32kB', assoc = 1),
                                 L1(size = '32kB', assoc = 4))
+    # create the interrupt controller
+    c.createInterruptController()
     # connect cpu level-1 caches to shared level-2 cache
     c.connectAllPorts(system.toL2Bus, system.membus)
     c.clock = '2GHz'

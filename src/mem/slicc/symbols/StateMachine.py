@@ -39,7 +39,7 @@ python_class_map = {"int": "Int",
                     "WireBuffer": "RubyWireBuffer",
                     "Sequencer": "RubySequencer",
                     "DirectoryMemory": "RubyDirectoryMemory",
-                    "MemoryControl": "RubyMemoryControl",
+                    "MemoryControl": "MemoryControl",
                     "DMASequencer": "DMASequencer"
                     }
 
@@ -61,6 +61,7 @@ class StateMachine(Symbol):
         self.states = orderdict()
         self.events = orderdict()
         self.actions = orderdict()
+        self.request_types = orderdict()
         self.transitions = []
         self.in_ports = []
         self.functions = []
@@ -96,6 +97,10 @@ class StateMachine(Symbol):
                 action.error("    shorthand = %s" % action.short)
 
         self.actions[action.ident] = action
+
+    def addRequestType(self, request_type):
+        assert self.table is None
+        self.request_types[request_type.ident] = request_type
 
     def addTransition(self, trans):
         assert self.table is None
@@ -324,7 +329,7 @@ MachineID m_machineID;
 bool m_is_blocking;
 std::map<Address, MessageBuffer*> m_block_map;
 typedef std::vector<MessageBuffer*> MsgVecType;
-typedef m5::hash_map< Address, MsgVecType* > WaitingBufType;
+typedef std::map< Address, MsgVecType* > WaitingBufType;
 WaitingBufType m_waiting_buffers;
 int m_max_in_port_rank;
 int m_cur_in_port_rank;
@@ -407,6 +412,9 @@ void unset_tbe(${{self.TBEType.c_ident}}*& m_tbe_ptr);
  * Auto generated C++ code started by $__file__:$__line__
  * Created by slicc definition of Module "${{self.short}}"
  */
+
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <cassert>
 #include <sstream>
@@ -499,6 +507,13 @@ $c_ident::$c_ident(const Params *p)
                 code('''
 m_${{seq}}_ptr->setController(this);
     ''')
+
+        else:
+            for seq in sequencers:
+                code('''
+m_${{seq}}_ptr->setController(this);
+    ''')
+
         #
         # For the DMA controller, pass the sequencer a pointer to the
         # controller.
@@ -979,9 +994,16 @@ $c_ident::${{action.ident}}(const Address& addr)
         code = self.symtab.codeFormatter()
         ident = self.ident
 
+        outputRequest_types = True
+        if len(self.request_types) == 0:
+            outputRequest_types = False
+
         code('''
 // Auto generated C++ code started by $__file__:$__line__
 // ${ident}: ${{self.short}}
+
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <cassert>
 
@@ -990,6 +1012,12 @@ $c_ident::${{action.ident}}(const Address& addr)
 #include "mem/protocol/${ident}_Controller.hh"
 #include "mem/protocol/${ident}_Event.hh"
 #include "mem/protocol/${ident}_State.hh"
+''')
+
+        if outputRequest_types:
+            code('''#include "mem/protocol/${ident}_RequestType.hh"''')
+
+        code('''
 #include "mem/protocol/Types.hh"
 #include "mem/ruby/common/Global.hh"
 #include "mem/ruby/slicc_interface/RubySlicc_includes.hh"
@@ -1197,6 +1225,7 @@ ${ident}_Controller::doTransitionWorker(${ident}_Event event,
                 case('next_state = ${ident}_State_${ns_ident};')
 
             actions = trans.actions
+            request_types = trans.request_types
 
             # Check for resources
             case_sorter = []
@@ -1209,12 +1238,24 @@ if (!%s.areNSlotsAvailable(%s))
 ''' % (key.code, val)
                 case_sorter.append(val)
 
+            # Check all of the request_types for resource constraints
+            for request_type in request_types:
+                val = '''
+if (!checkResourceAvailable(%s_RequestType_%s, addr)) {
+    return TransitionResult_ResourceStall;
+}
+''' % (self.ident, request_type.ident)
+                case_sorter.append(val)
 
             # Emit the code sequences in a sorted order.  This makes the
             # output deterministic (without this the output order can vary
             # since Map's keys() on a vector of pointers is not deterministic
             for c in sorted(case_sorter):
                 case("$c")
+
+            # Record access types for this transition
+            for request_type in request_types:
+                case('recordRequestType(${ident}_RequestType_${{request_type.ident}}, addr);')
 
             # Figure out if we stall
             stall = False

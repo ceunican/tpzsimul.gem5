@@ -33,6 +33,7 @@
 #include <string>
 
 #include "mem/ruby/common/Address.hh"
+#include "mem/protocol/DirectoryRequestType.hh"
 #include "mem/ruby/slicc_interface/AbstractEntry.hh"
 #include "mem/ruby/system/MemoryVector.hh"
 #include "mem/ruby/system/SparseMemory.hh"
@@ -54,8 +55,6 @@ class DirectoryMemory : public SimObject
     bool isSparseImplementation() { return m_use_map; }
     uint64 getSize() { return m_size_bytes; }
 
-    void printConfig(std::ostream& out) const;
-    static void printGlobalConfig(std::ostream & out);
     bool isPresent(PhysAddress address);
     AbstractEntry* lookup(PhysAddress address);
     AbstractEntry* allocate(const PhysAddress& address,
@@ -65,6 +64,8 @@ class DirectoryMemory : public SimObject
 
     void print(std::ostream& out) const;
     void printStats(std::ostream& out) const;
+
+    void recordRequestType(DirectoryRequestType requestType);
 
   private:
     // Private copy constructor and assignment operator

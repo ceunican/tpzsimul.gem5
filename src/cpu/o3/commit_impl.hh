@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2011 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -48,7 +48,7 @@
 #include "base/loader/symtab.hh"
 #include "base/cp_annotate.hh"
 #include "config/the_isa.hh"
-#include "config/use_checker.hh"
+#include "cpu/checker/cpu.hh"
 #include "cpu/o3/commit.hh"
 #include "cpu/o3/thread_state.hh"
 #include "cpu/base.hh"
@@ -62,10 +62,6 @@
 #include "params/DerivO3CPU.hh"
 #include "sim/faults.hh"
 #include "sim/full_system.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
 
 using namespace std;
 
@@ -105,7 +101,8 @@ DefaultCommit<Impl>::DefaultCommit(O3CPU *_cpu, DerivO3CPUParams *params)
       numThreads(params->numThreads),
       drainPending(false),
       switchedOut(false),
-      trapLatency(params->trapLatency)
+      trapLatency(params->trapLatency),
+      canHandleInterrupts(true)
 {
     _status = Active;
     _nextStatus = Inactive;
@@ -168,6 +165,10 @@ DefaultCommit<Impl>::regStats()
         .name(name() + ".commitCommittedInsts")
         .desc("The number of committed instructions")
         .prereq(commitCommittedInsts);
+    commitCommittedOps
+        .name(name() + ".commitCommittedOps")
+        .desc("The number of committed instructions")
+        .prereq(commitCommittedInsts);
     commitSquashedInsts
         .name(name() + ".commitSquashedInsts")
         .desc("The number of squashed insts skipped by commit")
@@ -192,10 +193,17 @@ DefaultCommit<Impl>::regStats()
         .flags(Stats::pdf)
         ;
 
-    statComInst
+    instsCommitted
         .init(cpu->numThreads)
-        .name(name() + ".count")
+        .name(name() + ".committedInsts")
         .desc("Number of instructions committed")
+        .flags(total)
+        ;
+
+    opsCommitted
+        .init(cpu->numThreads)
+        .name(name() + ".committedOps")
+        .desc("Number of ops (including micro ops) committed")
         .flags(total)
         ;
 
@@ -714,7 +722,7 @@ DefaultCommit<Impl>::handleInterrupt()
 
     // Wait until all in flight instructions are finished before enterring
     // the interrupt.
-    if (cpu->instList.empty()) {
+    if (canHandleInterrupts && cpu->instList.empty()) {
         // Squash or record that I need to squash this cycle if
         // an interrupt needed to be handled.
         DPRINTF(Commit, "Interrupt detected.\n");
@@ -725,11 +733,9 @@ DefaultCommit<Impl>::handleInterrupt()
         assert(!thread[0]->inSyscall);
         thread[0]->inSyscall = true;
 
-#if USE_CHECKER
         if (cpu->checker) {
             cpu->checker->handlePendingInt();
         }
-#endif
 
         // CPU will handle interrupt.
         cpu->processInterrupts(interrupt);
@@ -743,7 +749,10 @@ DefaultCommit<Impl>::handleInterrupt()
 
         interrupt = NoFault;
     } else {
-        DPRINTF(Commit, "Interrupt pending, waiting for ROB to empty.\n");
+        DPRINTF(Commit, "Interrupt pending: instruction is %sin "
+                "flight, ROB is %sempty\n",
+                canHandleInterrupts ? "not " : "",
+                cpu->instList.empty() ? "" : "not " );
     }
 }
 
@@ -775,11 +784,6 @@ void
 DefaultCommit<Impl>::commit()
 {
     if (FullSystem) {
-        // Check for any interrupt that we've already squashed for and
-        // start processing it.
-        if (interrupt != NoFault)
-            handleInterrupt();
-
         // Check if we have a interrupt and get read to handle it
         if (cpu->checkInterrupts(cpu->tcBase(0)))
             propagateInterrupt();
@@ -856,7 +860,13 @@ DefaultCommit<Impl>::commit()
                 fromIEW->mispredictInst[tid];
             toIEW->commitInfo[tid].branchTaken =
                 fromIEW->branchTaken[tid];
-            toIEW->commitInfo[tid].squashInst = NULL;
+            toIEW->commitInfo[tid].squashInst =
+                                    rob->findInst(tid, squashed_inst);
+            if (toIEW->commitInfo[tid].mispredictInst) {
+                if (toIEW->commitInfo[tid].mispredictInst->isUncondCtrl()) {
+                     toIEW->commitInfo[tid].branchTaken = true;
+                }
+            }
 
             toIEW->commitInfo[tid].pc = fromIEW->pc[tid];
 
@@ -935,6 +945,11 @@ DefaultCommit<Impl>::commitInsts()
     // Commit as many instructions as possible until the commit bandwidth
     // limit is reached, or it becomes impossible to commit any more.
     while (num_committed < commitWidth) {
+        // Check for any interrupt that we've already squashed for
+        // and start processing it.
+        if (interrupt != NoFault)
+            handleInterrupt();
+
         int commit_thread = getCommittingThread();
 
         if (commit_thread == -1 || !rob->isHeadReady(commit_thread))
@@ -983,12 +998,20 @@ DefaultCommit<Impl>::commitInsts()
                 // Set the doneSeqNum to the youngest committed instruction.
                 toIEW->commitInfo[tid].doneSeqNum = head_inst->seqNum;
 
-                ++commitCommittedInsts;
+                if (!head_inst->isMicroop() || head_inst->isLastMicroop())
+                    ++commitCommittedInsts;
+                ++commitCommittedOps;
 
                 // To match the old model, don't count nops and instruction
                 // prefetches towards the total commit count.
                 if (!head_inst->isNop() && !head_inst->isInstPrefetch()) {
-                    cpu->instDone(tid);
+                    cpu->instDone(tid, head_inst);
+                }
+
+                if (tid == 0) {
+                    canHandleInterrupts =  (!head_inst->isDelayedCommit()) &&
+                                           ((THE_ISA != ALPHA_ISA) ||
+                                             (!(pc[0].instAddr() & 0x3)));
                 }
 
                 // Updates misc. registers.
@@ -1114,13 +1137,11 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
         head_inst->setCompleted();
     }
 
-#if USE_CHECKER
     // Use checker prior to updating anything due to traps or PC
     // based events.
     if (cpu->checker) {
         cpu->checker->verify(head_inst);
     }
-#endif
 
     if (inst_fault != NoFault) {
         DPRINTF(Commit, "Inst [sn:%lli] PC %s has a fault\n",
@@ -1133,12 +1154,10 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
 
         head_inst->setCompleted();
 
-#if USE_CHECKER
         if (cpu->checker) {
             // Need to check the instruction before its fault is processed
             cpu->checker->verify(head_inst);
         }
-#endif
 
         assert(!thread[tid]->inSyscall);
 
@@ -1164,7 +1183,7 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
         if (head_inst->traceData) {
             if (DTRACE(ExecFaulting)) {
                 head_inst->traceData->setFetchSeq(head_inst->seqNum);
-                head_inst->traceData->setCPSeq(thread[tid]->numInst);
+                head_inst->traceData->setCPSeq(thread[tid]->numOp);
                 head_inst->traceData->dump();
             }
             delete head_inst->traceData;
@@ -1198,10 +1217,14 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
             head_inst->seqNum, head_inst->pcState());
     if (head_inst->traceData) {
         head_inst->traceData->setFetchSeq(head_inst->seqNum);
-        head_inst->traceData->setCPSeq(thread[tid]->numInst);
+        head_inst->traceData->setCPSeq(thread[tid]->numOp);
         head_inst->traceData->dump();
         delete head_inst->traceData;
         head_inst->traceData = NULL;
+    }
+    if (head_inst->isReturn()) {
+        DPRINTF(Commit,"Return Instruction Committed [sn:%lli] PC %s \n",
+                        head_inst->seqNum, head_inst->pcState());
     }
 
     // Update the commit rename map
@@ -1221,11 +1244,11 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
              head_inst->microPC(),
              head_inst->seqNum,
              head_inst->staticInst->disassemble(head_inst->instAddr()));
-    DPRINTFR(O3PipeView, "O3PipeView:decode:%llu\n", head_inst->decodeTick);
-    DPRINTFR(O3PipeView, "O3PipeView:rename:%llu\n", head_inst->renameTick);
-    DPRINTFR(O3PipeView, "O3PipeView:dispatch:%llu\n", head_inst->dispatchTick);
-    DPRINTFR(O3PipeView, "O3PipeView:issue:%llu\n", head_inst->issueTick);
-    DPRINTFR(O3PipeView, "O3PipeView:complete:%llu\n", head_inst->completeTick);
+    DPRINTFR(O3PipeView, "O3PipeView:decode:%llu\n", head_inst->fetchTick + head_inst->decodeTick);
+    DPRINTFR(O3PipeView, "O3PipeView:rename:%llu\n", head_inst->fetchTick + head_inst->renameTick);
+    DPRINTFR(O3PipeView, "O3PipeView:dispatch:%llu\n", head_inst->fetchTick + head_inst->dispatchTick);
+    DPRINTFR(O3PipeView, "O3PipeView:issue:%llu\n", head_inst->fetchTick + head_inst->issueTick);
+    DPRINTFR(O3PipeView, "O3PipeView:complete:%llu\n", head_inst->fetchTick + head_inst->completeTick);
     DPRINTFR(O3PipeView, "O3PipeView:retire:%llu\n", curTick());
 #endif
 
@@ -1342,18 +1365,9 @@ DefaultCommit<Impl>::updateComInstStats(DynInstPtr &inst)
 {
     ThreadID tid = inst->threadNumber;
 
-    //
-    //  Pick off the software prefetches
-    //
-#ifdef TARGET_ALPHA
-    if (inst->isDataPrefetch()) {
-        statComSwp[tid]++;
-    } else {
-        statComInst[tid]++;
-    }
-#else
-    statComInst[tid]++;
-#endif
+    if (!inst->isMicroop() || inst->isLastMicroop())
+        instsCommitted[tid]++;
+    opsCommitted[tid]++;
 
     //
     //  Control Instructions

@@ -40,15 +40,16 @@
 #ifndef __ARCH_X86_REGISTERS_HH__
 #define __ARCH_X86_REGISTERS_HH__
 
+#include "arch/x86/generated/max_inst_regs.hh"
 #include "arch/x86/regs/int.hh"
 #include "arch/x86/regs/misc.hh"
-#include "arch/x86/max_inst_regs.hh"
 #include "arch/x86/x86_traits.hh"
 
 namespace X86ISA
 {
 using X86ISAInst::MaxInstSrcRegs;
 using X86ISAInst::MaxInstDestRegs;
+using X86ISAInst::MaxMiscDestRegs;
 const int NumMiscArchRegs = NUM_MISCREGS;
 const int NumMiscRegs = NUM_MISCREGS;
 

@@ -433,12 +433,36 @@ Formula::str() const
     return root ? root->str() : "";
 }
 
+CallbackQueue dumpQueue;
 CallbackQueue resetQueue;
 
 void
 registerResetCallback(Callback *cb)
 {
     resetQueue.add(cb);
+}
+
+bool _enabled = false;
+
+bool
+enabled()
+{
+    return _enabled;
+}
+
+void
+enable()
+{
+    if (_enabled)
+        fatal("Stats are already enabled");
+
+    _enabled = true;
+}
+
+void
+registerDumpCallback(Callback *cb)
+{
+    dumpQueue.add(cb);
 }
 
 } // namespace Stats

@@ -46,46 +46,17 @@
 #include "mem/request.hh"
 #include "sim/sim_events.hh"
 #include "sim/stats.hh"
+#include "sim/system.hh"
 
 using namespace std;
 
 int TESTER_ALLOCATOR=0;
 
 bool
-MemTest::CpuPort::recvTiming(PacketPtr pkt)
+MemTest::CpuPort::recvTimingResp(PacketPtr pkt)
 {
-    if (pkt->isResponse()) {
-        memtest->completeRequest(pkt);
-    } else {
-        // must be snoop upcall
-        assert(pkt->isRequest());
-        assert(pkt->getDest() == Packet::Broadcast);
-    }
+    memtest->completeRequest(pkt);
     return true;
-}
-
-Tick
-MemTest::CpuPort::recvAtomic(PacketPtr pkt)
-{
-    // must be snoop upcall
-    assert(pkt->isRequest());
-    assert(pkt->getDest() == Packet::Broadcast);
-    return curTick();
-}
-
-void
-MemTest::CpuPort::recvFunctional(PacketPtr pkt)
-{
-    //Do nothing if we see one come through
-//    if (curTick() != 0)//Supress warning durring initialization
-//        warn("Functional Writes not implemented in MemTester\n");
-    //Need to find any response values that intersect and update
-    return;
-}
-
-void
-MemTest::CpuPort::recvRangeChange()
-{
 }
 
 void
@@ -100,7 +71,7 @@ MemTest::sendPkt(PacketPtr pkt) {
         cachePort.sendAtomic(pkt);
         completeRequest(pkt);
     }
-    else if (!cachePort.sendTiming(pkt)) {
+    else if (!cachePort.sendTimingReq(pkt)) {
         DPRINTF(MemTest, "accessRetry setting to true\n");
 
         //
@@ -124,6 +95,7 @@ MemTest::MemTest(const Params *p)
       tickEvent(this),
       cachePort("test", this),
       funcPort("functional", this),
+      funcProxy(funcPort),
       retryPkt(NULL),
 //      mainMem(main_mem),
 //      checkMem(check_mem),
@@ -132,6 +104,7 @@ MemTest::MemTest(const Params *p)
       percentFunctional(p->percent_functional),
       percentUncacheable(p->percent_uncacheable),
       issueDmas(p->issue_dmas),
+      masterId(p->sys->getMasterId(name())),
       progressInterval(p->progress_interval),
       nextProgressMessage(p->progress_interval),
       percentSourceUnaligned(p->percent_source_unaligned),
@@ -158,15 +131,15 @@ MemTest::MemTest(const Params *p)
     dmaOutstanding = false;
 }
 
-Port *
-MemTest::getPort(const std::string &if_name, int idx)
+MasterPort &
+MemTest::getMasterPort(const std::string &if_name, int idx)
 {
     if (if_name == "functional")
-        return &funcPort;
+        return funcPort;
     else if (if_name == "test")
-        return &cachePort;
+        return cachePort;
     else
-        panic("No Such Port\n");
+        return MemObject::getMasterPort(if_name, idx);
 }
 
 void
@@ -235,7 +208,7 @@ MemTest::completeRequest(PacketPtr pkt)
                 exitSimLoop("maximum number of loads reached");
         } else {
             assert(pkt->isWrite());
-            funcPort.writeBlob(req->getPaddr(), pkt_data, req->getSize());
+            funcProxy.writeBlob(req->getPaddr(), pkt_data, req->getSize());
             numWrites++;
             numWritesStat++;
         }
@@ -321,11 +294,11 @@ MemTest::tick()
 
     if (issueDmas) {
         paddr &= ~((1 << dma_access_size) - 1);
-        req->setPhys(paddr, 1 << dma_access_size, flags);
+        req->setPhys(paddr, 1 << dma_access_size, flags, masterId);
         req->setThreadContext(id,0);
     } else {
         paddr &= ~((1 << access_size) - 1);
-        req->setPhys(paddr, 1 << access_size, flags);
+        req->setPhys(paddr, 1 << access_size, flags, masterId);
         req->setThreadContext(id,0);
     }
     assert(req->getSize() == 1);
@@ -347,15 +320,14 @@ MemTest::tick()
         outstandingAddrs.insert(paddr);
 
         // ***** NOTE FOR RON: I'm not sure how to access checkMem. - Kevin
-        funcPort.readBlob(req->getPaddr(), result, req->getSize());
+        funcProxy.readBlob(req->getPaddr(), result, req->getSize());
 
         DPRINTF(MemTest,
                 "id %d initiating %sread at addr %x (blk %x) expecting %x\n",
                 id, do_functional ? "functional " : "", req->getPaddr(),
                 blockAddr(req->getPaddr()), *result);
 
-        PacketPtr pkt = new Packet(req, MemCmd::ReadReq, Packet::Broadcast);
-        pkt->setSrc(0);
+        PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
         pkt->dataDynamicArray(new uint8_t[req->getSize()]);
         MemTestSenderState *state = new MemTestSenderState(result);
         pkt->senderState = state;
@@ -386,8 +358,7 @@ MemTest::tick()
                 do_functional ? "functional " : "", req->getPaddr(),
                 blockAddr(req->getPaddr()), data & 0xff);
 
-        PacketPtr pkt = new Packet(req, MemCmd::WriteReq, Packet::Broadcast);
-        pkt->setSrc(0);
+        PacketPtr pkt = new Packet(req, MemCmd::WriteReq);
         uint8_t *pkt_data = new uint8_t[req->getSize()];
         pkt->dataDynamicArray(pkt_data);
         memcpy(pkt_data, &data, req->getSize());
@@ -407,7 +378,7 @@ MemTest::tick()
 void
 MemTest::doRetry()
 {
-    if (cachePort.sendTiming(retryPkt)) {
+    if (cachePort.sendTimingReq(retryPkt)) {
         DPRINTF(MemTest, "accessRetry setting to false\n");
         accessRetry = false;
         retryPkt = NULL;

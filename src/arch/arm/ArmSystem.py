@@ -43,7 +43,8 @@ class ArmMachineType(Enum):
     map = {'RealView_EB' : 827,
            'RealView_PBX' : 1901,
            'VExpress_ELT' : 2272,
-           'VExpress_CA9' : 2272}
+           'VExpress_CA9' : 2272,
+           'VExpress_EMM' : 2272}
 
 class ArmSystem(System):
     type = 'ArmSystem'
@@ -54,9 +55,8 @@ class ArmSystem(System):
     # 0xc00 Primary part number ("c" or higher implies ARM v7)
     # 0x0 Revision
     midr_regval = Param.UInt32(0x350fc000, "MIDR value")
+    multi_proc = Param.Bool(True, "Multiprocessor system?")
     boot_loader = Param.String("", "File that contains the boot loader code if any")
-    boot_loader_mem = Param.PhysicalMemory(NULL,
-                          "Memory object that boot loader is to be loaded into")
     gic_cpu_addr = Param.Addr(0, "Addres of the GIC CPU interface")
     flags_addr = Param.Addr(0, "Address of the flags register for MP booting")
 
@@ -65,5 +65,5 @@ class LinuxArmSystem(ArmSystem):
     load_addr_mask = 0x0fffffff
     machine_type = Param.ArmMachineType('RealView_PBX',
         "Machine id from http://www.arm.linux.org.uk/developer/machines/")
-
-
+    atags_addr = Param.Addr(0x100, "Address where default atags structure should be written")
+    early_kernel_symbols = Param.Bool(False, "enable early kernel symbol tables before MMU")

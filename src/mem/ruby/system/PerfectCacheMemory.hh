@@ -54,8 +54,6 @@ class PerfectCacheMemory
   public:
     PerfectCacheMemory();
 
-    static void printConfig(std::ostream& out);
-
     // tests to see if an address is present in the cache
     bool isTagPresent(const Address& address) const;
 
@@ -104,12 +102,6 @@ operator<<(std::ostream& out, const PerfectCacheMemory<ENTRY>& obj)
 template<class ENTRY>
 inline
 PerfectCacheMemory<ENTRY>::PerfectCacheMemory()
-{
-}
-
-template<class ENTRY>
-inline void
-PerfectCacheMemory<ENTRY>::printConfig(std::ostream& out)
 {
 }
 
@@ -188,7 +180,6 @@ PerfectCacheMemory<ENTRY>::changePermission(const Address& address,
     Address line_address = address;
     line_address.makeLineAddress();
     PerfectCacheLineState<ENTRY>& line_state = m_map[line_address];
-    AccessPermission old_perm = line_state.m_permission;
     line_state.m_permission = new_perm;
 }
 

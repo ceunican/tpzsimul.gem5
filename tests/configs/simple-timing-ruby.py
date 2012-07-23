@@ -35,20 +35,18 @@ import os, optparse, sys
 # Get paths we might need
 config_path = os.path.dirname(os.path.abspath(__file__))
 config_root = os.path.dirname(config_path)
-m5_root = os.path.dirname(config_root)
 addToPath(config_root+'/configs/common')
 addToPath(config_root+'/configs/ruby')
+addToPath(config_root+'/configs/topologies')
 
 import Ruby
+import Options
 
 parser = optparse.OptionParser()
+Options.addCommonOptions(parser)
 
-#
 # Add the ruby specific and protocol specific options
-#
 Ruby.define_options(parser)
-
-execfile(os.path.join(config_root, "configs/common", "Options.py"))
 
 (options, args) = parser.parse_args()
 
@@ -69,11 +67,14 @@ options.l3_assoc=2
 options.num_cpus = 1
 
 cpu = TimingSimpleCPU(cpu_id=0)
-system = System(cpu = cpu, physmem = PhysicalMemory())
+system = System(cpu = cpu, physmem = SimpleMemory())
 
 Ruby.create_system(options, system)
 
 assert(len(system.ruby._cpu_ruby_ports) == 1)
+
+# create the interrupt controller
+cpu.createInterruptController()
 
 #
 # Tie the cpu cache ports to the ruby cpu ports and

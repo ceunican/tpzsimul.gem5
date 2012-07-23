@@ -63,30 +63,6 @@ AlphaSystem::AlphaSystem(Params *p)
     pal = createObjectFile(params()->pal);
     if (pal == NULL)
         fatal("Could not load PALcode file %s", params()->pal);
-}
-
-AlphaSystem::~AlphaSystem()
-{
-    delete consoleSymtab;
-    delete console;
-    delete pal;
-#ifdef DEBUG
-    delete consolePanicEvent;
-#endif
-}
-
-void
-AlphaSystem::initState()
-{
-    // Moved from the constructor to here since it relies on the
-    // address map being resolved in the interconnect
-
-    // Call the initialisation of the super class
-    System::initState();
-
-    // Load program sections into memory
-    pal->loadSections(physProxy, loadAddrMask);
-    console->loadSections(physProxy, loadAddrMask);
 
     // load symbols
     if (!console->loadGlobalSymbols(consoleSymtab))
@@ -107,10 +83,33 @@ AlphaSystem::initState()
     if (!pal->loadLocalSymbols(debugSymbolTable))
         panic("could not load pal symbols\n");
 
-     Addr addr = 0;
-#ifndef NDEBUG
-    consolePanicEvent = addConsoleFuncEvent<BreakPCEvent>("panic");
+
+}
+
+AlphaSystem::~AlphaSystem()
+{
+    delete consoleSymtab;
+    delete console;
+    delete pal;
+#ifdef DEBUG
+    delete consolePanicEvent;
 #endif
+}
+
+void
+AlphaSystem::initState()
+{
+     Addr addr = 0;
+
+    // Moved from the constructor to here since it relies on the
+    // address map being resolved in the interconnect
+
+    // Call the initialisation of the super class
+    System::initState();
+
+    // Load program sections into memory
+    pal->loadSections(physProxy, loadAddrMask);
+    console->loadSections(physProxy, loadAddrMask);
 
     /**
      * Copy the osflags (kernel arguments) into the consoles
@@ -119,8 +118,8 @@ AlphaSystem::initState()
      * others do.)
      */
     if (consoleSymtab->findAddress("env_booted_osflags", addr)) {
-        virtProxy->writeBlob(addr, (uint8_t*)params()->boot_osflags.c_str(),
-                             strlen(params()->boot_osflags.c_str()));
+        virtProxy.writeBlob(addr, (uint8_t*)params()->boot_osflags.c_str(),
+                            strlen(params()->boot_osflags.c_str()));
     }
 
     /**
@@ -130,11 +129,34 @@ AlphaSystem::initState()
     if (consoleSymtab->findAddress("m5_rpb", addr)) {
         uint64_t data;
         data = htog(params()->system_type);
-        virtProxy->write(addr+0x50, data);
+        virtProxy.write(addr+0x50, data);
         data = htog(params()->system_rev);
-        virtProxy->write(addr+0x58, data);
+        virtProxy.write(addr+0x58, data);
     } else
         panic("could not find hwrpb\n");
+
+    // Setup all the function events now that we have a system and a symbol
+    // table
+    setupFuncEvents();
+}
+
+void
+AlphaSystem::loadState(Checkpoint *cp)
+{
+    System::loadState(cp);
+
+    // Setup all the function events now that we have a system and a symbol
+    // table
+    setupFuncEvents();
+
+}
+
+void
+AlphaSystem::setupFuncEvents()
+{
+#ifndef NDEBUG
+    consolePanicEvent = addConsoleFuncEvent<BreakPCEvent>("panic");
+#endif
 }
 
 /**
@@ -178,8 +200,8 @@ AlphaSystem::fixFuncEventAddr(Addr addr)
     // lda  gp,Y(gp): opcode 8, Ra = 29, rb = 29
     const uint32_t gp_lda_pattern  = (8 << 26) | (29 << 21) | (29 << 16);
 
-    uint32_t i1 = virtProxy->read<uint32_t>(addr);
-    uint32_t i2 = virtProxy->read<uint32_t>(addr + sizeof(MachInst));
+    uint32_t i1 = virtProxy.read<uint32_t>(addr);
+    uint32_t i2 = virtProxy.read<uint32_t>(addr + sizeof(MachInst));
 
     if ((i1 & inst_mask) == gp_ldah_pattern &&
         (i2 & inst_mask) == gp_lda_pattern) {
@@ -196,7 +218,7 @@ AlphaSystem::setAlphaAccess(Addr access)
 {
     Addr addr = 0;
     if (consoleSymtab->findAddress("m5AlphaAccess", addr)) {
-        virtProxy->write(addr, htog(Phys2K0Seg(access)));
+        virtProxy.write(addr, htog(Phys2K0Seg(access)));
     } else {
         panic("could not find m5AlphaAccess\n");
     }

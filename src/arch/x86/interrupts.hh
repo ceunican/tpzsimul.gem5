@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2007 The Hewlett-Packard Development Company
  * All rights reserved.
  *
@@ -35,6 +47,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Gabe Black
+ *          Andreas Hansson
  */
 
 #ifndef __ARCH_X86_INTERRUPTS_HH__
@@ -175,6 +188,9 @@ class Interrupts : public BasicPioDevice, IntDev
 
     int initialApicId;
 
+    // Port for receiving interrupts
+    IntSlavePort intSlavePort;
+
   public:
 
     int getInitialApicId() { return initialApicId; }
@@ -220,14 +236,23 @@ class Interrupts : public BasicPioDevice, IntDev
         return entry.periodic;
     }
 
-    AddrRangeList getAddrRanges();
-    AddrRangeList getIntAddrRange();
+    AddrRangeList getAddrRanges() const;
+    AddrRangeList getIntAddrRange() const;
 
-    Port *getPort(const std::string &if_name, int idx = -1)
+    MasterPort &getMasterPort(const std::string &if_name, int idx = -1)
     {
-        if (if_name == "int_port")
-            return intPort;
-        return BasicPioDevice::getPort(if_name, idx);
+        if (if_name == "int_master") {
+            return intMasterPort;
+        }
+        return BasicPioDevice::getMasterPort(if_name, idx);
+    }
+
+    SlavePort &getSlavePort(const std::string &if_name, int idx = -1)
+    {
+        if (if_name == "int_slave") {
+            return intSlavePort;
+        }
+        return BasicPioDevice::getSlavePort(if_name, idx);
     }
 
     /*

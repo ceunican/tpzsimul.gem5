@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 1999-2008 Mark D. Hill and David A. Wood
  * Copyright (c) 2009-2010 Advanced Micro Devices, Inc.
  * All rights reserved.
@@ -40,6 +52,12 @@ RubyDirectedTester::RubyDirectedTester(const Params *p)
 {
     m_requests_completed = 0;
 
+    // create the ports
+    for (int i = 0; i < p->port_cpuPort_connection_count; ++i) {
+        ports.push_back(new CpuPort(csprintf("%s-port%d", name(), i),
+                                    this, i));
+    }
+
     // add the check start event to the event queue
     schedule(directedStartEvent, 1);
 }
@@ -57,38 +75,25 @@ RubyDirectedTester::init()
     generator->setDirectedTester(this);
 }
 
-Port *
-RubyDirectedTester::getPort(const std::string &if_name, int idx)
+MasterPort &
+RubyDirectedTester::getMasterPort(const std::string &if_name, int idx)
 {
     if (if_name != "cpuPort") {
-        panic("RubyDirectedTester::getPort: unknown port %s requested", if_name);
+        // pass it along to our super class
+        return MemObject::getMasterPort(if_name, idx);
+    } else {
+        if (idx >= static_cast<int>(ports.size())) {
+            panic("RubyDirectedTester::getMasterPort: unknown index %d\n", idx);
+        }
+
+        return *ports[idx];
     }
-
-    if (idx >= (int)ports.size()) {
-        ports.resize(idx + 1);
-    }
-
-    if (ports[idx] != NULL) {
-        panic("RubyDirectedTester::getPort: port %d already assigned", idx);
-    }
-
-    CpuPort *port = new CpuPort(csprintf("%s-port%d", name(), idx), this, idx);
-
-    ports[idx] = port;
-    return port;
-}
-
-Tick
-RubyDirectedTester::CpuPort::recvAtomic(PacketPtr pkt)
-{
-    panic("RubyDirectedTester::CpuPort::recvAtomic() not implemented!\n");
-    return 0;
 }
 
 bool
-RubyDirectedTester::CpuPort::recvTiming(PacketPtr pkt)
+RubyDirectedTester::CpuPort::recvTimingResp(PacketPtr pkt)
 {
-    tester->hitCallback(idx, pkt->getAddr());
+    tester->hitCallback(id, pkt->getAddr());
     
     //
     // Now that the tester has completed, delete the packet, then return
@@ -98,7 +103,7 @@ RubyDirectedTester::CpuPort::recvTiming(PacketPtr pkt)
     return true;
 }
 
-Port*
+MasterPort*
 RubyDirectedTester::getCpuPort(int idx)
 {
     assert(idx >= 0 && idx < ports.size());

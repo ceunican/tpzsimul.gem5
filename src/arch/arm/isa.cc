@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -39,16 +39,13 @@
  */
 
 #include "arch/arm/isa.hh"
-#include "config/use_checker.hh"
+#include "arch/arm/system.hh"
+#include "cpu/checker/cpu.hh"
 #include "debug/Arm.hh"
 #include "debug/MiscRegs.hh"
 #include "sim/faults.hh"
 #include "sim/stat_control.hh"
 #include "sim/system.hh"
-
-#if USE_CHECKER
-#include "cpu/checker/cpu.hh"
-#endif
 
 namespace ArmISA
 {
@@ -76,7 +73,7 @@ ISA::clear()
     miscRegs[MISCREG_SCTLR] = sctlr;
     miscRegs[MISCREG_SCTLR_RST] = sctlr_rst;
 
-    // Preserve MIDR accross reset
+    // Preserve MIDR across reset
     miscRegs[MISCREG_MIDR] = midr;
 
     /* Start with an event in the mailbox */
@@ -105,8 +102,6 @@ ISA::clear()
     mvfr1.advSimdHalfPrecision = 1;
     mvfr1.vfpHalfPrecision = 1;
     miscRegs[MISCREG_MVFR1] = mvfr1;
-
-    miscRegs[MISCREG_MPIDR] = 0;
 
     // Reset values of PRRR and NMRR are implementation dependent
 
@@ -176,6 +171,8 @@ ISA::readMiscRegNoEffect(int misc_reg)
 MiscReg
 ISA::readMiscReg(int misc_reg, ThreadContext *tc)
 {
+    ArmSystem *arm_sys;
+
     if (misc_reg == MISCREG_CPSR) {
         CPSR cpsr = miscRegs[misc_reg];
         PCState pc = tc->pcState();
@@ -189,7 +186,17 @@ ISA::readMiscReg(int misc_reg, ThreadContext *tc)
 
     switch (misc_reg) {
       case MISCREG_MPIDR:
-        return tc->cpuId();
+        arm_sys = dynamic_cast<ArmSystem*>(tc->getSystemPtr());
+        assert(arm_sys);
+
+        if (arm_sys->multiProc) {
+            return 0x80000000 | // multiprocessor extensions available
+                   tc->cpuId();
+        } else {
+            return 0x80000000 |  // multiprocessor extensions available
+                   0x40000000 |  // in up system
+                   tc->cpuId();
+        }
         break;
       case MISCREG_ID_MMFR0:
         return 0x03; // VMSAv7 support
@@ -213,8 +220,7 @@ ISA::readMiscReg(int misc_reg, ThreadContext *tc)
              "config registers and jumping to ThumbEE vectors\n");
         return 0x0031; // !ThumbEE | !Jazelle | Thumb | ARM
       case MISCREG_ID_PFR1:
-        warn("reading unimplmented register ID_PFR1");
-        return 0;
+        return 0x00001; // !Timer | !Virti | !M Profile | !TrustZone | ARMv4
       case MISCREG_CTR:
         return 0x86468006; // V7, 64 byte cache line, load/exclusive is exact
       case MISCREG_ACTLR:
@@ -233,11 +239,20 @@ ISA::readMiscReg(int misc_reg, ThreadContext *tc)
       case MISCREG_FPSCR_EXC:
         return readMiscRegNoEffect(MISCREG_FPSCR) & ~FpscrExcMask;
       case MISCREG_L2CTLR:
-        // mostly unimplemented, just set NumCPUs field from sim and return
-        L2CTLR l2ctlr = 0;
-        // b00:1CPU to b11:4CPUs
-        l2ctlr.numCPUs = tc->getSystemPtr()->numContexts() - 1;
-        return l2ctlr;
+        {
+            // mostly unimplemented, just set NumCPUs field from sim and return
+            L2CTLR l2ctlr = 0;
+            // b00:1CPU to b11:4CPUs
+            l2ctlr.numCPUs = tc->getSystemPtr()->numContexts() - 1;
+            return l2ctlr;
+        }
+      case MISCREG_DBGDIDR:
+        /* For now just implement the version number.
+         * Return 0 as we don't support debug architecture yet.
+         */
+         return 0;
+      case MISCREG_DBGDSCR_INT:
+        return 0;
     }
     return readMiscRegNoEffect(misc_reg);
 }
@@ -284,11 +299,15 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
         PCState pc = tc->pcState();
         pc.nextThumb(cpsr.t);
         pc.nextJazelle(cpsr.j);
-#if USE_CHECKER
-        tc->pcStateNoRecord(pc);
-#else
-        tc->pcState(pc);
-#endif //USE_CHECKER
+
+        // Follow slightly different semantics if a CheckerCPU object
+        // is connected
+        CheckerCPU *checker = tc->getCheckerCpuPtr();
+        if (checker) {
+            tc->pcStateNoRecord(pc);
+        } else {
+            tc->pcState(pc);
+        }
     } else if (misc_reg >= MISCREG_CP15_UNIMP_START &&
         misc_reg < MISCREG_CP15_END) {
         panic("Unimplemented CP15 register %s wrote with %#x.\n",
@@ -391,14 +410,13 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                     oc = sys->getThreadContext(x);
                     oc->getDTBPtr()->allCpusCaching();
                     oc->getITBPtr()->allCpusCaching();
-#if USE_CHECKER
-                    CheckerCPU *checker =
-                        dynamic_cast<CheckerCPU*>(oc->getCheckerCpuPtr());
+
+                    // If CheckerCPU is connected, need to notify it.
+                    CheckerCPU *checker = oc->getCheckerCpuPtr();
                     if (checker) {
                         checker->getDTBPtr()->allCpusCaching();
                         checker->getITBPtr()->allCpusCaching();
                     }
-#endif
                 }
                 return;
             }
@@ -416,14 +434,13 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                 assert(oc->getITBPtr() && oc->getDTBPtr());
                 oc->getITBPtr()->flushAll();
                 oc->getDTBPtr()->flushAll();
-#if USE_CHECKER
-                CheckerCPU *checker =
-                    dynamic_cast<CheckerCPU*>(oc->getCheckerCpuPtr());
+
+                // If CheckerCPU is connected, need to notify it of a flush
+                CheckerCPU *checker = oc->getCheckerCpuPtr();
                 if (checker) {
                     checker->getITBPtr()->flushAll();
                     checker->getDTBPtr()->flushAll();
                 }
-#endif
             }
             return;
           case MISCREG_ITLBIALL:
@@ -442,16 +459,14 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                         bits(newVal, 7,0));
                 oc->getDTBPtr()->flushMvaAsid(mbits(newVal, 31, 12),
                         bits(newVal, 7,0));
-#if USE_CHECKER
-                CheckerCPU *checker =
-                    dynamic_cast<CheckerCPU*>(oc->getCheckerCpuPtr());
+
+                CheckerCPU *checker = oc->getCheckerCpuPtr();
                 if (checker) {
                     checker->getITBPtr()->flushMvaAsid(mbits(newVal, 31, 12),
                             bits(newVal, 7,0));
                     checker->getDTBPtr()->flushMvaAsid(mbits(newVal, 31, 12),
                             bits(newVal, 7,0));
                 }
-#endif
             }
             return;
           case MISCREG_TLBIASIDIS:
@@ -462,14 +477,11 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                 assert(oc->getITBPtr() && oc->getDTBPtr());
                 oc->getITBPtr()->flushAsid(bits(newVal, 7,0));
                 oc->getDTBPtr()->flushAsid(bits(newVal, 7,0));
-#if USE_CHECKER
-                CheckerCPU *checker =
-                    dynamic_cast<CheckerCPU*>(oc->getCheckerCpuPtr());
+                CheckerCPU *checker = oc->getCheckerCpuPtr();
                 if (checker) {
                     checker->getITBPtr()->flushAsid(bits(newVal, 7,0));
                     checker->getDTBPtr()->flushAsid(bits(newVal, 7,0));
                 }
-#endif
             }
             return;
           case MISCREG_TLBIMVAAIS:
@@ -480,14 +492,12 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                 assert(oc->getITBPtr() && oc->getDTBPtr());
                 oc->getITBPtr()->flushMva(mbits(newVal, 31,12));
                 oc->getDTBPtr()->flushMva(mbits(newVal, 31,12));
-#if USE_CHECKER
-                CheckerCPU *checker =
-                    dynamic_cast<CheckerCPU*>(oc->getCheckerCpuPtr());
+
+                CheckerCPU *checker = oc->getCheckerCpuPtr();
                 if (checker) {
                     checker->getITBPtr()->flushMva(mbits(newVal, 31,12));
                     checker->getDTBPtr()->flushMva(mbits(newVal, 31,12));
                 }
-#endif
             }
             return;
           case MISCREG_ITLBIMVA:
@@ -559,7 +569,8 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc)
                       panic("Security Extensions not implemented!");
               }
               warn("Translating via MISCREG in atomic mode! Fix Me!\n");
-              req->setVirt(0, val, 1, flags, tc->pcState().pc());
+              req->setVirt(0, val, 1, flags, tc->pcState().pc(),
+                      Request::funcMasterId);
               fault = tc->getDTBPtr()->translateAtomic(req, tc, mode);
               if (fault == NoFault) {
                   miscRegs[MISCREG_PAR] =
