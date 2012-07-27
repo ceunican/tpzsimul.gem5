@@ -33,7 +33,6 @@
 #include "base/stl_helpers.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/protocol/MachineType.hh"
-#include "mem/protocol/TopologyType.hh"
 #include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/common/NetDest.hh"
 #include "mem/ruby/network/simple/SimpleLink.hh"
@@ -541,7 +540,6 @@ TopazNetwork::printConfig(ostream& out) const
         m_switch_ptr_vector[i]->printConfig(out);
     }
 
-    m_topology_ptr->printConfig(out);
 }
 
 void
