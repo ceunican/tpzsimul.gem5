@@ -144,6 +144,11 @@ class MessageBuffer
 
     void setIncomingLink(int link_id) { m_input_link_id = link_id; }
     void setVnet(int net) { m_vnet_id = net; }
+    //REquired by TOPAZ adaptive interface
+    const bool isToNet() {return m_toNet;}
+    void setToNet() { m_toNet = true; }
+    bool isFromNet() { return m_fromNet; }
+    const void setFromNet() { m_fromNet = true; }
 
   private:
     //added by SS
@@ -192,6 +197,8 @@ class MessageBuffer
 
     int m_input_link_id;
     int m_vnet_id;
+    bool m_toNet;
+    bool m_fromNet;
 };
 
 inline std::ostream&

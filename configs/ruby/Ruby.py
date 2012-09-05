@@ -75,6 +75,24 @@ def define_options(parser):
 
     parser.add_option("--ruby_stats", type="string", default="ruby.stats")
 
+    #TOPAZ options
+    parser.add_option("--topaz-init-file", type = "string", default="./TPZSimul.ini",
+                       help="TOPAZ: File that declares <simulation>.sgm,"\
+                            " <network>.sgm and <router>.sgm" )
+
+    parser.add_option("--topaz-network", type = "string", default=False,
+                       help="TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ" )
+
+    parser.add_option("--topaz-flit-size", type="int", default=16,
+                      help="TOPAZ: Number of bytes per physical router-to-router wire")
+
+    parser.add_option("--topaz-clock-ratio", type="int", default=1,
+                      help="TOPAZ: memory-network clock multiplier")
+
+    parser.add_option("--topaz-adaptive-interface-threshold",  type = "int", default=0,
+                       help="TOPAZ: Number of messages that has to be transmitted "\
+                             "before to activate TOPAZ" )
+
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
     eval("%s.define_options(parser)" % protocol)
@@ -131,6 +149,11 @@ def create_system(options, system, piobus = None, dma_ports = []):
         class IntLinkClass(GarnetIntLink): pass
         class ExtLinkClass(GarnetExtLink): pass
         class RouterClass(GarnetRouter): pass
+    elif options.topaz_network:
+        class NetworkClass(TopazNetwork): pass
+        class IntLinkClass(SimpleIntLink): pass
+        class ExtLinkClass(SimpleExtLink): pass
+        class RouterClass(BasicRouter): pass
     else:
         class NetworkClass(SimpleNetwork): pass
         class IntLinkClass(SimpleIntLink): pass
@@ -154,13 +177,24 @@ def create_system(options, system, piobus = None, dma_ports = []):
     net_topology.ext_links = ext_links
 
 
+
     if options.network_fault_model:
-        assert(options.garnet_network == "fixed")
-        fault_model = FaultModel()
-        network = NetworkClass(ruby_system = ruby, topology = net_topology,\
-                               enable_fault_model=True, fault_model = fault_model)
+       assert(options.garnet_network == "fixed")
+       fault_model = FaultModel()
+       network = NetworkClass(ruby_system = ruby, topology = net_topology,\
+                              enable_fault_model=True, fault_model = fault_model)
+    elif options.topaz_network:
+       #Garnet and Topaz are incompatible
+       assert (not(options.garnet_network !=None))
+       network = NetworkClass(ruby_system = ruby, topology = net_topology, \
+                              topaz_network = options.topaz_network,\
+                              topaz_flit_size = options.topaz_flit_size,\
+                              topaz_clock_ratio =  options.topaz_clock_ratio, \
+                              topaz_adaptive_interface_threshold = options.topaz_adaptive_interface_threshold, \
+                              topaz_init_file =options.topaz_init_file )
     else:
-        network = NetworkClass(ruby_system = ruby, topology = net_topology)
+       network = NetworkClass(ruby_system = ruby, topology = net_topology)
+
 
     #
     # Loop through the directory controlers.
