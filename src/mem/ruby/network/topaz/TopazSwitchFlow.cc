@@ -309,7 +309,7 @@ void TopazSwitchFlow::wakeup() {
                     }
                     // Send the message to the network
                     DPRINTF(RubyNetwork, "Send at switch: [%d] vnet: [%d] time: [%d].\n",
-                                          m_switch_id, vnet, g_eventQueue_ptr->getTime());
+                                          m_switch_id, vnet, g_system_ptr->getTime());
                     TPZSIMULATOR()->getSimulation(1)->getNetwork()->sendMessage(msg);
                     m_network_ptr->increaseNumTopazMsg(msg_destinations.count());
                 }
@@ -335,7 +335,7 @@ void TopazSwitchFlow::wakeup() {
 //******************************************************************************
 void TopazSwitchFlow::wakeUpTopaz() {
     long unsigned current_time =
-         static_cast<long unsigned>(g_eventQueue_ptr->getTime()) - m_ruby_start;
+         static_cast<long unsigned>(g_system_ptr->getTime()) - m_ruby_start;
     int procesorNetRatio=m_network_ptr->getProcRouterRatio();
     int messagesOnNets=0;
     long diff_time = current_time - TPZSIMULATOR()->getSimulation(1)->getCurrentTime()*procesorNetRatio;
@@ -360,7 +360,7 @@ void TopazSwitchFlow::wakeUpTopaz() {
                            getConsumerDestinations(consumer,
                                           net_msg_ptr->getInternalDestination());
                 DPRINTF(RubyNetwork, "Arrival at switch: [%d] vnet: [%d] time: [%d].\n",
-                                      consumer, vvnet, g_eventQueue_ptr->getTime());
+                                      consumer, vvnet, g_system_ptr->getTime());
                 int m_queue=0;
                 for (MachineType mType = MachineType_FIRST;
                      mType < MachineType_NUM; ++mType) {
@@ -387,7 +387,7 @@ void TopazSwitchFlow::wakeUpTopaz() {
         messagesOnNets=m_network_ptr->getTopazMessages();
     }
     if ( messagesOnNets!=0)
-        g_eventQueue_ptr->scheduleEvent(this, 1);
+        scheduleEvent(1);
 }
 
 void TopazSwitchFlow::wakeupVnet(int vnet) {
@@ -510,7 +510,7 @@ void TopazSwitchFlow::wakeupVnet(int vnet) {
 
             // There were not enough resources
             if (!enough) {
-                 g_eventQueue_ptr->scheduleEvent(this, 1);
+                 scheduleEvent(1);
                  DPRINTF(RubyNetwork, "Can't deliver message since a node "
                                       "is blocked\n");
                  DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
