@@ -132,8 +132,10 @@ DefaultFetch<Impl>::DefaultFetch(O3CPU *_cpu, DerivO3CPUParams *params)
     // Get the size of an instruction.
     instSize = sizeof(TheISA::MachInst);
 
-    for (int i = 0; i < Impl::MaxThreads; i++)
+    for (int i = 0; i < Impl::MaxThreads; i++) {
+        cacheData[i] = NULL;
         decoder[i] = new TheISA::Decoder(NULL);
+    }
 }
 
 template <class Impl>
@@ -346,7 +348,8 @@ DefaultFetch<Impl>::setIcache()
 
     for (ThreadID tid = 0; tid < numThreads; tid++) {
         // Create space to store a cache line.
-        cacheData[tid] = new uint8_t[cacheBlkSize];
+        if (!cacheData[tid])
+            cacheData[tid] = new uint8_t[cacheBlkSize];
         cacheDataPC[tid] = 0;
         cacheDataValid[tid] = false;
     }
@@ -359,8 +362,6 @@ DefaultFetch<Impl>::processCacheCompletion(PacketPtr pkt)
     ThreadID tid = pkt->req->threadId();
 
     DPRINTF(Fetch, "[tid:%u] Waking up from cache miss.\n", tid);
-
-    assert(!pkt->wasNacked());
 
     // Only change the status if it's still waiting on the icache access
     // to return.
@@ -645,7 +646,8 @@ DefaultFetch<Impl>::finishTranslation(Fault fault, RequestPtr mem_req)
             assert(!finishTranslationEvent.scheduled());
             finishTranslationEvent.setFault(fault);
             finishTranslationEvent.setReq(mem_req);
-            cpu->schedule(finishTranslationEvent, cpu->nextCycle(curTick() + cpu->ticks(1)));
+            cpu->schedule(finishTranslationEvent,
+                          cpu->clockEdge(Cycles(1)));
             return;
         }
         DPRINTF(Fetch, "[tid:%i] Got back req with addr %#x but expected %#x\n",

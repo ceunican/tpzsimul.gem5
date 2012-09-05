@@ -287,9 +287,8 @@ class TableWalker : public MemObject
          * A snooping DMA port merely calls the construtor of the DMA
          * port.
          */
-        SnoopingDmaPort(MemObject *dev, System *s, Tick min_backoff,
-                        Tick max_backoff) :
-            DmaPort(dev, s, min_backoff, max_backoff)
+        SnoopingDmaPort(MemObject *dev, System *s) :
+            DmaPort(dev, s)
         { }
     };
 
@@ -364,6 +363,9 @@ class TableWalker : public MemObject
     /** Port to issue translation requests from */
     SnoopingDmaPort port;
 
+    /** If we're draining keep the drain event around until we're drained */
+    Event *drainEvent;
+
     /** TLB that is initiating these table walks */
     TLB *tlb;
 
@@ -389,6 +391,8 @@ class TableWalker : public MemObject
         return dynamic_cast<const Params *>(_params);
     }
 
+    /** Checks if all state is cleared and if so, completes drain */
+    void completeDrain();
     virtual unsigned int drain(Event *de);
     virtual void resume();
     virtual MasterPort& getMasterPort(const std::string &if_name,

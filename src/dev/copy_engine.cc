@@ -49,6 +49,7 @@
 #include "base/cp_annotate.hh"
 #include "base/trace.hh"
 #include "debug/DMACopyEngine.hh"
+#include "debug/Drain.hh"
 #include "dev/copy_engine.hh"
 #include "mem/packet.hh"
 #include "mem/packet_access.hh"
@@ -77,8 +78,7 @@ CopyEngine::CopyEngine(const Params *p)
 
 
 CopyEngine::CopyEngineChannel::CopyEngineChannel(CopyEngine *_ce, int cid)
-    : cePort(_ce, _ce->sys, _ce->params()->min_backoff_delay,
-             _ce->params()->max_backoff_delay),
+    : cePort(_ce, _ce->sys),
       ce(_ce), channelId(cid), busy(false), underReset(false),
     refreshNext(false), latBeforeBegin(ce->params()->latBeforeBegin),
     latAfterCompletion(ce->params()->latAfterCompletion),
@@ -638,7 +638,7 @@ bool
 CopyEngine::CopyEngineChannel::inDrain()
 {
     if (ce->getState() == SimObject::Draining) {
-        DPRINTF(DMACopyEngine, "processing drain\n");
+        DPRINTF(Drain, "CopyEngine done draining, processing drain event\n");
         assert(drainEvent);
         drainEvent->process();
         drainEvent = NULL;
@@ -655,7 +655,7 @@ CopyEngine::CopyEngineChannel::drain(Event *de)
     unsigned int count = 1;
     count += cePort.drain(de);
 
-    DPRINTF(DMACopyEngine, "unable to drain, returning %d\n", count);
+    DPRINTF(Drain, "CopyEngineChannel not drained\n");
     drainEvent = de;
     return count;
 }
@@ -673,7 +673,7 @@ CopyEngine::drain(Event *de)
     else
         changeState(Drained);
 
-    DPRINTF(DMACopyEngine, "call to CopyEngine::drain() returning %d\n", count);
+    DPRINTF(Drain, "CopyEngine not drained\n");
     return count;
 }
 

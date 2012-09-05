@@ -55,6 +55,7 @@
 #include "cpu/simple_thread.hh"
 #include "cpu/thread_context.hh"
 #include "debug/Activity.hh"
+#include "debug/Drain.hh"
 #include "debug/O3CPU.hh"
 #include "debug/Quiesce.hh"
 #include "enums/MemoryMode.hh"
@@ -255,12 +256,13 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
       globalSeqNum(1),
       system(params->system),
       drainCount(0),
-      deferRegistration(params->defer_registration)
+      deferRegistration(params->defer_registration),
+      lastRunningCycle(curCycle())
 {
     if (!deferRegistration) {
         _status = Running;
     } else {
-        _status = Idle;
+        _status = SwitchedOut;
     }
 
     if (params->checker) {
@@ -385,9 +387,7 @@ FullO3CPU<Impl>::FullO3CPU(DerivO3CPUParams *params)
     // Setup the ROB for whichever stages need it.
     commit.setROB(&rob);
 
-    lastRunningCycle = curTick();
-
-    lastActivatedCycle = -1;
+    lastActivatedCycle = 0;
 #if 0
     // Give renameMap & rename stage access to the freeList;
     for (ThreadID tid = 0; tid < numThreads; tid++)
@@ -622,13 +622,13 @@ FullO3CPU<Impl>::tick()
             getState() == SimObject::Drained) {
             DPRINTF(O3CPU, "Switched out!\n");
             // increment stat
-            lastRunningCycle = curTick();
+            lastRunningCycle = curCycle();
         } else if (!activityRec.active() || _status == Idle) {
             DPRINTF(O3CPU, "Idle!\n");
-            lastRunningCycle = curTick();
+            lastRunningCycle = curCycle();
             timesIdled++;
         } else {
-            schedule(tickEvent, nextCycle(curTick() + ticks(1)));
+            schedule(tickEvent, clockEdge(Cycles(1)));
             DPRINTF(O3CPU, "Scheduling next tick!\n");
         }
     }
@@ -740,18 +740,20 @@ FullO3CPU<Impl>::totalOps() const
 
 template <class Impl>
 void
-FullO3CPU<Impl>::activateContext(ThreadID tid, int delay)
+FullO3CPU<Impl>::activateContext(ThreadID tid, Cycles delay)
 {
     // Needs to set each stage to running as well.
     if (delay){
         DPRINTF(O3CPU, "[tid:%i]: Scheduling thread context to activate "
-                "on cycle %d\n", tid, curTick() + ticks(delay));
+                "on cycle %d\n", tid, clockEdge(delay));
         scheduleActivateThreadEvent(tid, delay);
     } else {
         activateThread(tid);
     }
 
-    if (lastActivatedCycle < curTick()) {
+    // If we are time 0 or if the last activation time is in the past,
+    // schedule the next tick and wake up the fetch unit
+    if (lastActivatedCycle == 0 || lastActivatedCycle < curTick()) {
         scheduleTickEvent(delay);
 
         // Be sure to signal that there's some activity so the CPU doesn't
@@ -759,7 +761,11 @@ FullO3CPU<Impl>::activateContext(ThreadID tid, int delay)
         activityRec.activity();
         fetch.wakeFromQuiesce();
 
-        quiesceCycles += tickToCycles((curTick() - 1) - lastRunningCycle);
+        Cycles cycles(curCycle() - lastRunningCycle);
+        // @todo: This is an oddity that is only here to match the stats
+        if (cycles != 0)
+            --cycles;
+        quiesceCycles += cycles;
 
         lastActivatedCycle = curTick();
 
@@ -770,12 +776,12 @@ FullO3CPU<Impl>::activateContext(ThreadID tid, int delay)
 template <class Impl>
 bool
 FullO3CPU<Impl>::scheduleDeallocateContext(ThreadID tid, bool remove,
-                                           int delay)
+                                           Cycles delay)
 {
     // Schedule removal of thread data from CPU
     if (delay){
         DPRINTF(O3CPU, "[tid:%i]: Scheduling thread context to deallocate "
-                "on cycle %d\n", tid, curTick() + ticks(delay));
+                "on tick %d\n", tid, clockEdge(delay));
         scheduleDeallocateContextEvent(tid, remove, delay);
         return false;
     } else {
@@ -791,14 +797,14 @@ void
 FullO3CPU<Impl>::suspendContext(ThreadID tid)
 {
     DPRINTF(O3CPU,"[tid: %i]: Suspending Thread Context.\n", tid);
-    bool deallocated = scheduleDeallocateContext(tid, false, 1);
+    bool deallocated = scheduleDeallocateContext(tid, false, Cycles(1));
     // If this was the last thread then unschedule the tick event.
     if ((activeThreads.size() == 1 && !deallocated) ||
         activeThreads.size() == 0)
         unscheduleTickEvent();
 
     DPRINTF(Quiesce, "Suspending Context\n");
-    lastRunningCycle = curTick();
+    lastRunningCycle = curCycle();
     _status = Idle;
 }
 
@@ -808,7 +814,7 @@ FullO3CPU<Impl>::haltContext(ThreadID tid)
 {
     //For now, this is the same as deallocate
     DPRINTF(O3CPU,"[tid:%i]: Halt Context called. Deallocating", tid);
-    scheduleDeallocateContext(tid, true, 1);
+    scheduleDeallocateContext(tid, true, Cycles(1));
 }
 
 template <class Impl>
@@ -848,7 +854,7 @@ FullO3CPU<Impl>::insertThread(ThreadID tid)
 
     src_tc->setStatus(ThreadContext::Active);
 
-    activateContext(tid,1);
+    activateContext(tid, Cycles(1));
 
     //Reset ROB/IQ/LSQ Entries
     commit.rob->resetEntries();
@@ -1119,9 +1125,8 @@ FullO3CPU<Impl>::drain(Event *drain_event)
     DPRINTF(O3CPU, "Switching out\n");
 
     // If the CPU isn't doing anything, then return immediately.
-    if (_status == Idle || _status == SwitchedOut) {
+    if (_status == SwitchedOut)
         return 0;
-    }
 
     drainCount = 0;
     fetch.drain();
@@ -1142,6 +1147,8 @@ FullO3CPU<Impl>::drain(Event *drain_event)
         wakeCPU();
         activityRec.activity();
 
+        DPRINTF(Drain, "CPU not drained\n");
+
         return 1;
     } else {
         return 0;
@@ -1160,7 +1167,7 @@ FullO3CPU<Impl>::resume()
 
     changeState(SimObject::Running);
 
-    if (_status == SwitchedOut || _status == Idle)
+    if (_status == SwitchedOut)
         return;
 
     assert(system->getMemoryMode() == Enums::timing);
@@ -1183,6 +1190,7 @@ FullO3CPU<Impl>::signalDrained()
         BaseCPU::switchOut();
 
         if (drainEvent) {
+            DPRINTF(Drain, "CPU done draining, processing drain event\n");
             drainEvent->process();
             drainEvent = NULL;
         }
@@ -1237,6 +1245,10 @@ FullO3CPU<Impl>::takeOverFrom(BaseCPU *oldCPU)
 
     assert(!tickEvent.scheduled() || tickEvent.squashed());
 
+    FullO3CPU<Impl> *oldO3CPU = dynamic_cast<FullO3CPU<Impl>*>(oldCPU);
+    if (oldO3CPU)
+        globalSeqNum = oldO3CPU->globalSeqNum;
+
     // @todo: Figure out how to properly select the tid to put onto
     // the active threads list.
     ThreadID tid = 0;
@@ -1266,7 +1278,7 @@ FullO3CPU<Impl>::takeOverFrom(BaseCPU *oldCPU)
     if (!tickEvent.scheduled())
         schedule(tickEvent, nextCycle());
 
-    lastRunningCycle = curTick();
+    lastRunningCycle = curCycle();
 }
 
 template <class Impl>
@@ -1660,8 +1672,12 @@ FullO3CPU<Impl>::wakeCPU()
 
     DPRINTF(Activity, "Waking up CPU\n");
 
-    idleCycles += tickToCycles((curTick() - 1) - lastRunningCycle);
-    numCycles += tickToCycles((curTick() - 1) - lastRunningCycle);
+    Cycles cycles(curCycle() - lastRunningCycle);
+    // @todo: This is an oddity that is only here to match the stats
+    if (cycles != 0)
+        --cycles;
+    idleCycles += cycles;
+    numCycles += cycles;
 
     schedule(tickEvent, nextCycle());
 }

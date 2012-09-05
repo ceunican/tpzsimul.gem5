@@ -245,7 +245,7 @@ Process::initState()
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
 
     // mark this context as active so it will start ticking.
-    tc->activate(0);
+    tc->activate(Cycles(0));
 }
 
 // map simulator fd sim_fd to target fd tgt_fd
@@ -570,8 +570,6 @@ LiveProcess::LiveProcess(LiveProcessParams * params, ObjectFile *_objFile)
     __egid = params->egid;
     __pid = params->pid;
     __ppid = params->ppid;
-
-    prog_fname = params->cmd[0];
 
     // load up symbols, if any... these may be used for debugging or
     // profiling.

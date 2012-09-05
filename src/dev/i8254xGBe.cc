@@ -44,6 +44,7 @@
 
 #include "base/inet.hh"
 #include "base/trace.hh"
+#include "debug/Drain.hh"
 #include "debug/EthernetAll.hh"
 #include "dev/i8254xGBe.hh"
 #include "mem/packet.hh"
@@ -67,7 +68,7 @@ IGbE::IGbE(const Params *p)
       tadvEvent(this), tidvEvent(this), tickEvent(this), interEvent(this),
       rxDescCache(this, name()+".RxDesc", p->rx_desc_cache_size),
       txDescCache(this, name()+".TxDesc", p->tx_desc_cache_size),
-      clock(p->clock), lastInterrupt(0)
+      lastInterrupt(0)
 {
     etherInt = new IGbEInt(name() + ".int", this);
 
@@ -2051,7 +2052,7 @@ IGbE::restartClock()
 {
     if (!tickEvent.scheduled() && (rxTick || txTick || txFifoTick) &&
         getState() == SimObject::Running)
-        schedule(tickEvent, (curTick() / ticks(1)) * ticks(1) + ticks(1));
+        schedule(tickEvent, clockEdge(Cycles(1)));
 }
 
 unsigned int
@@ -2072,12 +2073,12 @@ IGbE::drain(Event *de)
     if (tickEvent.scheduled())
         deschedule(tickEvent);
 
-    if (count)
+    if (count) {
+        DPRINTF(Drain, "IGbE not drained\n");
         changeState(Draining);
-    else
+    } else
         changeState(Drained);
 
-    DPRINTF(EthernetSM, "got drain() returning %d", count);
     return count;
 }
 
@@ -2100,12 +2101,12 @@ IGbE::checkDrain()
     if (!drainEvent)
         return;
 
-    DPRINTF(EthernetSM, "checkDrain() in drain\n");
     txFifoTick = false;
     txTick = false;
     rxTick = false;
     if (!rxDescCache.hasOutstandingEvents() &&
         !txDescCache.hasOutstandingEvents()) {
+        DPRINTF(Drain, "IGbE done draining, processing drain event\n");
         drainEvent->process();
         drainEvent = NULL;
     }
@@ -2433,7 +2434,7 @@ IGbE::tick()
 
 
     if (rxTick || txTick || txFifoTick)
-        schedule(tickEvent, curTick() + ticks(1));
+        schedule(tickEvent, curTick() + clockPeriod());
 }
 
 void

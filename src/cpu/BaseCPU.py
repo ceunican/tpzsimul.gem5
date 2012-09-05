@@ -82,7 +82,7 @@ class BaseCPU(MemObject):
     numThreads = Param.Unsigned(1, "number of HW thread contexts")
 
     function_trace = Param.Bool(False, "Enable function trace")
-    function_trace_start = Param.Tick(0, "Cycle to start function trace")
+    function_trace_start = Param.Tick(0, "Tick to start function trace")
 
     checker = Param.BaseCPU(NULL, "checker CPU")
 
@@ -139,14 +139,11 @@ class BaseCPU(MemObject):
         "terminate when all threads have reached this load count")
     max_loads_any_thread = Param.Counter(0,
         "terminate when any thread reaches this load count")
-    progress_interval = Param.Tick(0,
-        "interval to print out the progress message")
+    progress_interval = Param.Frequency('0Hz',
+        "frequency to print out the progress message")
 
     defer_registration = Param.Bool(False,
         "defer registration with system (for sampling)")
-
-    clock = Param.Clock('1t', "clock speed")
-    phase = Param.Latency('0ns', "clock phase")
 
     tracer = Param.InstTracer(default_tracer, "Instruction tracer")
 

@@ -43,6 +43,7 @@
 #include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "debug/Checkpoint.hh"
+#include "debug/Drain.hh"
 #include "debug/TLB.hh"
 #include "debug/TLBVerbose.hh"
 #include "sim/system.hh"
@@ -50,8 +51,7 @@
 using namespace ArmISA;
 
 TableWalker::TableWalker(const Params *p)
-    : MemObject(p), port(this, params()->sys, params()->min_backoff,
-                         params()->max_backoff),
+    : MemObject(p), port(this, params()->sys), drainEvent(NULL),
       tlb(NULL), currState(NULL), pending(false),
       masterId(p->sys->getMasterId(name())),
       doL1DescEvent(this), doL2DescEvent(this), doProcessEvent(this)
@@ -64,20 +64,38 @@ TableWalker::~TableWalker()
     ;
 }
 
+void
+TableWalker::completeDrain()
+{
+    if (drainEvent && stateQueueL1.empty() && stateQueueL2.empty() &&
+        pendingQueue.empty()) {
+        changeState(Drained);
+        DPRINTF(Drain, "TableWalker done draining, processing drain event\n");
+        drainEvent->process();
+        drainEvent = NULL;
+    }
+}
+
 unsigned int
 TableWalker::drain(Event *de)
 {
-    if (stateQueueL1.size() || stateQueueL2.size() || pendingQueue.size())
-    {
-        changeState(Draining);
-        DPRINTF(Checkpoint, "TableWalker busy, wait to drain\n");
-        return 1;
-    }
-    else
-    {
+    unsigned int count = port.drain(de);
+
+    if (stateQueueL1.empty() && stateQueueL2.empty() &&
+        pendingQueue.empty()) {
         changeState(Drained);
-        DPRINTF(Checkpoint, "TableWalker free, no need to drain\n");
-        return 0;
+        DPRINTF(Drain, "TableWalker free, no need to drain\n");
+
+        // table walker is drained, but its ports may still need to be drained
+        return count;
+    } else {
+        drainEvent = de;
+        changeState(Draining);
+        DPRINTF(Drain, "TableWalker not drained\n");
+
+        // return port drain count plus the table walker itself needs to drain
+        return count + 1;
+
     }
 }
 
@@ -86,8 +104,8 @@ TableWalker::resume()
 {
     MemObject::resume();
     if ((params()->sys->getMemoryMode() == Enums::timing) && currState) {
-            delete currState;
-            currState = NULL;
+        delete currState;
+        currState = NULL;
     }
 }
 
@@ -222,15 +240,16 @@ TableWalker::processWalk()
     if (currState->timing) {
         port.dmaAction(MemCmd::ReadReq, l1desc_addr, sizeof(uint32_t),
                        &doL1DescEvent, (uint8_t*)&currState->l1Desc.data,
-                       currState->tc->getCpuPtr()->ticks(1), flag);
-        DPRINTF(TLBVerbose, "Adding to walker fifo: queue size before adding: %d\n",
+                       currState->tc->getCpuPtr()->clockPeriod(), flag);
+        DPRINTF(TLBVerbose, "Adding to walker fifo: queue size before "
+                "adding: %d\n",
                 stateQueueL1.size());
         stateQueueL1.push_back(currState);
         currState = NULL;
     } else if (!currState->functional) {
         port.dmaAction(MemCmd::ReadReq, l1desc_addr, sizeof(uint32_t),
                        NULL, (uint8_t*)&currState->l1Desc.data,
-                       currState->tc->getCpuPtr()->ticks(1), flag);
+                       currState->tc->getCpuPtr()->clockPeriod(), flag);
         doL1Descriptor();
         f = currState->fault;
     } else {
@@ -570,12 +589,12 @@ TableWalker::doL1Descriptor()
         if (currState->timing) {
             currState->delayed = true;
             port.dmaAction(MemCmd::ReadReq, l2desc_addr, sizeof(uint32_t),
-                    &doL2DescEvent, (uint8_t*)&currState->l2Desc.data,
-                    currState->tc->getCpuPtr()->ticks(1));
+                           &doL2DescEvent, (uint8_t*)&currState->l2Desc.data,
+                           currState->tc->getCpuPtr()->clockPeriod());
         } else if (!currState->functional) {
             port.dmaAction(MemCmd::ReadReq, l2desc_addr, sizeof(uint32_t),
-                    NULL, (uint8_t*)&currState->l2Desc.data,
-                    currState->tc->getCpuPtr()->ticks(1));
+                           NULL, (uint8_t*)&currState->l2Desc.data,
+                           currState->tc->getCpuPtr()->clockPeriod());
             doL2Descriptor();
         } else {
             RequestPtr req = new Request(l2desc_addr, sizeof(uint32_t), 0,
@@ -667,6 +686,7 @@ TableWalker::doL1DescriptorWrapper()
     doL1Descriptor();
 
     stateQueueL1.pop_front();
+    completeDrain();
     // Check if fault was generated
     if (currState->fault != NoFault) {
         currState->transState->finish(currState->fault, currState->req,
@@ -723,6 +743,7 @@ TableWalker::doL2DescriptorWrapper()
 
 
     stateQueueL2.pop_front();
+    completeDrain();
     pending = false;
     nextWalk(currState->tc);
 
@@ -738,7 +759,7 @@ void
 TableWalker::nextWalk(ThreadContext *tc)
 {
     if (pendingQueue.size())
-        schedule(doProcessEvent, tc->getCpuPtr()->nextCycle(curTick()+1));
+        schedule(doProcessEvent, tc->getCpuPtr()->clockEdge(Cycles(1)));
 }
 
 

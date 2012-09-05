@@ -76,8 +76,8 @@ class DerivO3CPU(BaseCPU):
     renameToROBDelay = Param.Unsigned(1, "Rename to reorder buffer delay")
     commitWidth = Param.Unsigned(8, "Commit width")
     squashWidth = Param.Unsigned(8, "Squash width")
-    trapLatency = Param.Tick(13, "Trap latency")
-    fetchTrapLatency = Param.Tick(1, "Fetch trap latency")
+    trapLatency = Param.Unsigned(13, "Trap latency")
+    fetchTrapLatency = Param.Unsigned(1, "Fetch trap latency")
 
     backComSize = Param.Unsigned(5, "Time buffer size for backwards communication")
     forwardComSize = Param.Unsigned(5, "Time buffer size for forward communication")
@@ -141,6 +141,7 @@ class DerivO3CPU(BaseCPU):
                                      warnOnlyOnLoadError=True)
             self.checker.itb = ArmTLB(size = self.itb.size)
             self.checker.dtb = ArmTLB(size = self.dtb.size)
+            self.checker.cpu_id = self.cpu_id
 
         else:
             print "ERROR: Checker only supported under ARM ISA!"

@@ -335,6 +335,11 @@ class LSQUnit {
             std::memset(data, 0, sizeof(data));
         }
 
+        ~SQEntry()
+        {
+            inst = NULL;
+        }
+
         /** Constructs a store queue entry for a given instruction. */
         SQEntry(DynInstPtr &_inst)
             : inst(_inst), req(NULL), sreqLow(NULL), sreqHigh(NULL), size(0),
@@ -602,7 +607,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
         load_inst->memData = new uint8_t[64];
 
         ThreadContext *thread = cpu->tcBase(lsqID);
-        Tick delay;
+        Cycles delay(0);
         PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
 
         if (!TheISA::HasUnalignedMemAcc || !sreqLow) {
@@ -617,7 +622,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
             snd_data_pkt->dataStatic(load_inst->memData + sreqLow->getSize());
 
             delay = TheISA::handleIprRead(thread, fst_data_pkt);
-            unsigned delay2 = TheISA::handleIprRead(thread, snd_data_pkt);
+            Cycles delay2 = TheISA::handleIprRead(thread, snd_data_pkt);
             if (delay2 > delay)
                 delay = delay2;
 
@@ -627,7 +632,7 @@ LSQUnit<Impl>::read(Request *req, Request *sreqLow, Request *sreqHigh,
             delete snd_data_pkt;
         }
         WritebackEvent *wb = new WritebackEvent(load_inst, data_pkt, this);
-        cpu->schedule(wb, curTick() + delay);
+        cpu->schedule(wb, cpu->clockEdge(delay));
         return NoFault;
     }
 

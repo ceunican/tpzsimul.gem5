@@ -91,7 +91,7 @@ CPUProgressEvent::process()
 {
     Counter temp = cpu->totalOps();
 #ifndef NDEBUG
-    double ipc = double(temp - lastNumInst) / (_interval / cpu->ticks(1));
+    double ipc = double(temp - lastNumInst) / (_interval / cpu->clockPeriod());
 
     DPRINTFN("%s progress event, total committed:%i, progress insts committed: "
              "%lli, IPC: %0.8d\n", cpu->name(), temp, temp - lastNumInst,
@@ -115,15 +115,12 @@ CPUProgressEvent::description() const
 }
 
 BaseCPU::BaseCPU(Params *p, bool is_checker)
-    : MemObject(p), clock(p->clock), instCnt(0), _cpuId(p->cpu_id),
+    : MemObject(p), instCnt(0), _cpuId(p->cpu_id),
       _instMasterId(p->system->getMasterId(name() + ".inst")),
       _dataMasterId(p->system->getMasterId(name() + ".data")),
       interrupts(p->interrupts),
-      numThreads(p->numThreads), system(p->system),
-      phase(p->phase)
+      numThreads(p->numThreads), system(p->system)
 {
-//    currentTick = curTick();
-
     // if Python did not provide a valid ID, do it here
     if (_cpuId == -1 ) {
         _cpuId = cpuList.size();
@@ -264,9 +261,7 @@ BaseCPU::startup()
     }
 
     if (params()->progress_interval) {
-        Tick num_ticks = ticks(params()->progress_interval);
-
-        new CPUProgressEvent(this, num_ticks);
+        new CPUProgressEvent(this, params()->progress_interval);
     }
 }
 
@@ -317,27 +312,6 @@ BaseCPU::getMasterPort(const string &if_name, int idx)
         return MemObject::getMasterPort(if_name, idx);
 }
 
-Tick
-BaseCPU::nextCycle()
-{
-    Tick next_tick = curTick() - phase + clock - 1;
-    next_tick -= (next_tick % clock);
-    next_tick += phase;
-    return next_tick;
-}
-
-Tick
-BaseCPU::nextCycle(Tick begin_tick)
-{
-    Tick next_tick = begin_tick;
-    if (next_tick % clock != 0)
-        next_tick = next_tick - (next_tick % clock) + clock;
-    next_tick += phase;
-
-    assert(next_tick >= curTick());
-    return next_tick;
-}
-
 void
 BaseCPU::registerThreadContexts()
 {
@@ -385,8 +359,7 @@ void
 BaseCPU::takeOverFrom(BaseCPU *oldCPU)
 {
     assert(threadContexts.size() == oldCPU->threadContexts.size());
-
-    _cpuId = oldCPU->cpuId();
+    assert(_cpuId == oldCPU->cpuId());
 
     ThreadID size = threadContexts.size();
     for (ThreadID i = 0; i < size; ++i) {
@@ -414,14 +387,20 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
         MasterPort *new_dtb_port = newTC->getDTBPtr()->getMasterPort();
 
         // Move over any table walker ports if they exist
-        if (new_itb_port && !new_itb_port->isConnected()) {
+        if (new_itb_port) {
+            assert(!new_itb_port->isConnected());
             assert(old_itb_port);
+            assert(old_itb_port->isConnected());
             SlavePort &slavePort = old_itb_port->getSlavePort();
+            old_itb_port->unbind();
             new_itb_port->bind(slavePort);
         }
-        if (new_dtb_port && !new_dtb_port->isConnected()) {
+        if (new_dtb_port) {
+            assert(!new_dtb_port->isConnected());
             assert(old_dtb_port);
+            assert(old_dtb_port->isConnected());
             SlavePort &slavePort = old_dtb_port->getSlavePort();
+            old_dtb_port->unbind();
             new_dtb_port->bind(slavePort);
         }
 
@@ -440,14 +419,20 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
                 newChecker->getDTBPtr()->getMasterPort();
 
             // Move over any table walker ports if they exist for checker
-            if (new_checker_itb_port && !new_checker_itb_port->isConnected()) {
+            if (new_checker_itb_port) {
+                assert(!new_checker_itb_port->isConnected());
                 assert(old_checker_itb_port);
-                SlavePort &slavePort = old_checker_itb_port->getSlavePort();;
+                assert(old_checker_itb_port->isConnected());
+                SlavePort &slavePort = old_checker_itb_port->getSlavePort();
+                old_checker_itb_port->unbind();
                 new_checker_itb_port->bind(slavePort);
             }
-            if (new_checker_dtb_port && !new_checker_dtb_port->isConnected()) {
+            if (new_checker_dtb_port) {
+                assert(!new_checker_dtb_port->isConnected());
                 assert(old_checker_dtb_port);
-                SlavePort &slavePort = old_checker_dtb_port->getSlavePort();;
+                assert(old_checker_dtb_port->isConnected());
+                SlavePort &slavePort = old_checker_dtb_port->getSlavePort();
+                old_checker_dtb_port->unbind();
                 new_checker_dtb_port->bind(slavePort);
             }
         }
@@ -455,6 +440,7 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
 
     interrupts = oldCPU->interrupts;
     interrupts->setCPU(this);
+    oldCPU->interrupts = NULL;
 
     if (FullSystem) {
         for (ThreadID i = 0; i < size; ++i)
@@ -464,16 +450,21 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
             schedule(profileEvent, curTick());
     }
 
-    // Connect new CPU to old CPU's memory only if new CPU isn't
-    // connected to anything.  Also connect old CPU's memory to new
-    // CPU.
-    if (!getInstPort().isConnected()) {
-        getInstPort().bind(oldCPU->getInstPort().getSlavePort());
-    }
+    // All CPUs have an instruction and a data port, and the new CPU's
+    // ports are dangling while the old CPU has its ports connected
+    // already. Unbind the old CPU and then bind the ports of the one
+    // we are switching to.
+    assert(!getInstPort().isConnected());
+    assert(oldCPU->getInstPort().isConnected());
+    SlavePort &inst_peer_port = oldCPU->getInstPort().getSlavePort();
+    oldCPU->getInstPort().unbind();
+    getInstPort().bind(inst_peer_port);
 
-    if (!getDataPort().isConnected()) {
-        getDataPort().bind(oldCPU->getDataPort().getSlavePort());
-    }
+    assert(!getDataPort().isConnected());
+    assert(oldCPU->getDataPort().isConnected());
+    SlavePort &data_peer_port = oldCPU->getDataPort().getSlavePort();
+    oldCPU->getDataPort().unbind();
+    getDataPort().bind(data_peer_port);
 }
 
 

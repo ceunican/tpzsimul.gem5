@@ -246,7 +246,7 @@ void
 MemTest::tick()
 {
     if (!tickEvent.scheduled())
-        schedule(tickEvent, curTick() + ticks(1));
+        schedule(tickEvent, clockEdge(Cycles(1)));
 
     if (++noResponseCycles >= 500000) {
         if (issueDmas) {

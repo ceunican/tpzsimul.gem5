@@ -88,8 +88,7 @@ class CPUProgressEvent : public Event
 class BaseCPU : public MemObject
 {
   protected:
-    // CPU's clock period in terms of the number of ticks of curTime.
-    Tick clock;
+
     // @todo remove me after debugging with legion done
     Tick instCnt;
     // every cpu has an id, put it in the base cpu
@@ -174,29 +173,10 @@ class BaseCPU : public MemObject
      */
     MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
 
-//    Tick currentTick;
-    inline Tick frequency() const { return SimClock::Frequency / clock; }
-    inline Tick ticks(int numCycles) const { return clock * numCycles; }
-    inline Tick curCycle() const { return curTick() / clock; }
-    inline Tick tickToCycles(Tick val) const { return val / clock; }
     inline void workItemBegin() { numWorkItemsStarted++; }
     inline void workItemEnd() { numWorkItemsCompleted++; }
     // @todo remove me after debugging with legion done
     Tick instCount() { return instCnt; }
-
-    /** The next cycle the CPU should be scheduled, given a cache
-     * access or quiesce event returning on this cycle.  This function
-     * may return curTick() if the CPU should run on the current cycle.
-     */
-    Tick nextCycle();
-
-    /** The next cycle the CPU should be scheduled, given a cache
-     * access or quiesce event returning on the given Tick.  This
-     * function may return curTick() if the CPU should run on the
-     * current cycle.
-     * @param begin_tick The tick that the event is completing on.
-     */
-    Tick nextCycle(Tick begin_tick);
 
     TheISA::MicrocodeRom microcodeRom;
 
@@ -266,7 +246,7 @@ class BaseCPU : public MemObject
     /// Notify the CPU that the indicated context is now active.  The
     /// delay parameter indicates the number of ticks to wait before
     /// executing (typically 0 or 1).
-    virtual void activateContext(ThreadID thread_num, int delay) {}
+    virtual void activateContext(ThreadID thread_num, Cycles delay) {}
 
     /// Notify the CPU that the indicated context is now suspended.
     virtual void suspendContext(ThreadID thread_num) {}
@@ -327,8 +307,6 @@ class BaseCPU : public MemObject
     EventQueue **comLoadEventQueue;
 
     System *system;
-
-    Tick phase;
 
     /**
      * Serialize this object to the given output stream.

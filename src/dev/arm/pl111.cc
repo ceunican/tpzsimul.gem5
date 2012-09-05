@@ -63,7 +63,7 @@ Pl111::Pl111(const Params *p)
       lcdRis(0), lcdMis(0),
       clcdCrsrCtrl(0), clcdCrsrConfig(0), clcdCrsrPalette0(0),
       clcdCrsrPalette1(0), clcdCrsrXY(0), clcdCrsrClip(0), clcdCrsrImsc(0),
-      clcdCrsrIcr(0), clcdCrsrRis(0), clcdCrsrMis(0), clock(p->clock),
+      clcdCrsrIcr(0), clcdCrsrRis(0), clcdCrsrMis(0),
       vncserver(p->vnc), bmp(NULL), width(LcdMaxWidth), height(LcdMaxHeight),
       bytesPerPixel(4), startTime(0), startAddr(0), maxAddr(0), curAddr(0),
       waterMark(0), dmaPendingNum(0), readEvent(this), fillFifoEvent(this),
@@ -440,7 +440,7 @@ Pl111::readFramebuffer()
         schedule(intEvent, nextCycle());
 
     curAddr = 0;
-    startTime = curTick();
+    startTime = curCycle();
 
     maxAddr = static_cast<Addr>(length * bytesPerPixel);
 
@@ -475,12 +475,12 @@ Pl111::fillFifo()
 void
 Pl111::dmaDone()
 {
-    Tick maxFrameTime = lcdTiming2.cpl * height * clock;
+    Cycles maxFrameTime(lcdTiming2.cpl * height);
 
     --dmaPendingNum;
 
     if (maxAddr == curAddr && !dmaPendingNum) {
-        if ((curTick() - startTime) > maxFrameTime) {
+        if ((curCycle() - startTime) > maxFrameTime) {
             warn("CLCD controller buffer underrun, took %d cycles when should"
                  " have taken %d\n", curTick() - startTime, maxFrameTime);
             lcdRis.underflow = 1;
@@ -498,11 +498,16 @@ Pl111::dmaDone()
         pic->seekp(0);
         bmp->write(pic);
 
-        DPRINTF(PL111, "-- schedule next dma read event at %d tick \n",
-                maxFrameTime + curTick());
-
+        // schedule the next read based on when the last frame started
+        // and the desired fps (i.e. maxFrameTime), we turn the
+        // argument into a relative number of cycles in the future by
+        // subtracting curCycle()
         if (lcdControl.lcden)
-            schedule(readEvent, nextCycle(startTime + maxFrameTime));
+            // @todo: This is a terrible way of doing the time
+            // keeping, make it all relative
+            schedule(readEvent,
+                     clockEdge(Cycles(startTime - curCycle() +
+                                      maxFrameTime)));
     }
 
     if (dmaPendingNum > (maxOutstandingDma - waterMark))
@@ -510,26 +515,6 @@ Pl111::dmaDone()
 
     if (!fillFifoEvent.scheduled())
         schedule(fillFifoEvent, nextCycle());
-}
-
-
-Tick
-Pl111::nextCycle()
-{
-    Tick nextTick = curTick() + clock - 1;
-    nextTick -= nextTick%clock;
-    return nextTick;
-}
-
-Tick
-Pl111::nextCycle(Tick beginTick)
-{
-    Tick nextTick = beginTick;
-    if (nextTick%clock!=0)
-        nextTick = nextTick - (nextTick%clock) + clock;
-
-    assert(nextTick >= curTick());
-    return nextTick;
 }
 
 void
@@ -586,7 +571,6 @@ Pl111::serialize(std::ostream &os)
     uint8_t clcdCrsrMis_serial = clcdCrsrMis;
     SERIALIZE_SCALAR(clcdCrsrMis_serial);
 
-    SERIALIZE_SCALAR(clock);
     SERIALIZE_SCALAR(height);
     SERIALIZE_SCALAR(width);
     SERIALIZE_SCALAR(bytesPerPixel);
@@ -689,7 +673,6 @@ Pl111::unserialize(Checkpoint *cp, const std::string &section)
     UNSERIALIZE_SCALAR(clcdCrsrMis_serial);
     clcdCrsrMis = clcdCrsrMis_serial;
 
-    UNSERIALIZE_SCALAR(clock);
     UNSERIALIZE_SCALAR(height);
     UNSERIALIZE_SCALAR(width);
     UNSERIALIZE_SCALAR(bytesPerPixel);

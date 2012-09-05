@@ -99,7 +99,6 @@ NSGigE::NSGigE(Params *p)
       txFifo(p->tx_fifo_size), rxFifo(p->rx_fifo_size),
       txPacket(0), rxPacket(0), txPacketBufPtr(NULL), rxPacketBufPtr(NULL),
       txXferLen(0), rxXferLen(0), rxDmaFree(false), txDmaFree(false),
-      clock(p->clock),
       txState(txIdle), txEnable(false), CTDD(false), txHalt(false),
       txFragPtr(0), txDescCnt(0), txDmaState(dmaIdle), rxState(rxIdle),
       rxEnable(false), CRDD(false), rxPktBytes(0), rxHalt(false),
@@ -1148,7 +1147,7 @@ NSGigE::rxKick()
         }
 
         // Go to the next state machine clock tick.
-        rxKickTick = curTick() + ticks(1);
+        rxKickTick = curTick() + clockPeriod();
     }
 
     switch(rxDmaState) {
@@ -1595,7 +1594,7 @@ NSGigE::txKick()
         }
 
         // Go to the next state machine clock tick.
-        txKickTick = curTick() + ticks(1);
+        txKickTick = curTick() + clockPeriod();
     }
 
     switch(txDmaState) {
@@ -2016,7 +2015,7 @@ NSGigE::transferDone()
 
     DPRINTF(Ethernet, "transfer complete: data in txFifo...schedule xmit\n");
 
-    reschedule(txEvent, curTick() + ticks(1), true);
+    reschedule(txEvent, curTick() + clockPeriod(), true);
 }
 
 bool

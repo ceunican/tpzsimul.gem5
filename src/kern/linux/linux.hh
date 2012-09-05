@@ -147,8 +147,57 @@ class Linux : public OperatingSystem
         uint64_t iov_len;
     };
 
+    //@{
+    /// ioctl() command codes.
+    static const unsigned TGT_TCGETS     = 0x5401;
+    static const unsigned TGT_TCGETA     = 0x5405;
+    static const unsigned TGT_TCSETAW    = 0x5407;
+    static const unsigned TGT_FIONREAD   = 0x541B;
+    //@}
+
+    /// Return true for the ioctl codes for which we return ENOTTY
+    /// *without* printing a warning, since we know that ENOTTY is the
+    /// correct thing to return (and not just a sign that we don't
+    /// recognize the ioctl code.
+    static bool
+    isTtyReq(unsigned req)
+    {
+        switch (req) {
+          case TGT_FIONREAD:
+          case TGT_TCSETAW:
+          case TGT_TCGETS:
+          case TGT_TCGETA:
+            return true;
+          default:
+            return false;
+        }
+    }
+
+
+    /// Resource constants for getrlimit().
+    static const unsigned TGT_RLIMIT_CPU = 0;
+    static const unsigned TGT_RLIMIT_FSIZE = 1;
+    static const unsigned TGT_RLIMIT_DATA = 2;
+    static const unsigned TGT_RLIMIT_STACK = 3;
+    static const unsigned TGT_RLIMIT_CORE = 4;
+    static const unsigned TGT_RLIMIT_RSS = 5;
+    static const unsigned TGT_RLIMIT_NPROC = 6;
+    static const unsigned TGT_RLIMIT_NOFILE = 7;
+    static const unsigned TGT_RLIMIT_MEMLOCK = 8;
+    static const unsigned TGT_RLIMIT_AS = 9;
+    static const unsigned TGT_RLIMIT_LOCKS = 10;
+    static const unsigned TGT_RLIMIT_SIGPENDING = 11;
+    static const unsigned TGT_RLIMIT_MSGQUEUE = 12;
+    static const unsigned TGT_RLIMIT_NICE = 13;
+    static const unsigned TGT_RLIMIT_RTPRIO = 14;
+    static const unsigned TGT_RLIMIT_RTTIME = 15;
+    static const unsigned TGT_RLIM_NLIMITS = 16;
 
     /// For getrusage().
+    static const int TGT_RUSAGE_SELF     = 0;
+    static const int TGT_RUSAGE_CHILDREN = -1;
+    static const int TGT_RUSAGE_BOTH     = -2;
+
     struct rusage {
         struct timeval ru_utime;        //!< user time used
         struct timeval ru_stime;        //!< system time used

@@ -41,6 +41,7 @@
  *          Andreas Hansson
  */
 
+#include "debug/Drain.hh"
 #include "debug/PacketQueue.hh"
 #include "mem/packet_queue.hh"
 
@@ -105,7 +106,11 @@ PacketQueue::schedSendEvent(Tick when)
 void
 PacketQueue::schedSendTiming(PacketPtr pkt, Tick when, bool send_as_snoop)
 {
-    assert(when > curTick());
+    // we can still send a packet before the end of this tick
+    assert(when >= curTick());
+
+    // express snoops should never be queued
+    assert(!pkt->isExpressSnoop());
 
     // nothing on the list, or earlier than current front element,
     // schedule an event
@@ -168,7 +173,9 @@ PacketQueue::scheduleSend(Tick time)
             em.schedule(&sendEvent, std::max(nextReady, curTick() + 1));
     } else {
         // no more to send, so if we're draining, we may be done
-        if (drainEvent && !sendEvent.scheduled()) {
+        if (drainEvent && transmitList.empty() && !sendEvent.scheduled()) {
+            DPRINTF(Drain, "PacketQueue done draining,"
+                    "processing drain event\n");
             drainEvent->process();
             drainEvent = NULL;
         }
@@ -201,6 +208,7 @@ PacketQueue::drain(Event *de)
 {
     if (transmitList.empty() && !sendEvent.scheduled())
         return 0;
+    DPRINTF(Drain, "PacketQueue not drained\n");
     drainEvent = de;
     return 1;
 }

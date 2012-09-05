@@ -84,49 +84,49 @@ class AlphaLinux : public Linux
     //@}
 
     //@{
-    /// For getrusage().
-    static const int TGT_RUSAGE_SELF     = 0;
-    static const int TGT_RUSAGE_CHILDREN = -1;
-    static const int TGT_RUSAGE_BOTH     = -2;
-    //@}
-
-    //@{
     /// For setsysinfo().
     static const unsigned SSI_IEEE_FP_CONTROL = 14; //!< ieee_set_fp_control()
     //@}
 
     //@{
     /// ioctl() command codes.
-    static const unsigned TIOCGETP_   = 0x40067408;
-    static const unsigned TIOCSETP_   = 0x80067409;
-    static const unsigned TIOCSETN_   = 0x8006740a;
-    static const unsigned TIOCSETC_   = 0x80067411;
-    static const unsigned TIOCGETC_   = 0x40067412;
-    static const unsigned FIONREAD_   = 0x4004667f;
-    static const unsigned TIOCISATTY_ = 0x2000745e;
-    static const unsigned TIOCGETS_   = 0x402c7413;
-    static const unsigned TIOCGETA_   = 0x40127417;
-    static const unsigned TCSETAW_    = 0x80147419; // 2.6.15 kernel
+    static const unsigned TGT_TIOCGETP   = 0x40067408;
+    static const unsigned TGT_TIOCSETP   = 0x80067409;
+    static const unsigned TGT_TIOCSETN   = 0x8006740a;
+    static const unsigned TGT_TIOCSETC   = 0x80067411;
+    static const unsigned TGT_TIOCGETC   = 0x40067412;
+    static const unsigned TGT_FIONREAD   = 0x4004667f;
+    static const unsigned TGT_TCGETS     = 0x402c7413;
+    static const unsigned TGT_TCGETA     = 0x40127417;
+    static const unsigned TGT_TCSETAW    = 0x80147419; // 2.6.15 kernel
     //@}
+
+    static bool
+    isTtyReq(unsigned req)
+    {
+        switch (req) {
+          case TGT_TIOCGETP:
+          case TGT_TIOCSETP:
+          case TGT_TIOCSETN:
+          case TGT_TIOCSETC:
+          case TGT_TIOCGETC:
+          case TGT_TCGETS:
+          case TGT_TCGETA:
+          case TGT_TCSETAW:
+            return true;
+          default:
+            return false;
+        }
+    }
 
     /// For table().
     static const int TBL_SYSINFO = 12;
 
-    /// Resource enumeration for getrlimit().
-    enum rlimit_resources {
-        TGT_RLIMIT_CPU = 0,
-        TGT_RLIMIT_FSIZE = 1,
-        TGT_RLIMIT_DATA = 2,
-        TGT_RLIMIT_STACK = 3,
-        TGT_RLIMIT_CORE = 4,
-        TGT_RLIMIT_RSS = 5,
-        TGT_RLIMIT_NOFILE = 6,
-        TGT_RLIMIT_AS = 7,
-        TGT_RLIMIT_VMEM = 7,
-        TGT_RLIMIT_NPROC = 8,
-        TGT_RLIMIT_MEMLOCK = 9,
-        TGT_RLIMIT_LOCKS = 10
-    };
+    /// Resource constants for getrlimit() (overide some generics).
+    static const unsigned TGT_RLIMIT_NPROC = 8;
+    static const unsigned TGT_RLIMIT_AS = 7;
+    static const unsigned TGT_RLIMIT_NOFILE = 6;
+    static const unsigned TGT_RLIMIT_MEMLOCK = 9;
    
     typedef struct {
        int64_t  uptime;    /* Seconds since boot */

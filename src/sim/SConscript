@@ -31,6 +31,7 @@
 Import('*')
 
 SimObject('BaseTLB.py')
+SimObject('ClockedObject.py')
 SimObject('Root.py')
 SimObject('InstTracer.py')
 
@@ -62,6 +63,7 @@ if env['TARGET_ISA'] != 'no':
 
 DebugFlag('Checkpoint')
 DebugFlag('Config')
+DebugFlag('Drain')
 DebugFlag('Event')
 DebugFlag('Fault')
 DebugFlag('Flow')

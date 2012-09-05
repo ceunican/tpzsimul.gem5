@@ -374,7 +374,6 @@ DefaultCommit<Impl>::initStage()
     cpu->activateStage(O3CPU::CommitIdx);
 
     cpu->activityThisCycle();
-    trapLatency = cpu->ticks(trapLatency);
 }
 
 template <class Impl>
@@ -509,7 +508,7 @@ DefaultCommit<Impl>::generateTrapEvent(ThreadID tid)
 
     TrapEvent *trap = new TrapEvent(this, tid);
 
-    cpu->schedule(trap, curTick() + trapLatency);
+    cpu->schedule(trap, cpu->clockEdge(trapLatency));
     trapInFlight[tid] = true;
     thread[tid]->trapPending = true;
 }
@@ -631,7 +630,8 @@ DefaultCommit<Impl>::tick()
     wroteToTimeBuffer = false;
     _nextStatus = Inactive;
 
-    if (drainPending && rob->isEmpty() && !iewStage->hasStoresToWB()) {
+    if (drainPending && cpu->instList.empty() && !iewStage->hasStoresToWB() &&
+        interrupt == NoFault) {
         cpu->signalDrained();
         drainPending = false;
         return;

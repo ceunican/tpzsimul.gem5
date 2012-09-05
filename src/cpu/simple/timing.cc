@@ -48,6 +48,7 @@
 #include "cpu/simple/timing.hh"
 #include "cpu/exetrace.hh"
 #include "debug/Config.hh"
+#include "debug/Drain.hh"
 #include "debug/ExecFaulting.hh"
 #include "debug/SimpleCPU.hh"
 #include "mem/packet.hh"
@@ -86,13 +87,11 @@ TimingSimpleCPU::TimingCPUPort::TickEvent::schedule(PacketPtr _pkt, Tick t)
 
 TimingSimpleCPU::TimingSimpleCPU(TimingSimpleCPUParams *p)
     : BaseSimpleCPU(p), fetchTranslation(this), icachePort(this),
-    dcachePort(this), fetchEvent(this)
+      dcachePort(this), ifetch_pkt(NULL), dcache_pkt(NULL), previousCycle(0),
+      fetchEvent(this)
 {
     _status = Idle;
 
-    ifetch_pkt = dcache_pkt = NULL;
-    drainEvent = NULL;
-    previousTick = 0;
     changeState(SimObject::Running);
     system->totalNumInsts = 0;
 }
@@ -129,6 +128,7 @@ TimingSimpleCPU::drain(Event *drain_event)
     } else {
         changeState(SimObject::Draining);
         drainEvent = drain_event;
+        DPRINTF(Drain, "CPU not drained\n");
         return 1;
     }
 }
@@ -154,7 +154,7 @@ TimingSimpleCPU::switchOut()
 {
     assert(_status == Running || _status == Idle);
     _status = SwitchedOut;
-    numCycles += tickToCycles(curTick() - previousTick);
+    numCycles += curCycle() - previousCycle;
 
     // If we've been scheduled to resume but are then told to switch out,
     // we'll need to cancel it.
@@ -182,12 +182,12 @@ TimingSimpleCPU::takeOverFrom(BaseCPU *oldCPU)
         _status = Idle;
     }
     assert(threadContexts.size() == 1);
-    previousTick = curTick();
+    previousCycle = curCycle();
 }
 
 
 void
-TimingSimpleCPU::activateContext(ThreadID thread_num, int delay)
+TimingSimpleCPU::activateContext(ThreadID thread_num, Cycles delay)
 {
     DPRINTF(SimpleCPU, "ActivateContext %d (%d cycles)\n", thread_num, delay);
 
@@ -200,7 +200,7 @@ TimingSimpleCPU::activateContext(ThreadID thread_num, int delay)
     _status = Running;
 
     // kick things off by initiating the fetch of the next instruction
-    schedule(fetchEvent, nextCycle(curTick() + ticks(delay)));
+    schedule(fetchEvent, clockEdge(delay));
 }
 
 
@@ -229,9 +229,8 @@ TimingSimpleCPU::handleReadPacket(PacketPtr pkt)
 {
     RequestPtr req = pkt->req;
     if (req->isMmappedIpr()) {
-        Tick delay;
-        delay = TheISA::handleIprRead(thread->getTC(), pkt);
-        new IprEvent(pkt, this, nextCycle(curTick() + delay));
+        Cycles delay = TheISA::handleIprRead(thread->getTC(), pkt);
+        new IprEvent(pkt, this, clockEdge(delay));
         _status = DcacheWaitResponse;
         dcache_pkt = NULL;
     } else if (!dcachePort.sendTimingReq(pkt)) {
@@ -320,8 +319,8 @@ TimingSimpleCPU::translationFault(Fault fault)
 {
     // fault may be NoFault in cases where a fault is suppressed,
     // for instance prefetches.
-    numCycles += tickToCycles(curTick() - previousTick);
-    previousTick = curTick();
+    numCycles += curCycle() - previousCycle;
+    previousCycle = curCycle();
 
     if (traceData) {
         // Since there was a fault, we shouldn't trace this instruction.
@@ -444,9 +443,8 @@ TimingSimpleCPU::handleWritePacket()
 {
     RequestPtr req = dcache_pkt->req;
     if (req->isMmappedIpr()) {
-        Tick delay;
-        delay = TheISA::handleIprWrite(thread->getTC(), dcache_pkt);
-        new IprEvent(dcache_pkt, this, nextCycle(curTick() + delay));
+        Cycles delay = TheISA::handleIprWrite(thread->getTC(), dcache_pkt);
+        new IprEvent(dcache_pkt, this, clockEdge(delay));
         _status = DcacheWaitResponse;
         dcache_pkt = NULL;
     } else if (!dcachePort.sendTimingReq(dcache_pkt)) {
@@ -565,8 +563,8 @@ TimingSimpleCPU::fetch()
         _status = IcacheWaitResponse;
         completeIfetch(NULL);
 
-        numCycles += tickToCycles(curTick() - previousTick);
-        previousTick = curTick();
+        numCycles += curCycle() - previousCycle;
+        previousCycle = curCycle();
     }
 }
 
@@ -598,8 +596,8 @@ TimingSimpleCPU::sendFetch(Fault fault, RequestPtr req, ThreadContext *tc)
         advanceInst(fault);
     }
 
-    numCycles += tickToCycles(curTick() - previousTick);
-    previousTick = curTick();
+    numCycles += curCycle() - previousCycle;
+    previousCycle = curCycle();
 }
 
 
@@ -645,8 +643,8 @@ TimingSimpleCPU::completeIfetch(PacketPtr pkt)
 
     _status = Running;
 
-    numCycles += tickToCycles(curTick() - previousTick);
-    previousTick = curTick();
+    numCycles += curCycle() - previousCycle;
+    previousCycle = curCycle();
 
     if (getState() == SimObject::Draining) {
         if (pkt) {
@@ -717,25 +715,14 @@ TimingSimpleCPU::IcachePort::ITickEvent::process()
 bool
 TimingSimpleCPU::IcachePort::recvTimingResp(PacketPtr pkt)
 {
-    if (!pkt->wasNacked()) {
-        DPRINTF(SimpleCPU, "Received timing response %#x\n", pkt->getAddr());
-        // delay processing of returned data until next CPU clock edge
-        Tick next_tick = cpu->nextCycle(curTick());
+    DPRINTF(SimpleCPU, "Received timing response %#x\n", pkt->getAddr());
+    // delay processing of returned data until next CPU clock edge
+    Tick next_tick = cpu->nextCycle();
 
-        if (next_tick == curTick())
-            cpu->completeIfetch(pkt);
-        else
-            tickEvent.schedule(pkt, next_tick);
-
-        return true;
-    } else {
-        assert(cpu->_status == IcacheWaitResponse);
-        pkt->reinitNacked();
-        if (!sendTimingReq(pkt)) {
-            cpu->_status = IcacheRetry;
-            cpu->ifetch_pkt = pkt;
-        }
-    }
+    if (next_tick == curTick())
+        cpu->completeIfetch(pkt);
+    else
+        tickEvent.schedule(pkt, next_tick);
 
     return true;
 }
@@ -763,8 +750,8 @@ TimingSimpleCPU::completeDataAccess(PacketPtr pkt)
     assert(_status == DcacheWaitResponse || _status == DTBWaitResponse ||
            pkt->req->getFlags().isSet(Request::NO_ACCESS));
 
-    numCycles += tickToCycles(curTick() - previousTick);
-    previousTick = curTick();
+    numCycles += curCycle() - previousCycle;
+    previousCycle = curCycle();
 
     if (pkt->senderState) {
         SplitFragmentSenderState * send_state =
@@ -829,7 +816,7 @@ TimingSimpleCPU::completeDataAccess(PacketPtr pkt)
 void
 TimingSimpleCPU::completeDrain()
 {
-    DPRINTF(Config, "Done draining\n");
+    DPRINTF(Drain, "CPU done draining, processing drain event\n");
     changeState(SimObject::Drained);
     drainEvent->process();
 }
@@ -837,32 +824,21 @@ TimingSimpleCPU::completeDrain()
 bool
 TimingSimpleCPU::DcachePort::recvTimingResp(PacketPtr pkt)
 {
-    if (!pkt->wasNacked()) {
-        // delay processing of returned data until next CPU clock edge
-        Tick next_tick = cpu->nextCycle(curTick());
+    // delay processing of returned data until next CPU clock edge
+    Tick next_tick = cpu->nextCycle();
 
-        if (next_tick == curTick()) {
-            cpu->completeDataAccess(pkt);
+    if (next_tick == curTick()) {
+        cpu->completeDataAccess(pkt);
+    } else {
+        if (!tickEvent.scheduled()) {
+            tickEvent.schedule(pkt, next_tick);
         } else {
-            if (!tickEvent.scheduled()) {
-                tickEvent.schedule(pkt, next_tick);
-            } else {
-                // In the case of a split transaction and a cache that is
-                // faster than a CPU we could get two responses before
-                // next_tick expires
-                if (!retryEvent.scheduled())
-                    cpu->schedule(retryEvent, next_tick);
-                return false;
-            }
-        }
-
-        return true;
-    } else  {
-        assert(cpu->_status == DcacheWaitResponse);
-        pkt->reinitNacked();
-        if (!sendTimingReq(pkt)) {
-            cpu->_status = DcacheRetry;
-            cpu->dcache_pkt = pkt;
+            // In the case of a split transaction and a cache that is
+            // faster than a CPU we could get two responses before
+            // next_tick expires
+            if (!retryEvent.scheduled())
+                cpu->schedule(retryEvent, next_tick);
+            return false;
         }
     }
 

@@ -54,8 +54,8 @@ unameFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     TypedBufferArg<Linux::utsname> name(process->getSyscallArg(tc, index));
 
     strcpy(name->sysname, "Linux");
-    strcpy(name->nodename, "m5.eecs.umich.edu");
-    strcpy(name->release, "2.6.16.19");
+    strcpy(name->nodename, "sim.gem5.org");
+    strcpy(name->release, "3.0.0");
     strcpy(name->version, "#1 Mon Aug 18 11:32:15 EDT 2003");
     strcpy(name->machine, "x86_64");
 
@@ -229,7 +229,7 @@ SyscallDesc X86_64LinuxProcess::syscallDescs[] = {
     /*  13 */ SyscallDesc("rt_sigaction", ignoreFunc),
     /*  14 */ SyscallDesc("rt_sigprocmask", ignoreFunc),
     /*  15 */ SyscallDesc("rt_sigreturn", unimplementedFunc),
-    /*  16 */ SyscallDesc("ioctl", unimplementedFunc),
+    /*  16 */ SyscallDesc("ioctl", ioctlFunc<X86Linux64>),
     /*  17 */ SyscallDesc("pread64", unimplementedFunc),
     /*  18 */ SyscallDesc("pwrite64", unimplementedFunc),
     /*  19 */ SyscallDesc("readv", unimplementedFunc),
@@ -310,8 +310,8 @@ SyscallDesc X86_64LinuxProcess::syscallDescs[] = {
     /*  94 */ SyscallDesc("lchown", unimplementedFunc),
     /*  95 */ SyscallDesc("umask", unimplementedFunc),
     /*  96 */ SyscallDesc("gettimeofday", unimplementedFunc),
-    /*  97 */ SyscallDesc("getrlimit", unimplementedFunc),
-    /*  98 */ SyscallDesc("getrusage", unimplementedFunc),
+    /*  97 */ SyscallDesc("getrlimit", getrlimitFunc<X86Linux64>),
+    /*  98 */ SyscallDesc("getrusage", getrusageFunc<X86Linux64>),
     /*  99 */ SyscallDesc("sysinfo", sysinfoFunc<X86Linux64>),
     /* 100 */ SyscallDesc("times", timesFunc<X86Linux64>),
     /* 101 */ SyscallDesc("ptrace", unimplementedFunc),
@@ -546,7 +546,7 @@ SyscallDesc I386LinuxProcess::syscallDescs[] = {
     /*  51 */ SyscallDesc("acct", unimplementedFunc),
     /*  52 */ SyscallDesc("umount2", unimplementedFunc),
     /*  53 */ SyscallDesc("lock", unimplementedFunc),
-    /*  54 */ SyscallDesc("ioctl", unimplementedFunc),
+    /*  54 */ SyscallDesc("ioctl", ioctlFunc<X86Linux32>),
     /*  55 */ SyscallDesc("fcntl", unimplementedFunc),
     /*  56 */ SyscallDesc("mpx", unimplementedFunc),
     /*  57 */ SyscallDesc("setpgid", unimplementedFunc),
@@ -568,8 +568,8 @@ SyscallDesc I386LinuxProcess::syscallDescs[] = {
     /*  73 */ SyscallDesc("sigpending", unimplementedFunc),
     /*  74 */ SyscallDesc("sethostname", unimplementedFunc),
     /*  75 */ SyscallDesc("setrlimit", ignoreFunc),
-    /*  76 */ SyscallDesc("getrlimit", unimplementedFunc),
-    /*  77 */ SyscallDesc("getrusage", unimplementedFunc),
+    /*  76 */ SyscallDesc("getrlimit", getrlimitFunc<X86Linux32>),
+    /*  77 */ SyscallDesc("getrusage", getrusageFunc<X86Linux32>),
     /*  78 */ SyscallDesc("gettimeofday", unimplementedFunc),
     /*  79 */ SyscallDesc("settimeofday", unimplementedFunc),
     /*  80 */ SyscallDesc("getgroups", unimplementedFunc),

@@ -47,15 +47,15 @@
  * Definition of a bus object.
  */
 
-#include "base/intmath.hh"
 #include "base/misc.hh"
 #include "base/trace.hh"
 #include "debug/Bus.hh"
 #include "debug/BusAddrRanges.hh"
+#include "debug/Drain.hh"
 #include "mem/bus.hh"
 
 BaseBus::BaseBus(const BaseBusParams *p)
-    : MemObject(p), clock(p->clock),
+    : MemObject(p),
       headerCycles(p->header_cycles), width(p->width),
       defaultPortID(InvalidPortID),
       useDefaultRange(p->use_default_range),
@@ -113,7 +113,7 @@ BaseBus::calcPacketTiming(PacketPtr pkt)
 {
     // determine the current time rounded to the closest following
     // clock edge
-    Tick now = divCeil(curTick(), clock) * clock;
+    Tick now = nextCycle();
 
     Tick headerTime = now + headerCycles * clock;
 
@@ -246,6 +246,7 @@ BaseBus::Layer<PortClass>::releaseLayer()
         // we see a retry from the destination
         retryWaiting();
     } else if (drainEvent) {
+        DPRINTF(Drain, "Bus done draining, processing drain event\n");
         //If we weren't able to drain before, do it now.
         drainEvent->process();
         // Clear the drain event once we're done with it.
@@ -285,7 +286,7 @@ BaseBus::Layer<PortClass>::retryWaiting()
 
         // determine the current time rounded to the closest following
         // clock edge
-        Tick now = divCeil(curTick(), clock) * clock;
+        Tick now = bus.nextCycle();
 
         occupyLayer(now + clock);
     }
@@ -498,6 +499,7 @@ BaseBus::Layer<PortClass>::drain(Event * de)
     //waiting. We might be idle but have someone waiting if the device we
     //contacted for a retry didn't actually retry.
     if (!retryList.empty() || state != IDLE) {
+        DPRINTF(Drain, "Bus not drained\n");
         drainEvent = de;
         return 1;
     }

@@ -172,7 +172,7 @@ Cache<TagStore>::satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
                 // on ReadExReq we give up our copy unconditionally
                 tags->invalidateBlk(blk);
             } else if (blk->isWritable() && !pending_downgrade
-                       && !pkt->sharedAsserted()) {
+                      && !pkt->sharedAsserted() && !pkt->req->isInstFetch()) {
                 // we can give the requester an exclusive copy (by not
                 // asserting shared line) on a read request if:
                 // - we have an exclusive copy at this level (& below)
@@ -180,7 +180,9 @@ Cache<TagStore>::satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
                 //   signaling another read request
                 // - no other cache above has a copy (otherwise it
                 //   would have asseretd shared line on request)
-                
+                // - we are not satisfying an instruction fetch (this
+                //   prevents dirty data in the i-cache)
+
                 if (blk->isDirty()) {
                     // special considerations if we're owner:
                     if (!deferred_response && !isTopLevel) {
@@ -405,7 +407,7 @@ Cache<TagStore>::timingAccess(PacketPtr pkt)
 
         rec->restore(pkt, this);
         delete rec;
-        memSidePort->respond(pkt, time);
+        memSidePort->schedTimingSnoopResp(pkt, time);
         return true;
     }
 
@@ -498,7 +500,7 @@ Cache<TagStore>::timingAccess(PacketPtr pkt)
 
         if (needsResponse) {
             pkt->makeTimingResponse();
-            cpuSidePort->respond(pkt, curTick()+lat);
+            cpuSidePort->schedTimingResp(pkt, curTick()+lat);
         } else {
             /// @todo nominally we should just delete the packet here,
             /// however, until 4-phase stuff we can't because sending
@@ -690,8 +692,6 @@ Cache<TagStore>::atomicAccess(PacketPtr pkt)
         DPRINTF(Cache, "Receive response: %s for addr %x in state %i\n",
                 bus_pkt->cmdString(), bus_pkt->getAddr(), old_state);
 
-        assert(!bus_pkt->wasNacked());
-
         // If packet was a forward, the response (if any) is already
         // in place in the bus_pkt == pkt structure, so we don't need
         // to do anything.  Otherwise, use the separate bus_pkt to
@@ -821,12 +821,6 @@ Cache<TagStore>::handleResponse(PacketPtr pkt)
 
     assert(mshr);
 
-    if (pkt->wasNacked()) {
-        //pkt->reinitFromRequest();
-        warn("NACKs from devices not connected to the same bus "
-             "not implemented\n");
-        return;
-    }
     if (is_error) {
         DPRINTF(Cache, "Cache received packet with error for address %x, "
                 "cmd: %s\n", pkt->getAddr(), pkt->cmdString());
@@ -931,7 +925,7 @@ Cache<TagStore>::handleResponse(PacketPtr pkt)
                 // isInvalidate() set otherwise.
                 target->pkt->cmd = MemCmd::ReadRespWithInvalidate;
             }
-            cpuSidePort->respond(target->pkt, completion_time);
+            cpuSidePort->schedTimingResp(target->pkt, completion_time);
             break;
 
           case MSHR::Target::FromPrefetcher:
@@ -1164,7 +1158,7 @@ doTimingSupplyResponse(PacketPtr req_pkt, uint8_t *blk_data,
         // invalidate it.
         pkt->cmd = MemCmd::ReadRespWithInvalidate;
     }
-    memSidePort->respond(pkt, curTick() + hitLatency);
+    memSidePort->schedTimingSnoopResp(pkt, curTick() + hitLatency);
 }
 
 template<class TagStore>
@@ -1642,12 +1636,6 @@ template<class TagStore>
 bool
 Cache<TagStore>::MemSidePort::recvTimingResp(PacketPtr pkt)
 {
-    // this needs to be fixed so that the cache updates the mshr and sends the
-    // packet back out on the link, but it probably won't happen so until this
-    // gets fixed, just panic when it does
-    if (pkt->wasNacked())
-        panic("Need to implement cache resending nacked packets!\n");
-
     cache->handleResponse(pkt);
     return true;
 }

@@ -51,6 +51,7 @@
 #include "arch/vtophys.hh"
 #include "base/loader/object_file.hh"
 #include "base/loader/symtab.hh"
+#include "base/str.hh"
 #include "base/trace.hh"
 #include "config/the_isa.hh"
 #include "cpu/thread_context.hh"
@@ -110,7 +111,9 @@ System::System(Params *p)
     if (FullSystem) {
         if (params()->kernel == "") {
             inform("No kernel set for full system simulation. "
-                    "Assuming you know what you're doing if not SPARC ISA\n");
+                   "Assuming you know what you're doing\n");
+
+            kernel = NULL;
         } else {
             // Get the kernel code
             kernel = createObjectFile(params()->kernel);
@@ -254,9 +257,8 @@ System::numRunningContexts()
 void
 System::initState()
 {
-    int i;
     if (FullSystem) {
-        for (i = 0; i < threadContexts.size(); i++)
+        for (int i = 0; i < threadContexts.size(); i++)
             TheISA::startupCPU(threadContexts[i], i);
         // Moved from the constructor to here since it relies on the
         // address map being resolved in the interconnect
@@ -275,12 +277,6 @@ System::initState()
     }
 
     activeCpus.clear();
-
-    if (!FullSystem)
-        return;
-
-    for (i = 0; i < threadContexts.size(); i++)
-        TheISA::startupCPU(threadContexts[i], i);
 }
 
 void
@@ -402,8 +398,7 @@ MasterID
 System::getMasterId(std::string master_name)
 {
     // strip off system name if the string starts with it
-    if (master_name.size() > name().size() &&
-                          master_name.compare(0, name().size(), name()) == 0)
+    if (startswith(master_name, name()))
         master_name = master_name.erase(0, name().size() + 1);
 
     // CPUs in switch_cpus ask for ids again after switching

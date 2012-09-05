@@ -211,12 +211,12 @@ class FullO3CPU : public BaseO3CPU
     TickEvent tickEvent;
 
     /** Schedule tick event, regardless of its current state. */
-    void scheduleTickEvent(int delay)
+    void scheduleTickEvent(Cycles delay)
     {
         if (tickEvent.squashed())
-            reschedule(tickEvent, nextCycle(curTick() + ticks(delay)));
+            reschedule(tickEvent, clockEdge(delay));
         else if (!tickEvent.scheduled())
-            schedule(tickEvent, nextCycle(curTick() + ticks(delay)));
+            schedule(tickEvent, clockEdge(delay));
     }
 
     /** Unschedule tick event, regardless of its current state. */
@@ -251,14 +251,14 @@ class FullO3CPU : public BaseO3CPU
 
     /** Schedule thread to activate , regardless of its current state. */
     void
-    scheduleActivateThreadEvent(ThreadID tid, int delay)
+    scheduleActivateThreadEvent(ThreadID tid, Cycles delay)
     {
         // Schedule thread to activate, regardless of its current state.
         if (activateThreadEvent[tid].squashed())
             reschedule(activateThreadEvent[tid],
-                nextCycle(curTick() + ticks(delay)));
+                       clockEdge(delay));
         else if (!activateThreadEvent[tid].scheduled()) {
-            Tick when = nextCycle(curTick() + ticks(delay));
+            Tick when = clockEdge(delay);
 
             // Check if the deallocateEvent is also scheduled, and make
             // sure they do not happen at same time causing a sleep that
@@ -314,15 +314,15 @@ class FullO3CPU : public BaseO3CPU
 
     /** Schedule cpu to deallocate thread context.*/
     void
-    scheduleDeallocateContextEvent(ThreadID tid, bool remove, int delay)
+    scheduleDeallocateContextEvent(ThreadID tid, bool remove, Cycles delay)
     {
         // Schedule thread to activate, regardless of its current state.
         if (deallocateContextEvent[tid].squashed())
             reschedule(deallocateContextEvent[tid],
-                nextCycle(curTick() + ticks(delay)));
+                       clockEdge(delay));
         else if (!deallocateContextEvent[tid].scheduled())
             schedule(deallocateContextEvent[tid],
-                nextCycle(curTick() + ticks(delay)));
+                     clockEdge(delay));
     }
 
     /** Unschedule thread deallocation in CPU */
@@ -392,7 +392,7 @@ class FullO3CPU : public BaseO3CPU
     virtual Counter totalOps() const;
 
     /** Add Thread to Active Threads List. */
-    void activateContext(ThreadID tid, int delay);
+    void activateContext(ThreadID tid, Cycles delay);
 
     /** Remove Thread from Active Threads List */
     void suspendContext(ThreadID tid);
@@ -400,7 +400,8 @@ class FullO3CPU : public BaseO3CPU
     /** Remove Thread from Active Threads List &&
      *  Possibly Remove Thread Context from CPU.
      */
-    bool scheduleDeallocateContext(ThreadID tid, bool remove, int delay = 1);
+    bool scheduleDeallocateContext(ThreadID tid, bool remove,
+                                   Cycles delay = Cycles(1));
 
     /** Remove Thread from Active Threads List &&
      *  Remove Thread Context from CPU.
@@ -748,7 +749,7 @@ class FullO3CPU : public BaseO3CPU
     std::list<int> cpuWaitList;
 
     /** The cycle that the CPU was last running, used for statistics. */
-    Tick lastRunningCycle;
+    Cycles lastRunningCycle;
 
     /** The cycle that the CPU was last activated by a new thread*/
     Tick lastActivatedCycle;
