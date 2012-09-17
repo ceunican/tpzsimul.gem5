@@ -388,6 +388,8 @@ void TopazSwitchFlow::wakeUpTopaz() {
     }
     if ( messagesOnNets!=0)
         scheduleEvent(1);
+    else
+        m_network_ptr->setTriggerSwitch(~0);
 }
 
 void TopazSwitchFlow::wakeupVnet(int vnet) {
