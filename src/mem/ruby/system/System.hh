@@ -36,19 +36,21 @@
 #define __MEM_RUBY_SYSTEM_SYSTEM_HH__
 
 #include "base/callback.hh"
+#include "base/output.hh"
+#include "mem/packet.hh"
 #include "mem/ruby/common/Global.hh"
 #include "mem/ruby/recorder/CacheRecorder.hh"
 #include "mem/ruby/slicc_interface/AbstractController.hh"
 #include "mem/ruby/system/MemoryVector.hh"
 #include "mem/ruby/system/SparseMemory.hh"
 #include "params/RubySystem.hh"
-#include "sim/sim_object.hh"
+#include "sim/clocked_object.hh"
 
 class Network;
 class Profiler;
 class MemoryControl;
 
-class RubySystem : public SimObject
+class RubySystem : public ClockedObject
 {
   public:
     class RubyEvent : public Event
@@ -73,15 +75,13 @@ class RubySystem : public SimObject
     // config accessors
     static int getRandomSeed() { return m_random_seed; }
     static int getRandomization() { return m_randomization; }
-    static int getBlockSizeBytes() { return m_block_size_bytes; }
-    static int getBlockSizeBits() { return m_block_size_bits; }
-    static uint64 getMemorySizeBytes() { return m_memory_size_bytes; }
-    static int getMemorySizeBits() { return m_memory_size_bits; }
-    Tick getTime() const { return curTick() / m_clock; }
-    Tick getClock() const { return m_clock; }
+    static uint32_t getBlockSizeBytes() { return m_block_size_bytes; }
+    static uint32_t getBlockSizeBits() { return m_block_size_bits; }
+    static uint64_t getMemorySizeBytes() { return m_memory_size_bytes; }
+    static uint32_t getMemorySizeBits() { return m_memory_size_bits; }
 
     // Public Methods
-    static Network*
+    Network*
     getNetwork()
     {
         assert(m_network_ptr != NULL);
@@ -95,15 +95,15 @@ class RubySystem : public SimObject
         return m_profiler_ptr;
     }
 
-    static MemoryVector*
+    MemoryVector*
     getMemoryVector()
     {
         assert(m_mem_vec_ptr != NULL);
         return m_mem_vec_ptr;
     }
 
-    static void printStats(std::ostream& out);
-    void clearStats() const;
+    void printStats(std::ostream& out);
+    void resetStats();
 
     uint64 getInstructionCount(int thread) { return 1; }
 
@@ -113,6 +113,8 @@ class RubySystem : public SimObject
     void unserialize(Checkpoint *cp, const std::string &section);
     void process();
     void startup();
+    bool functionalRead(Packet *ptr);
+    bool functionalWrite(Packet *ptr);
 
     void registerNetwork(Network*);
     void registerProfiler(Profiler*);
@@ -134,30 +136,28 @@ class RubySystem : public SimObject
 
     void init();
 
-    static void printSystemConfig(std::ostream& out);
     void readCompressedTrace(std::string filename,
-                             uint8*& raw_data,
+                             uint8_t *&raw_data,
                              uint64& uncompressed_trace_size);
-    void writeCompressedTrace(uint8* raw_data, std::string file,
+    void writeCompressedTrace(uint8_t *raw_data, std::string file,
                               uint64 uncompressed_trace_size);
 
   private:
     // configuration parameters
     static int m_random_seed;
     static bool m_randomization;
-    static Tick m_clock;
-    static int m_block_size_bytes;
-    static int m_block_size_bits;
-    static uint64 m_memory_size_bytes;
-    static int m_memory_size_bits;
-    static Network* m_network_ptr;
+    static uint32_t m_block_size_bytes;
+    static uint32_t m_block_size_bits;
+    static uint64_t m_memory_size_bytes;
+    static uint32_t m_memory_size_bits;
 
-    MemoryControl *m_memory_controller;
+    Network* m_network_ptr;
+    std::vector<MemoryControl *> m_memory_controller_vec;
+    std::vector<AbstractController *> m_abs_cntrl_vec;
 
   public:
-    static Profiler* m_profiler_ptr;
-    static MemoryVector* m_mem_vec_ptr;
-    std::vector<AbstractController*> m_abs_cntrl_vec;
+    Profiler* m_profiler_ptr;
+    MemoryVector* m_mem_vec_ptr;
     bool m_warmup_enabled;
     bool m_cooldown_enabled;
     CacheRecorder* m_cache_recorder;
@@ -172,20 +172,23 @@ operator<<(std::ostream& out, const RubySystem& obj)
     return out;
 }
 
-class RubyExitCallback : public Callback
+class RubyDumpStatsCallback : public Callback
 {
   private:
-    std::string stats_filename;
+    std::ostream *os;
+    RubySystem *ruby_system;
 
   public:
-    virtual ~RubyExitCallback() {}
+    virtual ~RubyDumpStatsCallback() {}
 
-    RubyExitCallback(const std::string& _stats_filename)
+    RubyDumpStatsCallback(const std::string& _stats_filename,
+                          RubySystem *system)
     {
-        stats_filename = _stats_filename;
+        os = simout.create(_stats_filename);
+        ruby_system = system;
     }
 
-    virtual void process();
+    void process();
 };
 
 #endif // __MEM_RUBY_SYSTEM_SYSTEM_HH__

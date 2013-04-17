@@ -30,17 +30,20 @@
 #          Valentin Puente
 
 from m5.params import *
+from m5.proxy import *
 from Network import RubyNetwork
+from BasicRouter import BasicRouter
 
 class TopazNetwork(RubyNetwork):
     type = 'TopazNetwork'
+    cxx_header = "mem/ruby/network/topaz/TopazNetwork.hh"
     buffer_size = Param.Int(0,
         "default buffer size; 0 indicates infinite buffering");
     endpoint_bandwidth = Param.Int(1000,
                       "bandwidth adjustment factor");
     adaptive_routing = Param.Bool(False,
                       "enable adaptive routing");
-    topaz_init_file = Param.String("./TPZSimul__ini",
+    topaz_init_file = Param.String("./TPZSimul.ini",
                       "File that declares <simulation>.sgm, <network>.sgm and <router>.sgm");
     topaz_network =Param.String (None,
                       "TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ");
@@ -50,3 +53,9 @@ class TopazNetwork(RubyNetwork):
                       "memory-network clock multiplier");
     topaz_adaptive_interface_threshold = Param.Int(0,
                       "infligh patckets required to activate TOPAZ");
+
+class TopazSwitch(BasicRouter):
+      type = 'TopazSwitch'
+      cxx_header = 'mem/ruby/network/topaz/TopazSwitch.hh'
+      virt_nets = Param.Int(Parent.number_of_virtual_networks,
+                            "number of virtual networks")

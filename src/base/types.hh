@@ -40,6 +40,7 @@
 #include <inttypes.h>
 
 #include <cassert>
+#include <ostream>
 
 /** uint64_t constant */
 #define ULL(N)          ((uint64_t)N##ULL)
@@ -112,6 +113,20 @@ class Cycles
     /** Greater than comparison used for > Cycles(0). */
     bool operator>(const Cycles& cc) const
     { return c > cc.c; }
+
+    const Cycles operator +(const Cycles& b) const
+    { return Cycles(c + b.c); }
+
+    const Cycles operator -(const Cycles& b) const
+    { assert(c >= b.c); return Cycles(c - b.c); }
+
+    const Cycles operator <<(const int32_t shift)
+    { return Cycles(c << shift); }
+
+    const Cycles operator >>(const int32_t shift)
+    { return Cycles(c >> shift); }
+
+    friend std::ostream& operator<<(std::ostream &out, const Cycles & cycles);
 
 #endif // SWIG not touching operators
 

@@ -30,14 +30,8 @@
 #ifndef TYPEDEFINES_H
 #define TYPEDEFINES_H
 
-
-typedef unsigned char uint8;
-typedef unsigned int uint32;
 typedef unsigned long long uint64;
-
 typedef long long int64;
-
-typedef long long integer_t;
 
 typedef int64 Time;
 typedef uint64 physical_address_t;

@@ -57,7 +57,7 @@ class SimObject;
  * SimObject shouldn't cause the version number to increase, only changes to
  * existing objects such as serializing/unserializing more state, changing sizes
  * of serialized arrays, etc. */
-static const uint64_t gem5CheckpointVersion = 0x0000000000000001;
+static const uint64_t gem5CheckpointVersion = 0x0000000000000005;
 
 template <class T>
 void paramOut(std::ostream &os, const std::string &name, const T &param);
@@ -144,8 +144,14 @@ void fromSimObject(T &t, SimObject *s)
     fromSimObject(objptr, sptr);                        \
   } while (0)
 
-/*
+/**
  * Basic support for object serialization.
+ *
+ * @note Many objects that support serialization need to be put in a
+ * consistent state when serialization takes place. We refer to the
+ * action of forcing an object into a consistent state as
+ * 'draining'. Objects that need draining inherit from Drainable. See
+ * Drainable for more information.
  */
 class Serializable
 {
@@ -171,6 +177,8 @@ class Serializable
     static void serializeAll(const std::string &cpt_dir);
     static void unserializeGlobals(Checkpoint *cp);
 };
+
+void debug_serialize(const std::string &cpt_dir);
 
 //
 // A SerializableBuilder serves as an evaluation context for a set of

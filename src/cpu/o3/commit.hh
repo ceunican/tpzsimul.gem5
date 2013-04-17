@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -129,7 +129,8 @@ class DefaultCommit
         Idle,
         ROBSquashing,
         TrapPending,
-        FetchTrapPending
+        FetchTrapPending,
+        SquashAfterPending, //< Committing instructions before a squash.
     };
 
     /** Commit policy for SMT mode. */
@@ -195,16 +196,19 @@ class DefaultCommit
     void setROB(ROB *rob_ptr);
 
     /** Initializes stage by sending back the number of free entries. */
-    void initStage();
+    void startupStage();
 
     /** Initializes the draining of commit. */
-    bool drain();
+    void drain();
 
     /** Resumes execution after draining. */
-    void resume();
+    void drainResume();
 
-    /** Completes the switch out of commit. */
-    void switchOut();
+    /** Perform sanity checks after a drain. */
+    void drainSanityCheck() const;
+
+    /** Has the stage drained? */
+    bool isDrained() const;
 
     /** Takes over from another CPU's thread. */
     void takeOverFrom();
@@ -259,13 +263,38 @@ class DefaultCommit
     /** Handles squashing due to an TC write. */
     void squashFromTC(ThreadID tid);
 
-    /** Handles squashing from instruction with SquashAfter set.
+    /** Handles a squash from a squashAfter() request. */
+    void squashFromSquashAfter(ThreadID tid);
+
+    /**
+     * Handle squashing from instruction with SquashAfter set.
+     *
      * This differs from the other squashes as it squashes following
      * instructions instead of the current instruction and doesn't
-     * clean up various status bits about traps/tc writes pending.
+     * clean up various status bits about traps/tc writes
+     * pending. Since there might have been instructions committed by
+     * the commit stage before the squashing instruction was reached
+     * and we can't commit and squash in the same cycle, we have to
+     * squash in two steps:
+     *
+     * <ol>
+     *   <li>Immediately set the commit status of the thread of
+     *       SquashAfterPending. This forces the thread to stop
+     *       committing instructions in this cycle. The last
+     *       instruction to be committed in this cycle will be the
+     *       SquashAfter instruction.
+     *   <li>In the next cycle, commit() checks for the
+     *       SquashAfterPending state and squashes <i>all</i>
+     *       in-flight instructions. Since the SquashAfter instruction
+     *       was the last instruction to be committed in the previous
+     *       cycle, this causes all subsequent instructions to be
+     *       squashed.
+     * </ol>
+     *
+     * @param tid ID of the thread to squash.
+     * @param head_inst Instruction that requested the squash.
      */
-    void squashAfter(ThreadID tid, DynInstPtr &head_inst,
-            uint64_t squash_after_seq_num);
+    void squashAfter(ThreadID tid, DynInstPtr &head_inst);
 
     /** Handles processing an interrupt. */
     void handleInterrupt();
@@ -372,6 +401,15 @@ class DefaultCommit
     /** Records if a thread has to squash this cycle due to an XC write. */
     bool tcSquash[Impl::MaxThreads];
 
+    /**
+     * Instruction passed to squashAfter().
+     *
+     * The squash after implementation needs to buffer the instruction
+     * that caused a squash since this needs to be passed to the fetch
+     * stage once squashing starts.
+     */
+    DynInstPtr squashAfterInst[Impl::MaxThreads];
+
     /** Priority List used for Commit Policy */
     std::list<ThreadID> priority_list;
 
@@ -402,9 +440,6 @@ class DefaultCommit
 
     /** Is a drain pending. */
     bool drainPending;
-
-    /** Is commit switched out. */
-    bool switchedOut;
 
     /** The latency to handle a trap.  Used when scheduling trap
      * squash event.
@@ -444,13 +479,15 @@ class DefaultCommit
     /** True if last committed microop can be followed by an interrupt */
     bool canHandleInterrupts;
 
+    /** Have we had an interrupt pending and then seen it de-asserted because
+        of a masking change? In this case the variable is set and the next time
+        interrupts are enabled and pending the pipeline will squash to avoid
+        a possible livelock senario.  */
+    bool avoidQuiesceLiveLock;
+
     /** Updates commit stats based on this instruction. */
     void updateComInstStats(DynInstPtr &inst);
 
-    /** Stat for the total number of committed instructions. */
-    Stats::Scalar commitCommittedInsts;
-    /** Stat for the total number of committed ops. */
-    Stats::Scalar commitCommittedOps;
     /** Stat for the total number of squashed instructions discarded by commit.
      */
     Stats::Scalar commitSquashedInsts;

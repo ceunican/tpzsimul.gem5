@@ -335,6 +335,10 @@ SyscallReturn getegidFunc(SyscallDesc *desc, int num,
 SyscallReturn cloneFunc(SyscallDesc *desc, int num,
                                LiveProcess *p, ThreadContext *tc);
 
+/// Target access() handler
+SyscallReturn accessFunc(SyscallDesc *desc, int num,
+                               LiveProcess *p, ThreadContext *tc);
+
 /// Futex system call
 ///  Implemented by Daniel Sanchez
 ///  Used by printf's in multi-threaded apps
@@ -359,6 +363,7 @@ futexFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     DPRINTF(SyscallVerbose, "In sys_futex: Address=%llx, op=%d, val=%d\n",
             uaddr, op, val);
 
+    op &= ~OS::TGT_FUTEX_PRIVATE_FLAG;
 
     if (op == OS::TGT_FUTEX_WAIT) {
         if (timeout != 0) {
@@ -410,7 +415,7 @@ futexFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
                                 "thread contexts\n", wokenUp);
         return wokenUp;
     } else {
-        warn("sys_futex: op %d is not implemented, just returning...");
+        warn("sys_futex: op %d is not implemented, just returning...", op);
         return 0;
     }
 

@@ -233,6 +233,22 @@ class SwigSource(SourceFile):
         self.cc_source = Source(cc_file, swig=True, parent=self)
         self.py_source = PySource(package, py_file, parent=self)
 
+class ProtoBuf(SourceFile):
+    '''Add a Protocol Buffer to build'''
+
+    def __init__(self, source, **guards):
+        '''Specify the source file, and any guards'''
+        super(ProtoBuf, self).__init__(source, **guards)
+
+        # Get the file name and the extension
+        modname,ext = self.extname
+        assert ext == 'proto'
+
+        # Currently, we stick to generating the C++ headers, so we
+        # only need to track the source and header.
+        self.cc_file = File(joinpath(self.dirname, modname + '.pb.cc'))
+        self.hh_file = File(joinpath(self.dirname, modname + '.pb.h'))
+
 class UnitTest(object):
     '''Create a UnitTest'''
 
@@ -260,6 +276,7 @@ Export('Source')
 Export('PySource')
 Export('SimObject')
 Export('SwigSource')
+Export('ProtoBuf')
 Export('UnitTest')
 
 ########################################################################
@@ -451,6 +468,12 @@ sys.meta_path.remove(importer)
 sim_objects = m5.SimObject.allClasses
 all_enums = m5.params.allEnums
 
+if m5.SimObject.noCxxHeader:
+    print >> sys.stderr, \
+        "warning: At least one SimObject lacks a header specification. " \
+        "This can cause unexpected results in the generated SWIG " \
+        "wrappers."
+
 # Find param types that need to be explicitly wrapped with swig.
 # These will be recognized because the ParamDesc will have a
 # swig_decl() method.  Most param types are based on types that don't
@@ -634,11 +657,14 @@ for name,enum in sorted(all_enums.iteritems()):
     SwigSource('m5.internal', i_file)
 
 # Generate SimObject SWIG wrapper files
-for name in sim_objects.iterkeys():
+for name,simobj in sim_objects.iteritems():
+    py_source = PySource.modules[simobj.__module__]
+    extra_deps = [ py_source.tnode ]
+
     i_file = File('python/m5/internal/param_%s.i' % name)
     env.Command(i_file, Value(name),
                 MakeAction(createSimObjectSwigWrapper, Transform("SO SWIG")))
-    env.Depends(i_file, depends)
+    env.Depends(i_file, depends + extra_deps)
     SwigSource('m5.internal', i_file)
 
 # Generate the main swig init file
@@ -666,6 +692,24 @@ for swig in SwigSource.all:
     env.Command(init_file, Value(swig.module),
                 MakeAction(makeEmbeddedSwigInit, Transform("EMBED SW")))
     Source(init_file, **swig.guards)
+
+# Build all protocol buffers if we have got protoc and protobuf available
+if env['HAVE_PROTOBUF']:
+    for proto in ProtoBuf.all:
+        # Use both the source and header as the target, and the .proto
+        # file as the source. When executing the protoc compiler, also
+        # specify the proto_path to avoid having the generated files
+        # include the path.
+        env.Command([proto.cc_file, proto.hh_file], proto.tnode,
+                    MakeAction('$PROTOC --cpp_out ${TARGET.dir} '
+                               '--proto_path ${SOURCE.dir} $SOURCE',
+                               Transform("PROTOC")))
+
+        # Add the C++ source file
+        Source(proto.cc_file, **proto.guards)
+elif ProtoBuf.all:
+    print 'Got protobuf to build, but lacks support!'
+    Exit(1)
 
 #
 # Handle debug flags
@@ -848,15 +892,36 @@ def makeEnv(label, objsfx, strip = False, **kwargs):
     new_env.Append(**kwargs)
 
     swig_env = new_env.Clone()
-    swig_env.Append(CCFLAGS='-Werror')
+
+    # Both gcc and clang have issues with unused labels and values in
+    # the SWIG generated code
+    swig_env.Append(CCFLAGS=['-Wno-unused-label', '-Wno-unused-value'])
+
+    # Add additional warnings here that should not be applied to
+    # the SWIG generated code
+    new_env.Append(CXXFLAGS='-Wmissing-declarations')
+
     if env['GCC']:
-        swig_env.Append(CCFLAGS=['-Wno-uninitialized', '-Wno-sign-compare',
-                                 '-Wno-parentheses', '-Wno-unused-label',
-                                 '-Wno-unused-value'])
+        # Depending on the SWIG version, we also need to supress
+        # warnings about uninitialized variables and missing field
+        # initializers.
+        swig_env.Append(CCFLAGS=['-Wno-uninitialized',
+                                 '-Wno-missing-field-initializers'])
+
         if compareVersions(env['GCC_VERSION'], '4.6') >= 0:
             swig_env.Append(CCFLAGS='-Wno-unused-but-set-variable')
+
+        # If gcc supports it, also warn for deletion of derived
+        # classes with non-virtual desctructors. For gcc >= 4.7 we
+        # also have to disable warnings about the SWIG code having
+        # potentially uninitialized variables.
+        if compareVersions(env['GCC_VERSION'], '4.7') >= 0:
+            new_env.Append(CXXFLAGS='-Wdelete-non-virtual-dtor')
+            swig_env.Append(CCFLAGS='-Wno-maybe-uninitialized')
     if env['CLANG']:
-        swig_env.Append(CCFLAGS=['-Wno-unused-label', '-Wno-unused-value'])
+        # Always enable the warning for deletion of derived classes
+        # with non-virtual destructors
+        new_env.Append(CXXFLAGS=['-Wdelete-non-virtual-dtor'])
 
     werror_env = new_env.Clone()
     werror_env.Append(CCFLAGS='-Werror')
@@ -931,31 +996,42 @@ def makeEnv(label, objsfx, strip = False, **kwargs):
     new_env.M5Binary = targets[0]
     envList.append(new_env)
 
-# Debug binary
-ccflags = {}
+# Start out with the compiler flags common to all compilers,
+# i.e. they all use -g for opt and -g -pg for prof
+ccflags = {'debug' : [], 'opt' : ['-g'], 'fast' : [], 'prof' : ['-g', '-pg'],
+           'perf' : ['-g']}
+
+# Start out with the linker flags common to all linkers, i.e. -pg for
+# prof, and -lprofiler for perf. The -lprofile flag is surrounded by
+# no-as-needed and as-needed as the binutils linker is too clever and
+# simply doesn't link to the library otherwise.
+ldflags = {'debug' : [], 'opt' : [], 'fast' : [], 'prof' : ['-pg'],
+           'perf' : ['-Wl,--no-as-needed', '-lprofiler', '-Wl,--as-needed']}
+
+# For Link Time Optimization, the optimisation flags used to compile
+# individual files are decoupled from those used at link time
+# (i.e. you can compile with -O3 and perform LTO with -O0), so we need
+# to also update the linker flags based on the target.
 if env['GCC']:
     if sys.platform == 'sunos5':
-        ccflags['debug'] = '-gstabs+'
+        ccflags['debug'] += ['-gstabs+']
     else:
-        ccflags['debug'] = '-ggdb3'
-    ccflags['opt'] = '-g -O3'
-    ccflags['fast'] = '-O3'
-    ccflags['prof'] = '-O3 -g -pg'
-elif env['SUNCC']:
-    ccflags['debug'] = '-g0'
-    ccflags['opt'] = '-g -O'
-    ccflags['fast'] = '-fast'
-    ccflags['prof'] = '-fast -g -pg'
-elif env['ICC']:
-    ccflags['debug'] = '-g -O0'
-    ccflags['opt'] = '-g -O'
-    ccflags['fast'] = '-fast'
-    ccflags['prof'] = '-fast -g -pg'
+        ccflags['debug'] += ['-ggdb3']
+    ldflags['debug'] += ['-O0']
+    # opt, fast, prof and perf all share the same cc flags, also add
+    # the optimization to the ldflags as LTO defers the optimization
+    # to link time
+    for target in ['opt', 'fast', 'prof', 'perf']:
+        ccflags[target] += ['-O3']
+        ldflags[target] += ['-O3']
+
+    ccflags['fast'] += env['LTO_CCFLAGS']
+    ldflags['fast'] += env['LTO_LDFLAGS']
 elif env['CLANG']:
-    ccflags['debug'] = '-g -O0'
-    ccflags['opt'] = '-g -O3'
-    ccflags['fast'] = '-O3'
-    ccflags['prof'] = '-O3 -g -pg'
+    ccflags['debug'] += ['-g', '-O0']
+    # opt, fast, prof and perf all share the same cc flags
+    for target in ['opt', 'fast', 'prof', 'perf']:
+        ccflags[target] += ['-O3']
 else:
     print 'Unknown compiler, please fix compiler options'
     Exit(1)
@@ -965,8 +1041,9 @@ else:
 # need.  We try to identify the needed environment for each target; if
 # we can't, we fall back on instantiating all the environments just to
 # be safe.
-target_types = ['debug', 'opt', 'fast', 'prof']
-obj2target = {'do': 'debug', 'o': 'opt', 'fo': 'fast', 'po': 'prof'}
+target_types = ['debug', 'opt', 'fast', 'prof', 'perf']
+obj2target = {'do': 'debug', 'o': 'opt', 'fo': 'fast', 'po': 'prof',
+              'gpo' : 'perf'}
 
 def identifyTarget(t):
     ext = t.split('.')[-1]
@@ -987,25 +1064,35 @@ if 'all' in needed_envs:
 if 'debug' in needed_envs:
     makeEnv('debug', '.do',
             CCFLAGS = Split(ccflags['debug']),
-            CPPDEFINES = ['DEBUG', 'TRACING_ON=1'])
+            CPPDEFINES = ['DEBUG', 'TRACING_ON=1'],
+            LINKFLAGS = Split(ldflags['debug']))
 
 # Optimized binary
 if 'opt' in needed_envs:
     makeEnv('opt', '.o',
             CCFLAGS = Split(ccflags['opt']),
-            CPPDEFINES = ['TRACING_ON=1'])
+            CPPDEFINES = ['TRACING_ON=1'],
+            LINKFLAGS = Split(ldflags['opt']))
 
 # "Fast" binary
 if 'fast' in needed_envs:
     makeEnv('fast', '.fo', strip = True,
             CCFLAGS = Split(ccflags['fast']),
-            CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'])
+            CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'],
+            LINKFLAGS = Split(ldflags['fast']))
 
-# Profiled binary
+# Profiled binary using gprof
 if 'prof' in needed_envs:
     makeEnv('prof', '.po',
             CCFLAGS = Split(ccflags['prof']),
             CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'],
-            LINKFLAGS = '-pg')
+            LINKFLAGS = Split(ldflags['prof']))
+
+# Profiled binary using google-pprof
+if 'perf' in needed_envs:
+    makeEnv('perf', '.gpo',
+            CCFLAGS = Split(ccflags['perf']),
+            CPPDEFINES = ['NDEBUG', 'TRACING_ON=0'],
+            LINKFLAGS = Split(ldflags['perf']))
 
 Return('envList')

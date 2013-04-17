@@ -54,6 +54,9 @@ PioPort::PioPort(PioDevice *dev)
 Tick
 PioPort::recvAtomic(PacketPtr pkt)
 {
+    // @todo: We need to pay for this and not just zero it out
+    pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
+
     return pkt->isRead() ? device->read(pkt) : device->write(pkt);
 }
 
@@ -79,8 +82,8 @@ PioDevice::init()
     pioPort.sendRangeChange();
 }
 
-SlavePort &
-PioDevice::getSlavePort(const std::string &if_name, int idx)
+BaseSlavePort &
+PioDevice::getSlavePort(const std::string &if_name, PortID idx)
 {
     if (if_name == "pio") {
         return pioPort;
@@ -89,14 +92,14 @@ PioDevice::getSlavePort(const std::string &if_name, int idx)
 }
 
 unsigned int
-PioDevice::drain(Event *de)
+PioDevice::drain(DrainManager *dm)
 {
     unsigned int count;
-    count = pioPort.drain(de);
+    count = pioPort.drain(dm);
     if (count)
-        changeState(Draining);
+        setDrainState(Drainable::Draining);
     else
-        changeState(Drained);
+        setDrainState(Drainable::Drained);
     return count;
 }
 

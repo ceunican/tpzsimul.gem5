@@ -1,5 +1,14 @@
-# Copyright (c) 2006-2007 The Regents of The University of Michigan
+# Copyright (c) 2012 ARM Limited
 # All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -24,77 +33,10 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# Authors: Steve Reinhardt
+# Authors: Andreas Sandberg
 
-import m5
 from m5.objects import *
-m5.util.addToPath('../configs/common')
-import FSConfig
+from alpha_generic import *
 
-
-# --------------------
-# Base L1 Cache
-# ====================
-
-class L1(BaseCache):
-    latency = '1ns'
-    block_size = 64
-    mshrs = 4
-    tgts_per_mshr = 8
-    is_top_level = True
-
-# ----------------------
-# Base L2 Cache
-# ----------------------
-
-class L2(BaseCache):
-    block_size = 64
-    latency = '10ns'
-    mshrs = 92
-    tgts_per_mshr = 16
-    write_buffers = 8
-
-# ---------------------
-# I/O Cache
-# ---------------------
-class IOCache(BaseCache):
-    assoc = 8
-    block_size = 64
-    latency = '50ns'
-    mshrs = 20
-    size = '1kB'
-    tgts_per_mshr = 12
-    addr_ranges = [AddrRange(0, size='8GB')]
-    forward_snoops = False
-    is_top_level = True
-
-#cpu
-cpu = TimingSimpleCPU(cpu_id=0)
-#the system
-system = FSConfig.makeLinuxAlphaSystem('timing')
-
-system.cpu = cpu
-#create the l1/l2 bus
-system.toL2Bus = CoherentBus()
-system.iocache = IOCache()
-system.iocache.cpu_side = system.iobus.master
-system.iocache.mem_side = system.membus.slave
-
-
-#connect up the l2 cache
-system.l2c = L2(size='4MB', assoc=8)
-system.l2c.cpu_side = system.toL2Bus.master
-system.l2c.mem_side = system.membus.slave
-
-#connect up the cpu and l1s
-cpu.addPrivateSplitL1Caches(L1(size = '32kB', assoc = 1),
-                            L1(size = '32kB', assoc = 4))
-# create the interrupt controller
-cpu.createInterruptController()
-# connect cpu level-1 caches to shared level-2 cache
-cpu.connectAllPorts(system.toL2Bus, system.membus)
-cpu.clock = '2GHz'
-
-root = Root(full_system=True, system=system)
-m5.ticks.setGlobalFrequency('1THz')
-
+root = LinuxAlphaFSSystemUniprocessor(mem_mode='timing',
+                                      cpu_class=TimingSimpleCPU).create_root()

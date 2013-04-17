@@ -43,8 +43,8 @@ class flitBuffer
     flitBuffer();
     flitBuffer(int maximum_size);
 
-    bool isReady();
-    bool isReadyForNext();
+    bool isReady(Cycles curTime);
+    bool isReadyForNext(Cycles curTime);
     bool isFull();
     bool isEmpty();
     void setMaxSize(int maximum);
@@ -53,9 +53,12 @@ class flitBuffer
     void insert(flit *flt);
     void print(std::ostream& out) const;
 
+    bool functionalRead(Packet *);
+    uint32_t functionalWrite(Packet *);
+
   private:
     std::vector<flit *> m_buffer;
-    int size, max_size;
+    int max_size;
 };
 
 inline std::ostream&

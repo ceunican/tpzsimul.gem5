@@ -1,4 +1,16 @@
-/*
+/* 
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2004-2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -35,6 +47,7 @@
 #include "cpu/inst_seq.hh"
 #include "debug/Activity.hh"
 #include "debug/Decode.hh"
+#include "debug/O3PipeView.hh"
 #include "params/DerivO3CPU.hh"
 #include "sim/full_system.hh"
 
@@ -52,6 +65,21 @@ DefaultDecode<Impl>::DefaultDecode(O3CPU *_cpu, DerivO3CPUParams *params)
       decodeWidth(params->decodeWidth),
       numThreads(params->numThreads)
 {
+    // @todo: Make into a parameter
+    skidBufferMax = (fetchToDecodeDelay + 1) *  params->fetchWidth;
+}
+
+template<class Impl>
+void
+DefaultDecode<Impl>::startupStage()
+{
+    resetStage();
+}
+
+template<class Impl>
+void
+DefaultDecode<Impl>::resetStage()
+{
     _status = Inactive;
 
     // Setup status, make sure stall signals are clear.
@@ -62,9 +90,6 @@ DefaultDecode<Impl>::DefaultDecode(O3CPU *_cpu, DerivO3CPUParams *params)
         stalls[tid].iew = false;
         stalls[tid].commit = false;
     }
-
-    // @todo: Make into a parameter
-    skidBufferMax = (fetchToDecodeDelay + 1) *  params->fetchWidth;
 }
 
 template <class Impl>
@@ -164,34 +189,13 @@ DefaultDecode<Impl>::setActiveThreads(std::list<ThreadID> *at_ptr)
 }
 
 template <class Impl>
-bool
-DefaultDecode<Impl>::drain()
-{
-    // Decode is done draining at any time.
-    cpu->signalDrained();
-    return true;
-}
-
-template <class Impl>
 void
-DefaultDecode<Impl>::takeOverFrom()
+DefaultDecode<Impl>::drainSanityCheck() const
 {
-    _status = Inactive;
-
-    // Be sure to reset state and clear out any old instructions.
     for (ThreadID tid = 0; tid < numThreads; ++tid) {
-        decodeStatus[tid] = Idle;
-
-        stalls[tid].rename = false;
-        stalls[tid].iew = false;
-        stalls[tid].commit = false;
-        while (!insts[tid].empty())
-            insts[tid].pop();
-        while (!skidBuffer[tid].empty())
-            skidBuffer[tid].pop();
-        branchCount[tid] = 0;
+        assert(insts[tid].empty());
+        assert(skidBuffer[tid].empty());
     }
-    wroteToTimeBuffer = false;
 }
 
 template<class Impl>
@@ -238,7 +242,9 @@ DefaultDecode<Impl>::block(ThreadID tid)
         // Set the status to Blocked.
         decodeStatus[tid] = Blocked;
 
-        if (decodeStatus[tid] != Unblocking) {
+        if (toFetch->decodeUnblock[tid]) {
+            toFetch->decodeUnblock[tid] = false;
+        } else {
             toFetch->decodeBlock[tid] = true;
             wroteToTimeBuffer = true;
         }
@@ -709,7 +715,9 @@ DefaultDecode<Impl>::decodeInsts(ThreadID tid)
         --insts_available;
 
 #if TRACING_ON
-        inst->decodeTick = curTick() - inst->fetchTick;
+        if (DTRACE(O3PipeView)) {
+            inst->decodeTick = curTick() - inst->fetchTick;
+        }
 #endif
 
         // Ensure that if it was predicted as a branch, it really is a

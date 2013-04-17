@@ -30,12 +30,12 @@
 
 #include "mem/ruby/network/garnet/flexible-pipeline/flit.hh"
 
-flit::flit(int id, int  vc, int vnet, int size, MsgPtr msg_ptr)
+flit::flit(int id, int  vc, int vnet, int size, MsgPtr msg_ptr, Cycles curTime)
 {
     m_size = size;
     m_msg_ptr = msg_ptr;
-    m_enqueue_time = g_system_ptr->getTime();
-    m_time = g_system_ptr->getTime();
+    m_enqueue_time = curTime;
+    m_time = curTime;
     m_id = id;
     m_vnet = vnet;
     m_vc = vc;
@@ -64,20 +64,20 @@ flit::get_id()
     return m_id;
 }
 
-Time
+Cycles
 flit::get_time()
 {
     return m_time;
 }
 
-Time
+Cycles
 flit::get_enqueue_time()
 {
     return m_enqueue_time;
 }
 
 void
-flit::set_time(Time time)
+flit::set_time(Cycles time)
 {
     m_time = time;
 }
@@ -113,12 +113,12 @@ flit::get_type()
 }
 
 void
-flit::set_delay(int delay)
+flit::set_delay(Cycles delay)
 {
     src_delay = delay;
 }
 
-int
+Cycles
 flit::get_delay()
 {
     return src_delay;
@@ -134,4 +134,18 @@ flit::print(std::ostream& out) const
     out << "VC=" << m_vc << " ";
     out << "Enqueue Time=" << m_enqueue_time << " ";
     out << "]";
+}
+
+bool
+flit::functionalRead(Packet *pkt)
+{
+    Message *msg = m_msg_ptr.get();
+    return msg->functionalRead(pkt);
+}
+
+bool
+flit::functionalWrite(Packet *pkt)
+{
+    Message *msg = m_msg_ptr.get();
+    return msg->functionalWrite(pkt);
 }

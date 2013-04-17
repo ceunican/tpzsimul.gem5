@@ -35,11 +35,19 @@ from m5.proxy import *
 
 from SimpleMemory import *
 
-class MemoryMode(Enum): vals = ['invalid', 'atomic', 'timing']
+class MemoryMode(Enum): vals = ['invalid', 'atomic', 'timing',
+                                'atomic_noncaching']
 
 class System(MemObject):
     type = 'System'
+    cxx_header = "sim/system.hh"
     system_port = MasterPort("System port")
+
+    # Override the clock from the ClockedObject which looks at the
+    # parent clock by default. The 1 GHz default system clock serves
+    # as a start for the modules that rely on the parent to provide
+    # the clock.
+    clock = '1GHz'
 
     @classmethod
     def export_method_cxx_predecls(cls, code):
@@ -48,13 +56,19 @@ class System(MemObject):
     @classmethod
     def export_methods(cls, code):
         code('''
-      Enums::MemoryMode getMemoryMode();
+      Enums::MemoryMode getMemoryMode() const;
       void setMemoryMode(Enums::MemoryMode mode);
 ''')
 
     memories = VectorParam.AbstractMemory(Self.all,
                                           "All memories in the system")
     mem_mode = Param.MemoryMode('atomic', "The mode the memory system is in")
+
+    # The memory ranges are to be populated when creating the system
+    # such that these can be passed from the I/O subsystem through an
+    # I/O bridge or cache
+    mem_ranges = VectorParam.AddrRange([], "Ranges that constitute main memory")
+
     work_item_id = Param.Int(-1, "specific work item id")
     num_work_ids = Param.Int(16, "Number of distinct work item types")
     work_begin_cpu_id_exit = Param.Int(-1,

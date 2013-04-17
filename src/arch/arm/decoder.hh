@@ -39,15 +39,12 @@
 #include "base/types.hh"
 #include "cpu/static_inst.hh"
 
-class ThreadContext;
-
 namespace ArmISA
 {
 
 class Decoder
 {
   protected:
-    ThreadContext * tc;
     //The extended machine instruction being generated
     ExtMachInst emi;
     MachInst data;
@@ -57,6 +54,9 @@ class Decoder
     int offset;
     bool foundIt;
     ITSTATE itBits;
+
+    int fpscrLen;
+    int fpscrStride;
 
   public:
     void reset()
@@ -69,20 +69,9 @@ class Decoder
         foundIt = false;
     }
 
-    Decoder(ThreadContext * _tc) : tc(_tc), data(0)
+    Decoder() : data(0), fpscrLen(0), fpscrStride(0)
     {
         reset();
-    }
-
-    ThreadContext * getTC()
-    {
-        return tc;
-    }
-
-    void
-    setTC(ThreadContext * _tc)
-    {
-        tc = _tc;
     }
 
     void process();
@@ -120,6 +109,14 @@ class Decoder
     {
         return (!emi.thumb || emi.bigThumb) ? 4 : 2;
     }
+
+    void setContext(FPSCR fpscr)
+    {
+        fpscrLen = fpscr.len;
+        fpscrStride = fpscr.stride;
+    }
+
+    void takeOverFrom(Decoder *old) {}
 
   protected:
     /// A cache of decoded instruction objects.

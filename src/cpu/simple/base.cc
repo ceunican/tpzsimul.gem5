@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -51,7 +51,6 @@
 #include "base/inifile.hh"
 #include "base/misc.hh"
 #include "base/pollevent.hh"
-#include "base/range.hh"
 #include "base/trace.hh"
 #include "base/types.hh"
 #include "config/the_isa.hh"
@@ -88,10 +87,11 @@ BaseSimpleCPU::BaseSimpleCPU(BaseSimpleCPUParams *p)
     : BaseCPU(p), traceData(NULL), thread(NULL)
 {
     if (FullSystem)
-        thread = new SimpleThread(this, 0, p->system, p->itb, p->dtb);
+        thread = new SimpleThread(this, 0, p->system, p->itb, p->dtb,
+                                  p->isa[0]);
     else
         thread = new SimpleThread(this, /* thread_num */ 0, p->system,
-                p->workload[0], p->itb, p->dtb);
+                                  p->workload[0], p->itb, p->dtb, p->isa[0]);
 
     thread->setStatus(ThreadContext::Halted);
 
@@ -283,22 +283,21 @@ BaseSimpleCPU::resetStats()
 }
 
 void
-BaseSimpleCPU::serialize(ostream &os)
+BaseSimpleCPU::serializeThread(ostream &os, ThreadID tid)
 {
-    SERIALIZE_ENUM(_status);
-    BaseCPU::serialize(os);
-//    SERIALIZE_SCALAR(inst);
-    nameOut(os, csprintf("%s.xc.0", name()));
+    assert(_status == Idle || _status == Running);
+    assert(tid == 0);
+
     thread->serialize(os);
 }
 
 void
-BaseSimpleCPU::unserialize(Checkpoint *cp, const string &section)
+BaseSimpleCPU::unserializeThread(Checkpoint *cp, const string &section,
+                                 ThreadID tid)
 {
-    UNSERIALIZE_ENUM(_status);
-    BaseCPU::unserialize(cp, section);
-//    UNSERIALIZE_SCALAR(inst);
-    thread->unserialize(cp, csprintf("%s.xc.0", section));
+    if (tid != 0)
+        fatal("Trying to load more than one thread into a SimpleCPU\n");
+    thread->unserialize(cp, section);
 }
 
 void
@@ -381,8 +380,6 @@ BaseSimpleCPU::preExecute()
         TheISA::Decoder *decoder = &(thread->decoder);
 
         //Predecode, ie bundle up an ExtMachInst
-        //This should go away once the constructor can be set up properly
-        decoder->setTC(thread->getTC());
         //If more fetch data is needed, pass it in.
         Addr fetchPC = (pcState.instAddr() & PCMask) + fetchOffset;
         //if(decoder->needMoreBytes())
@@ -518,37 +515,9 @@ BaseSimpleCPU::advancePC(Fault fault)
     }
 }
 
-/*Fault
-BaseSimpleCPU::CacheOp(uint8_t Op, Addr EffAddr)
+void
+BaseSimpleCPU::startup()
 {
-    // translate to physical address
-    Fault fault = NoFault;
-    int CacheID = Op & 0x3; // Lower 3 bits identify Cache
-    int CacheOP = Op >> 2; // Upper 3 bits identify Cache Operation
-    if(CacheID > 1)
-      {
-        warn("CacheOps not implemented for secondary/tertiary caches\n");
-      }
-    else
-      {
-        switch(CacheOP)
-          { // Fill Packet Type
-          case 0: warn("Invalidate Cache Op\n");
-            break;
-          case 1: warn("Index Load Tag Cache Op\n");
-            break;
-          case 2: warn("Index Store Tag Cache Op\n");
-            break;
-          case 4: warn("Hit Invalidate Cache Op\n");
-            break;
-          case 5: warn("Fill/Hit Writeback Invalidate Cache Op\n");
-            break;
-          case 6: warn("Hit Writeback\n");
-            break;
-          case 7: warn("Fetch & Lock Cache Op\n");
-            break;
-          default: warn("Unimplemented Cache Op\n");
-          }
-      }
-    return fault;
-}*/
+    BaseCPU::startup();
+    thread->startup();
+}

@@ -34,6 +34,7 @@ from MemoryControl import MemoryControl
 class RubyMemoryControl(MemoryControl):
     type = 'RubyMemoryControl'
     cxx_class = 'RubyMemoryControl'
+    cxx_header = "mem/ruby/system/RubyMemoryControl.hh"
     version = Param.Int("");
 
     # Override the default clock
@@ -49,8 +50,8 @@ class RubyMemoryControl(MemoryControl):
     rank_rank_delay = Param.Int(1, "");
     read_write_delay = Param.Int(2, "");
     basic_bus_busy_time = Param.Int(2, "");
-    mem_ctl_latency = Param.Int(12, "");
-    refresh_period = Param.Int(1560, "");
+    mem_ctl_latency = Param.Cycles(12, "");
+    refresh_period = Param.Cycles(1560, "");
     tFaw = Param.Int(0, "");
     mem_random_arbitrate = Param.Int(0, "");
-    mem_fixed_delay = Param.Int(0, "");
+    mem_fixed_delay = Param.Cycles(0, "");

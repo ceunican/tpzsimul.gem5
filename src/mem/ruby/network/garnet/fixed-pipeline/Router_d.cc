@@ -135,13 +135,13 @@ Router_d::route_req(flit_d *t_flit, InputUnit_d *in_unit, int invc)
 void
 Router_d::vcarb_req()
 {
-    m_vc_alloc->scheduleEvent(1);
+    m_vc_alloc->scheduleEventAbsolute(clockEdge(Cycles(1)));
 }
 
 void
 Router_d::swarb_req()
 {
-    m_sw_alloc->scheduleEvent(1);
+    m_sw_alloc->scheduleEventAbsolute(clockEdge(Cycles(1)));
 }
 
 void
@@ -154,7 +154,7 @@ void
 Router_d::update_sw_winner(int inport, flit_d *t_flit)
 {
     m_switch->update_sw_winner(inport, t_flit);
-    m_switch->scheduleEvent(1);
+    m_switch->scheduleEventAbsolute(clockEdge(Cycles(1)));
 }
 
 void
@@ -202,6 +202,23 @@ Router_d::printAggregateFaultProbability(std::ostream& out)
                                     &aggregate_fault_prob);
     out << "Router-" << m_id << " fault probability: ";
     out << aggregate_fault_prob << endl;
+}
+
+uint32_t
+Router_d::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+    num_functional_writes += m_switch->functionalWrite(pkt);
+
+    for (uint32_t i = 0; i < m_input_unit.size(); i++) {
+        num_functional_writes += m_input_unit[i]->functionalWrite(pkt);
+    }
+
+    for (uint32_t i = 0; i < m_output_unit.size(); i++) {
+        num_functional_writes += m_output_unit[i]->functionalWrite(pkt);
+    }
+
+    return num_functional_writes;
 }
 
 Router_d *

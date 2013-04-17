@@ -41,10 +41,9 @@ using namespace std;
 using m5::stl_helpers::deletePointers;
 using m5::stl_helpers::operator<<;
 
-TopazSwitch::TopazSwitch(SwitchID sid, TopazNetwork* network_ptr)
+TopazSwitch::TopazSwitch(const Params *p) : BasicRouter(p)
 {
-    m_perfect_switch_ptr = new TopazSwitchFlow(sid, network_ptr);
-    m_switch_id = sid;
+    m_perfect_switch_ptr = new TopazSwitchFlow(m_id, this, p->virt_nets);
 }
 
 TopazSwitch::~TopazSwitch()
@@ -59,69 +58,54 @@ TopazSwitch::~TopazSwitch()
 }
 
 void
+TopazSwitch::init()
+{
+    BasicRouter::init();
+    m_perfect_switch_ptr->init(m_network_ptr);
+}
+
+void
 TopazSwitch::addInPort(const vector<MessageBuffer*>& in)
 {
     m_perfect_switch_ptr->addInPort(in);
+
+    for (int i = 0; i < in.size(); i++) {
+        in[i]->setReceiver(this);
+    }
 }
 
 void
 TopazSwitch::addOutPort(const vector<MessageBuffer*>& out,
-    const NetDest& routing_table_entry, int link_latency, int bw_multiplier)
+    const NetDest& routing_table_entry, Cycles link_latency, int bw_multiplier)
 {
-    Throttle* throttle_ptr = NULL;
-    TopazNetwork* net_ptr =
-        safe_cast<TopazNetwork*>(RubySystem::getNetwork());
-
     // Create a throttle
-    throttle_ptr = new Throttle(m_switch_id, m_throttles.size(), link_latency,
-                                bw_multiplier, net_ptr->getEndpointBandwidth());
+    Throttle* throttle_ptr = new Throttle(m_id, m_throttles.size(),
+            link_latency, bw_multiplier, m_network_ptr->getEndpointBandwidth(),
+            this);
     m_throttles.push_back(throttle_ptr);
 
     // Create one buffer per vnet (these are intermediaryQueues)
     vector<MessageBuffer*> intermediateBuffers;
     for (int i = 0; i < out.size(); i++) {
+        out[i]->setSender(this);
+
         MessageBuffer* buffer_ptr = new MessageBuffer;
         // Make these queues ordered
         buffer_ptr->setOrdering(true);
-        if (net_ptr->getBufferSize() > 0) {
-            buffer_ptr->resize(net_ptr->getBufferSize());
+        if (m_network_ptr->getBufferSize() > 0) {
+            buffer_ptr->resize(m_network_ptr->getBufferSize());
         }
+
         intermediateBuffers.push_back(buffer_ptr);
         m_buffers_to_free.push_back(buffer_ptr);
-  }
+
+        buffer_ptr->setSender(this);
+        buffer_ptr->setReceiver(this);
+    }
 
     // Hook the queues to the PerfectSwitch
     m_perfect_switch_ptr->addOutPort(intermediateBuffers, routing_table_entry);
 
-    // Hook the queues to the Throttle
-    throttle_ptr->addLinks(intermediateBuffers, out);
-}
-
-void TopazSwitch::addOutNetPort(const vector<MessageBuffer*>& out,
-                                const NetDest& routing_table_entry,
-                                int link_latency,
-                                int bw_multiplier)
-{
-    Throttle* throttle_ptr = NULL;
-    //
-    // Create a throttle
-    throttle_ptr = new Throttle(m_switch_id,
-                                m_throttles.size(),
-                                link_latency,
-                                bw_multiplier);
-    m_throttles.push_back(throttle_ptr);
-    //
-    // Create one buffer per vnet (these are intermediaryQueues)
-    vector<MessageBuffer*> intermediateBuffers;
-    for (int i=0; i<out.size(); i++) {
-        MessageBuffer* buffer_ptr = new MessageBuffer;
-        // Make these queues ordered
-        buffer_ptr->setOrdering(false);
-        intermediateBuffers.push_back(buffer_ptr);
-        m_buffers_to_free.push_back(buffer_ptr);
-    }
-    // Hook the queues to the PerfectSwitch
-    m_perfect_switch_ptr->addOutNetPort(intermediateBuffers, routing_table_entry);
     // Hook the queues to the Throttle
     throttle_ptr->addLinks(intermediateBuffers, out);
 }
@@ -165,9 +149,9 @@ TopazSwitch::getThrottles() const
 void
 TopazSwitch::printStats(std::ostream& out) const
 {
-    ccprintf(out, "switch_%d_inlinks: %d\n", m_switch_id,
+    ccprintf(out, "switch_%d_inlinks: %d\n", m_id,
         m_perfect_switch_ptr->getInLinks());
-    ccprintf(out, "switch_%d_outlinks: %d\n", m_switch_id,
+    ccprintf(out, "switch_%d_outlinks: %d\n", m_id,
         m_perfect_switch_ptr->getOutLinks());
 
     // Average link utilizations
@@ -185,13 +169,13 @@ TopazSwitch::printStats(std::ostream& out) const
         throttle_count == 0 ? 0 : average_utilization / throttle_count;
 
     // Individual link utilizations
-    out << "links_utilized_percent_switch_" << m_switch_id << ": "
+    out << "links_utilized_percent_switch_" << m_id << ": "
         << average_utilization << endl;
 
     for (int link = 0; link < m_throttles.size(); link++) {
         Throttle* throttle_ptr = m_throttles[link];
         if (throttle_ptr != NULL) {
-            out << "  links_utilized_percent_switch_" << m_switch_id
+            out << "  links_utilized_percent_switch_" << m_id
                 << "_link_" << link << ": "
                 << throttle_ptr->getUtilization() << " bw: "
                 << throttle_ptr->getLinkBandwidth()
@@ -215,9 +199,9 @@ TopazSwitch::printStats(std::ostream& out) const
             if (sum == 0)
                 continue;
 
-            out << "  outgoing_messages_switch_" << m_switch_id
+            out << "  outgoing_messages_switch_" << m_id
                 << "_link_" << link << "_" << type << ": " << sum << " "
-                << sum * RubySystem::getNetwork()->MessageSizeType_to_int(type)
+                << sum * m_network_ptr->MessageSizeType_to_int(type)
                 << " ";
             out << mct;
             out << " base_latency: "
@@ -237,14 +221,43 @@ TopazSwitch::clearStats()
     }
 }
 
-void
-TopazSwitch::printConfig(std::ostream& out) const
-{
-}
+//void
+//TopazSwitch::printConfig(std::ostream& out) const
+//{
+//}
 
 void
 TopazSwitch::print(std::ostream& out) const
 {
     out << "[Switch]";
+}
+
+bool
+TopazSwitch::functionalRead(Packet *pkt)
+{
+    // Access the buffers in the switch for performing a functional read
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        if (m_buffers_to_free[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t
+TopazSwitch::functionalWrite(Packet *pkt)
+{
+    // Access the buffers in the switch for performing a functional write
+    uint32_t num_functional_writes = 0;
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        num_functional_writes += m_buffers_to_free[i]->functionalWrite(pkt);
+    }
+    return num_functional_writes;
+}
+
+TopazSwitch *
+TopazSwitchParams::create()
+{
+    return new TopazSwitch(this);
 }
 

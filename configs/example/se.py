@@ -86,7 +86,7 @@ def get_processes(options):
         process.executable = wrkld
 
         if len(pargs) > idx:
-            process.cmd = [wrkld] + [" "] + [pargs[idx]]
+            process.cmd = [wrkld] + pargs[idx].split()
         else:
             process.cmd = [wrkld]
 
@@ -160,8 +160,11 @@ system = System(cpu = [CPUClass(cpu_id=i) for i in xrange(np)],
                 membus = CoherentBus(), mem_mode = test_mem_mode)
 
 # Sanity check
-if options.fastmem and (options.caches or options.l2cache):
-    fatal("You cannot use fastmem in combination with caches!")
+if options.fastmem:
+    if CPUClass != AtomicSimpleCPU:
+        fatal("Fastmem can only be used with atomic CPU!")
+    if (options.caches or options.l2cache):
+        fatal("You cannot use fastmem in combination with caches!")
 
 for i in xrange(np):
     if options.smt:
@@ -177,10 +180,15 @@ for i in xrange(np):
     if options.checker:
         system.cpu[i].addCheckerCpu()
 
+    system.cpu[i].createThreads()
+
 if options.ruby:
     if not (options.cpu_type == "detailed" or options.cpu_type == "timing"):
         print >> sys.stderr, "Ruby requires TimingSimpleCPU or O3CPU!!"
         sys.exit(1)
+
+    # Set the option for physmem so that it is not allocated any space
+    system.physmem.null = True
 
     options.use_map = True
     Ruby.create_system(options, system)
@@ -190,14 +198,19 @@ if options.ruby:
         ruby_port = system.ruby._cpu_ruby_ports[i]
 
         # Create the interrupt controller and connect its ports to Ruby
+        # Note that the interrupt controller is always present but only
+        # in x86 does it have message ports that need to be connected
         system.cpu[i].createInterruptController()
-        system.cpu[i].interrupts.pio = ruby_port.master
-        system.cpu[i].interrupts.int_master = ruby_port.slave
-        system.cpu[i].interrupts.int_slave = ruby_port.master
 
         # Connect the cpu's cache ports to Ruby
         system.cpu[i].icache_port = ruby_port.slave
         system.cpu[i].dcache_port = ruby_port.slave
+        if buildEnv['TARGET_ISA'] == 'x86':
+            system.cpu[i].interrupts.pio = ruby_port.master
+            system.cpu[i].interrupts.int_master = ruby_port.slave
+            system.cpu[i].interrupts.int_slave = ruby_port.master
+            system.cpu[i].itb.walker.port = ruby_port.slave
+            system.cpu[i].dtb.walker.port = ruby_port.slave
 else:
     system.system_port = system.membus.slave
     system.physmem.port = system.membus.master

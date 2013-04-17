@@ -1,4 +1,4 @@
-# Copyright (c) 2012 ARM Limited
+# Copyright (c) 2012-2013 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -549,87 +549,82 @@ class Addr(CheckedInt):
         else:
             return self.value + other
 
+class AddrRange(ParamValue):
+    cxx_type = 'AddrRange'
 
-class MetaRange(MetaParamValue):
-    def __init__(cls, name, bases, dict):
-        super(MetaRange, cls).__init__(name, bases, dict)
-        if name == 'Range':
-            return
-        cls.cxx_type = 'Range< %s >' % cls.type.cxx_type
-
-class Range(ParamValue):
-    __metaclass__ = MetaRange
-    type = Int # default; can be overridden in subclasses
     def __init__(self, *args, **kwargs):
+        # Disable interleaving by default
+        self.intlvHighBit = 0
+        self.intlvBits = 0
+        self.intlvMatch = 0
+
         def handle_kwargs(self, kwargs):
+            # An address range needs to have an upper limit, specified
+            # either explicitly with an end, or as an offset using the
+            # size keyword.
             if 'end' in kwargs:
-                self.second = self.type(kwargs.pop('end'))
+                self.end = Addr(kwargs.pop('end'))
             elif 'size' in kwargs:
-                self.second = self.first + self.type(kwargs.pop('size')) - 1
+                self.end = self.start + Addr(kwargs.pop('size')) - 1
             else:
                 raise TypeError, "Either end or size must be specified"
 
+            # Now on to the optional bit
+            if 'intlvHighBit' in kwargs:
+                self.intlvHighBit = int(kwargs.pop('intlvHighBit'))
+            if 'intlvBits' in kwargs:
+                self.intlvBits = int(kwargs.pop('intlvBits'))
+            if 'intlvMatch' in kwargs:
+                self.intlvMatch = int(kwargs.pop('intlvMatch'))
+
         if len(args) == 0:
-            self.first = self.type(kwargs.pop('start'))
+            self.start = Addr(kwargs.pop('start'))
             handle_kwargs(self, kwargs)
 
         elif len(args) == 1:
             if kwargs:
-                self.first = self.type(args[0])
+                self.start = Addr(args[0])
                 handle_kwargs(self, kwargs)
-            elif isinstance(args[0], Range):
-                self.first = self.type(args[0].first)
-                self.second = self.type(args[0].second)
             elif isinstance(args[0], (list, tuple)):
-                self.first = self.type(args[0][0])
-                self.second = self.type(args[0][1])
+                self.start = Addr(args[0][0])
+                self.end = Addr(args[0][1])
             else:
-                self.first = self.type(0)
-                self.second = self.type(args[0]) - 1
+                self.start = Addr(0)
+                self.end = Addr(args[0]) - 1
 
         elif len(args) == 2:
-            self.first = self.type(args[0])
-            self.second = self.type(args[1])
+            self.start = Addr(args[0])
+            self.end = Addr(args[1])
         else:
             raise TypeError, "Too many arguments specified"
 
         if kwargs:
-            raise TypeError, "too many keywords: %s" % kwargs.keys()
+            raise TypeError, "Too many keywords: %s" % kwargs.keys()
 
     def __str__(self):
-        return '%s:%s' % (self.first, self.second)
+        return '%s:%s' % (self.start, self.end)
+
+    def size(self):
+        # Divide the size by the size of the interleaving slice
+        return (long(self.end) - long(self.start) + 1) >> self.intlvBits
 
     @classmethod
     def cxx_predecls(cls, code):
-        cls.type.cxx_predecls(code)
-        code('#include "base/range.hh"')
+        Addr.cxx_predecls(code)
+        code('#include "base/addr_range.hh"')
 
     @classmethod
     def swig_predecls(cls, code):
-        cls.type.swig_predecls(code)
-        code('%import "python/swig/range.i"')
-
-class AddrRange(Range):
-    type = Addr
+        Addr.swig_predecls(code)
 
     def getValue(self):
+        # Go from the Python class to the wrapped C++ class generated
+        # by swig
         from m5.internal.range import AddrRange
 
-        value = AddrRange()
-        value.start = long(self.first)
-        value.end = long(self.second)
-        return value
-
-class TickRange(Range):
-    type = Tick
-
-    def getValue(self):
-        from m5.internal.range import TickRange
-
-        value = TickRange()
-        value.start = long(self.first)
-        value.end = long(self.second)
-        return value
+        return AddrRange(long(self.start), long(self.end),
+                         int(self.intlvHighBit), int(self.intlvBits),
+                         int(self.intlvMatch))
 
 # Boolean parameter type.  Python doesn't let you subclass bool, since
 # it doesn't want to let you create multiple instances of True and
@@ -1212,9 +1207,10 @@ class Frequency(TickParamValue):
     def ini_str(self):
         return '%d' % self.getValue()
 
-# A generic frequency and/or Latency value.  Value is stored as a latency,
-# but to avoid ambiguity this object does not support numeric ops (* or /).
-# An explicit conversion to a Latency or Frequency must be made first.
+# A generic frequency and/or Latency value. Value is stored as a
+# latency, and any manipulation using a multiplier thus scales the
+# clock period, i.e. a 2x multiplier doubles the clock period and thus
+# halves the clock frequency.
 class Clock(ParamValue):
     cxx_type = 'Tick'
 
@@ -1247,6 +1243,14 @@ class Clock(ParamValue):
         if attr in ('latency', 'period'):
             return Latency(self)
         raise AttributeError, "Frequency object has no attribute '%s'" % attr
+
+    def __mul__(self, other):
+        # Always treat the clock as a period when scaling
+        newobj = self.__class__(self)
+        newobj.value *= other
+        return newobj
+
+    __rmul__ = __mul__
 
     def getValue(self):
         return self.period.getValue()
@@ -1643,7 +1647,7 @@ __all__ = ['Param', 'VectorParam',
            'MemorySize', 'MemorySize32',
            'Latency', 'Frequency', 'Clock',
            'NetworkBandwidth', 'MemoryBandwidth',
-           'Range', 'AddrRange', 'TickRange',
+           'AddrRange',
            'MaxAddr', 'MaxTick', 'AllMemory',
            'Time',
            'NextEthernetAddr', 'NULL',

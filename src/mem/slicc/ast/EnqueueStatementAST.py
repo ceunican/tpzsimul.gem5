@@ -53,7 +53,8 @@ class EnqueueStatementAST(StatementAST):
         self.symtab.newSymbol(v)
 
         # Declare message
-        code("${{msg_type.ident}} *out_msg = new ${{msg_type.ident}};")
+        code("${{msg_type.ident}} *out_msg = "\
+             "new ${{msg_type.ident}}(clockEdge());")
 
         # The other statements
         t = self.statements.generate(code, None)
@@ -66,7 +67,7 @@ class EnqueueStatementAST(StatementAST):
             try:
                 # see if this is an integer
                 latency = int(latency)
-                args.append("%s" % latency)
+                args.append("Cycles(%s)" % latency)
             except ValueError:
                 # if not, it should be a member
                 args.append("m_%s" % latency)

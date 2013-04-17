@@ -34,8 +34,9 @@ from Controller import RubyController
 class RubyCache(SimObject):
     type = 'RubyCache'
     cxx_class = 'CacheMemory'
+    cxx_header = "mem/ruby/system/CacheMemory.hh"
     size = Param.MemorySize("capacity in bytes");
-    latency = Param.Int("");
+    latency = Param.Cycles("");
     assoc = Param.Int("");
     replacement_policy = Param.String("PSEUDO_LRU", "");
     start_index_bit = Param.Int(6, "index start, default 6 for 64-byte line");

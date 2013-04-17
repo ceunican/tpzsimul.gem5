@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -329,26 +329,46 @@ class Packet : public Printable
     uint16_t bytesValidEnd;
 
   public:
-    /// Used to calculate latencies for each packet.
-    Tick time;
 
-    /// The time at which the packet will be fully transmitted
-    Tick finishTime;
+    /**
+     * The extra delay from seeing the packet until the first word is
+     * transmitted by the bus that provided it (if any). This delay is
+     * used to communicate the bus waiting time to the neighbouring
+     * object (e.g. a cache) that actually makes the packet wait. As
+     * the delay is relative, a 32-bit unsigned should be sufficient.
+     */
+    uint32_t busFirstWordDelay;
 
-    /// The time at which the first chunk of the packet will be transmitted
-    Tick firstWordTime;
+    /**
+     * The extra delay from seeing the packet until the last word is
+     * transmitted by the bus that provided it (if any). Similar to
+     * the first word time, this is used to make up for the fact that
+     * the bus does not make the packet wait. As the delay is relative,
+     * a 32-bit unsigned should be sufficient.
+     */
+    uint32_t busLastWordDelay;
 
     /**
      * A virtual base opaque structure used to hold state associated
-     * with the packet but specific to the sending device (e.g., an
-     * MSHR).  A pointer to this state is returned in the packet's
-     * response so that the sender can quickly look up the state
-     * needed to process it.  A specific subclass would be derived
-     * from this to carry state specific to a particular sending
-     * device.
+     * with the packet (e.g., an MSHR), specific to a MemObject that
+     * sees the packet. A pointer to this state is returned in the
+     * packet's response so that the MemObject in question can quickly
+     * look up the state needed to process it. A specific subclass
+     * would be derived from this to carry state specific to a
+     * particular sending device.
+     *
+     * As multiple MemObjects may add their SenderState throughout the
+     * memory system, the SenderStates create a stack, where a
+     * MemObject can add a new Senderstate, as long as the
+     * predecessing SenderState is restored when the response comes
+     * back. For this reason, the predecessor should always be
+     * populated with the current SenderState of a packet before
+     * modifying the senderState field in the request packet.
      */
     struct SenderState
     {
+        SenderState* predecessor;
+        SenderState() : predecessor(NULL) {}
         virtual ~SenderState() {}
     };
 
@@ -418,11 +438,50 @@ class Packet : public Printable
      * This packet's sender state.  Devices should use dynamic_cast<>
      * to cast to the state appropriate to the sender.  The intent of
      * this variable is to allow a device to attach extra information
-     * to a request.  A response packet must return the sender state
+     * to a request. A response packet must return the sender state
      * that was attached to the original request (even if a new packet
      * is created).
      */
     SenderState *senderState;
+
+    /**
+     * Push a new sender state to the packet and make the current
+     * sender state the predecessor of the new one. This should be
+     * prefered over direct manipulation of the senderState member
+     * variable.
+     *
+     * @param sender_state SenderState to push at the top of the stack
+     */
+    void pushSenderState(SenderState *sender_state);
+
+    /**
+     * Pop the top of the state stack and return a pointer to it. This
+     * assumes the current sender state is not NULL. This should be
+     * preferred over direct manipulation of the senderState member
+     * variable.
+     *
+     * @return The current top of the stack
+     */
+    SenderState *popSenderState();
+
+    /**
+     * Go through the sender state stack and return the first instance
+     * that is of type T (as determined by a dynamic_cast). If there
+     * is no sender state of type T, NULL is returned.
+     *
+     * @return The topmost state of type T
+     */
+    template <typename T>
+    T * findNextSenderState() const
+    {
+        T *t = NULL;
+        SenderState* sender_state = senderState;
+        while (t == NULL && sender_state != NULL) {
+            t = dynamic_cast<T*>(sender_state);
+            sender_state = sender_state->predecessor;
+        }
+        return t;
+    }
 
     /// Return the string name of the cmd field (for debugging and
     /// tracing).
@@ -491,6 +550,15 @@ class Packet : public Printable
     void clearDest() { dest = InvalidPortID; }
 
     Addr getAddr() const { assert(flags.isSet(VALID_ADDR)); return addr; }
+    /**
+     * Update the address of this packet mid-transaction. This is used
+     * by the address mapper to change an already set address to a new
+     * one based on the system configuration. It is intended to remap
+     * an existing address, so it asserts that the current address is
+     * valid.
+     */
+    void setAddr(Addr _addr) { assert(flags.isSet(VALID_ADDR)); addr = _addr; }
+
     unsigned getSize() const  { assert(flags.isSet(VALID_SIZE)); return size; }
     Addr getOffset(int blkSize) const { return getAddr() & (Addr)(blkSize - 1); }
 
@@ -527,7 +595,8 @@ class Packet : public Printable
         :  cmd(_cmd), req(_req), data(NULL),
            src(InvalidPortID), dest(InvalidPortID),
            bytesValidStart(0), bytesValidEnd(0),
-           time(curTick()), senderState(NULL)
+           busFirstWordDelay(0), busLastWordDelay(0),
+           senderState(NULL)
     {
         if (req->hasPaddr()) {
             addr = req->getPaddr();
@@ -548,7 +617,8 @@ class Packet : public Printable
         :  cmd(_cmd), req(_req), data(NULL),
            src(InvalidPortID), dest(InvalidPortID),
            bytesValidStart(0), bytesValidEnd(0),
-           time(curTick()), senderState(NULL)
+           busFirstWordDelay(0), busLastWordDelay(0),
+           senderState(NULL)
     {
         if (req->hasPaddr()) {
             addr = req->getPaddr() & ~(_blkSize - 1);
@@ -569,8 +639,11 @@ class Packet : public Printable
         :  cmd(pkt->cmd), req(pkt->req),
            data(pkt->flags.isSet(STATIC_DATA) ? pkt->data : NULL),
            addr(pkt->addr), size(pkt->size), src(pkt->src), dest(pkt->dest),
-           bytesValidStart(pkt->bytesValidStart), bytesValidEnd(pkt->bytesValidEnd),
-           time(curTick()), senderState(pkt->senderState)
+           bytesValidStart(pkt->bytesValidStart),
+           bytesValidEnd(pkt->bytesValidEnd),
+           busFirstWordDelay(pkt->busFirstWordDelay),
+           busLastWordDelay(pkt->busLastWordDelay),
+           senderState(pkt->senderState)
     {
         if (!clearFlags)
             flags.set(pkt->flags & COPY_FLAGS);
@@ -607,7 +680,13 @@ class Packet : public Printable
         flags = 0;
         addr = req->getPaddr();
         size = req->getSize();
-        time = req->time();
+
+        src = InvalidPortID;
+        dest = InvalidPortID;
+        bytesValidStart = 0;
+        bytesValidEnd = 0;
+        busFirstWordDelay = 0;
+        busLastWordDelay = 0;
 
         flags.set(VALID_ADDR|VALID_SIZE);
         deleteData();

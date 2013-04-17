@@ -47,14 +47,16 @@
 #include "arch/arm/tlb.hh"
 #include "arch/arm/types.hh"
 #include "debug/Checkpoint.hh"
+#include "sim/sim_object.hh"
 
+struct ArmISAParams;
 class ThreadContext;
 class Checkpoint;
 class EventManager;
 
 namespace ArmISA
 {
-    class ISA
+    class ISA : public SimObject
     {
       protected:
         MiscReg miscRegs[NumMiscRegs];
@@ -178,13 +180,12 @@ namespace ArmISA
             return reg;
         }
 
-        void serialize(EventManager *em, std::ostream &os)
+        void serialize(std::ostream &os)
         {
             DPRINTF(Checkpoint, "Serializing Arm Misc Registers\n");
             SERIALIZE_ARRAY(miscRegs, NumMiscRegs);
         }
-        void unserialize(EventManager *em, Checkpoint *cp,
-                const std::string &section)
+        void unserialize(Checkpoint *cp, const std::string &section)
         {
             DPRINTF(Checkpoint, "Unserializing Arm Misc Registers\n");
             UNSERIALIZE_ARRAY(miscRegs, NumMiscRegs);
@@ -192,14 +193,16 @@ namespace ArmISA
             updateRegMap(tmp_cpsr);
         }
 
-        ISA()
-        {
-            SCTLR sctlr;
-            sctlr = 0;
-            miscRegs[MISCREG_SCTLR_RST] = sctlr;
+        void startup(ThreadContext *tc) {}
 
-            clear();
-        }
+        /// Explicitly import the otherwise hidden startup
+        using SimObject::startup;
+
+        typedef ArmISAParams Params;
+
+        const Params *params() const;
+
+        ISA(Params *p);
     };
 }
 

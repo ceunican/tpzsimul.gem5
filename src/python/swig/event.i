@@ -33,11 +33,13 @@
 %{
 #include "base/types.hh"
 #include "python/swig/pyevent.hh"
-#include "sim/eventq.hh"
+#include "sim/eventq_impl.hh"
 #include "sim/sim_events.hh"
 #include "sim/sim_exit.hh"
 #include "sim/simulate.hh"
 %}
+
+%import "python/swig/serialize.i"
 
 #pragma SWIG nowarn=350,351
 
@@ -73,18 +75,11 @@
 %include <std_string.i>
 %include <stdint.i>
 
-%import "sim/serialize.hh"
-
 %include "base/types.hh"
 %include "sim/eventq.hh"
 
 // This must follow eventq.hh
 %include "python/swig/pyevent.hh"
-
-struct CountedDrainEvent : public Event
-{
-    void setCount(int _count);
-};
 
 // minimal definition of SimExitEvent interface to wrap
 class SimLoopExitEvent : public Event

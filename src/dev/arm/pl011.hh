@@ -48,12 +48,13 @@
 #ifndef __DEV_ARM_PL011_H__
 #define __DEV_ARM_PL011_H__
 
-#include "base/range.hh"
+#include "base/bitfield.hh"
+#include "base/bitunion.hh"
 #include "dev/io_device.hh"
 #include "dev/uart.hh"
 #include "params/Pl011.hh"
 
-class Gic;
+class BaseGic;
 
 class Pl011 : public Uart
 {
@@ -120,7 +121,7 @@ class Pl011 : public Uart
     int intNum;
 
     /** Gic to use for interrupting */
-    Gic *gic;
+    BaseGic *gic;
 
     /** Should the simulation end on an EOT */
     bool endOnEOT;

@@ -122,7 +122,7 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
         if options.recycle_latency:
             l1_cntrl.recycle_latency = options.recycle_latency
 
-        exec("system.l1_cntrl%d = l1_cntrl" % i)
+        exec("ruby_system.l1_cntrl%d = l1_cntrl" % i)
         #
         # Add controllers and sequencers to the appropriate lists
         #
@@ -131,9 +131,8 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
 
         cntrl_count += 1
 
-    phys_mem_size = 0
-    for mem in system.memories.unproxy(system):
-        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
+    phys_mem_size = sum(map(lambda mem: mem.range.size(),
+                            system.memories.unproxy(system)))
     mem_module_size = phys_mem_size / options.num_dirs
 
     #
@@ -146,18 +145,18 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
     dir_bits = int(math.log(options.num_dirs, 2))
     pf_bits = int(math.log(pf_size.value, 2))
     if options.numa_high_bit:
-        if options.numa_high_bit > 0:
+        if options.pf_on or options.dir_on:
             # if numa high bit explicitly set, make sure it does not overlap
             # with the probe filter index
             assert(options.numa_high_bit - dir_bits > pf_bits)
 
         # set the probe filter start bit to just above the block offset
-        pf_start_bit = 6
+        pf_start_bit = block_size_bits
     else:
         if dir_bits > 0:
-            pf_start_bit = dir_bits + 5
+            pf_start_bit = dir_bits + block_size_bits - 1
         else:
-            pf_start_bit = 6
+            pf_start_bit = block_size_bits
 
     for i in xrange(options.num_dirs):
         #
@@ -193,7 +192,7 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
         if options.recycle_latency:
             dir_cntrl.recycle_latency = options.recycle_latency
 
-        exec("system.dir_cntrl%d = dir_cntrl" % i)
+        exec("ruby_system.dir_cntrl%d = dir_cntrl" % i)
         dir_cntrl_nodes.append(dir_cntrl)
 
         cntrl_count += 1
@@ -210,8 +209,8 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
                                    dma_sequencer = dma_seq,
                                    ruby_system = ruby_system)
 
-        exec("system.dma_cntrl%d = dma_cntrl" % i)
-        exec("system.dma_cntrl%d.dma_sequencer.slave = dma_port" % i)
+        exec("ruby_system.dma_cntrl%d = dma_cntrl" % i)
+        exec("ruby_system.dma_cntrl%d.dma_sequencer.slave = dma_port" % i)
         dma_cntrl_nodes.append(dma_cntrl)
 
         if options.recycle_latency:

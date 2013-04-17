@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2005-2007 The Regents of The University of Michigan
 # All rights reserved.
 #
@@ -34,24 +46,20 @@ from Prefetcher import BasePrefetcher
 
 class BaseCache(MemObject):
     type = 'BaseCache'
+    cxx_header = "mem/cache/base.hh"
     assoc = Param.Int("associativity")
     block_size = Param.Int("block size in bytes")
-    latency = Param.Latency("Latency")
-    hash_delay = Param.Cycles(1, "time in cycles of hash access")
+    hit_latency = Param.Cycles("The hit latency for this cache")
+    response_latency = Param.Cycles(
+            "Additional cache latency for the return path to core on a miss");
     max_miss_count = Param.Counter(0,
         "number of misses to handle before calling exit")
     mshrs = Param.Int("number of MSHRs (max outstanding requests)")
-    prioritizeRequests = Param.Bool(False,
-        "always service demand misses first")
-    repl = Param.Repl(NULL, "replacement policy")
     size = Param.MemorySize("capacity in bytes")
     forward_snoops = Param.Bool(True,
         "forward snoops from mem side to cpu side")
     is_top_level = Param.Bool(False, "Is this cache at the top level (e.g. L1)")
-    subblock_size = Param.Int(0,
-        "Size of subblock in IIC used for compression")
     tgts_per_mshr = Param.Int("max number of accesses per MSHR")
-    trace_addr = Param.Addr(0, "address to trace")
     two_queue = Param.Bool(False,
         "whether the lifo should have two queue replacement")
     write_buffers = Param.Int(8, "number of write buffers")

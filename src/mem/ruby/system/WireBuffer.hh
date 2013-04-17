@@ -37,7 +37,7 @@
 #include <vector>
 
 #include "mem/ruby/buffers/MessageBufferNode.hh"
-#include "mem/ruby/common/Global.hh"
+#include "mem/ruby/common/Consumer.hh"
 #include "params/RubyWireBuffer.hh"
 #include "sim/sim_object.hh"
 
@@ -51,7 +51,6 @@
 // separated by a network in real systems to simplify coherence.
 /////////////////////////////////////////////////////////////////////////////
 
-class Consumer;
 class Message; 
 
 class WireBuffer : public SimObject
@@ -73,7 +72,7 @@ class WireBuffer : public SimObject
     void setDescription(const std::string& name) { m_description = name; };
     std::string getDescription() { return m_description; };
 
-    void enqueue(MsgPtr message, int latency );
+    void enqueue(MsgPtr message, Cycles latency);
     void dequeue();
     const Message* peek();
     MessageBufferNode peekNode();
@@ -100,5 +99,7 @@ class WireBuffer : public SimObject
     std::vector<MessageBufferNode> m_message_queue;
 
 };
+
+std::ostream& operator<<(std::ostream& out, const WireBuffer& obj);
 
 #endif // __MEM_RUBY_SYSTEM_WireBuffer_HH__

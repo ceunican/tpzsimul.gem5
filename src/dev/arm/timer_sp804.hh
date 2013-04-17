@@ -40,7 +40,6 @@
 #ifndef __DEV_ARM_SP804_HH__
 #define __DEV_ARM_SP804_HH__
 
-#include "base/range.hh"
 #include "dev/arm/amba_device.hh"
 #include "params/Sp804.hh"
 
@@ -48,7 +47,7 @@
  * This implements the dual Sp804 timer block
  */
 
-class Gic;
+class BaseGic;
 
 class Sp804 : public AmbaDevice
 {
@@ -84,10 +83,10 @@ class Sp804 : public AmbaDevice
         Sp804 *parent;
 
         /** Number of interrupt to cause/clear */
-        uint32_t intNum;
+        const uint32_t intNum;
 
         /** Number of ticks in a clock input */
-        Tick clock;
+        const Tick clock;
 
         /** Control register as specified above */
         CTRL control;
@@ -128,7 +127,7 @@ class Sp804 : public AmbaDevice
     };
 
     /** Pointer to the GIC for causing an interrupt */
-    Gic *gic;
+    BaseGic *gic;
 
     /** Timers that do the actual work */
     Timer timer0;

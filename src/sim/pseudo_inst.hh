@@ -38,13 +38,6 @@ class ThreadContext;
 
 namespace PseudoInst {
 
-/**
- * @todo these externs are only here for a hack in fullCPU::takeOver...
- */
-extern bool doStatisticsInsts;
-extern bool doCheckpointInsts;
-extern bool doQuiesce;
-
 void arm(ThreadContext *tc);
 void quiesce(ThreadContext *tc);
 void quiesceSkip(ThreadContext *tc);
@@ -61,6 +54,7 @@ uint64_t initParam(ThreadContext *xc);
 uint64_t rpns(ThreadContext *tc);
 void wakeCPU(ThreadContext *tc, uint64_t cpuid);
 void m5exit(ThreadContext *tc, Tick delay);
+void m5fail(ThreadContext *tc, Tick delay, uint64_t code);
 void resetstats(ThreadContext *tc, Tick delay, Tick period);
 void dumpstats(ThreadContext *tc, Tick delay, Tick period);
 void dumpresetstats(ThreadContext *tc, Tick delay, Tick period);

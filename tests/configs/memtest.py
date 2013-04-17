@@ -28,42 +28,22 @@
 
 import m5
 from m5.objects import *
-
-# --------------------
-# Base L1 Cache
-# ====================
-
-class L1(BaseCache):
-    latency = '1ns'
-    block_size = 64
-    mshrs = 12
-    tgts_per_mshr = 8
-    is_top_level = True
-
-# ----------------------
-# Base L2 Cache
-# ----------------------
-
-class L2(BaseCache):
-    block_size = 64
-    latency = '10ns'
-    mshrs = 92
-    tgts_per_mshr = 16
-    write_buffers = 8
+m5.util.addToPath('../configs/common')
+from Caches import *
 
 #MAX CORES IS 8 with the fals sharing method
 nb_cores = 8
-cpus = [ MemTest() for i in xrange(nb_cores) ]
+cpus = [ MemTest(clock = '2GHz') for i in xrange(nb_cores) ]
 
 # system simulated
 system = System(cpu = cpus, funcmem = SimpleMemory(in_addr_map = False),
                 funcbus = NoncoherentBus(),
                 physmem = SimpleMemory(),
-                membus = CoherentBus(clock="500GHz", width=16))
+                membus = CoherentBus(clock="1GHz", width=16))
 
 # l2cache & bus
-system.toL2Bus = CoherentBus(clock="500GHz", width=16)
-system.l2c = L2(size='64kB', assoc=8)
+system.toL2Bus = CoherentBus(clock="2GHz", width=16)
+system.l2c = L2Cache(clock = '2GHz', size='64kB', assoc=8)
 system.l2c.cpu_side = system.toL2Bus.master
 
 # connect l2c to membus
@@ -71,7 +51,7 @@ system.l2c.mem_side = system.membus.slave
 
 # add L1 caches
 for cpu in cpus:
-    cpu.l1c = L1(size = '32kB', assoc = 4)
+    cpu.l1c = L1Cache(size = '32kB', assoc = 4)
     cpu.l1c.cpu_side = cpu.test
     cpu.l1c.mem_side = system.toL2Bus.slave
     system.funcbus.slave = cpu.functional

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -42,6 +42,7 @@
  */
 
 #include <algorithm>
+#include <set>
 #include <string>
 
 #include "arch/utility.hh"
@@ -57,6 +58,7 @@
 #include "debug/Activity.hh"
 #include "debug/Commit.hh"
 #include "debug/CommitRate.hh"
+#include "debug/Drain.hh"
 #include "debug/ExecFaulting.hh"
 #include "debug/O3PipeView.hh"
 #include "params/DerivO3CPU.hh"
@@ -100,9 +102,9 @@ DefaultCommit<Impl>::DefaultCommit(O3CPU *_cpu, DerivO3CPUParams *params)
       commitWidth(params->commitWidth),
       numThreads(params->numThreads),
       drainPending(false),
-      switchedOut(false),
       trapLatency(params->trapLatency),
-      canHandleInterrupts(true)
+      canHandleInterrupts(true),
+      avoidQuiesceLiveLock(false)
 {
     _status = Active;
     _nextStatus = Inactive;
@@ -145,6 +147,7 @@ DefaultCommit<Impl>::DefaultCommit(O3CPU *_cpu, DerivO3CPUParams *params)
         tcSquash[tid] = false;
         pc[tid].set(0);
         lastCommitedSeqNum[tid] = 0;
+        squashAfterInst[tid] = NULL;
     }
     interrupt = NoFault;
 }
@@ -161,14 +164,6 @@ void
 DefaultCommit<Impl>::regStats()
 {
     using namespace Stats;
-    commitCommittedInsts
-        .name(name() + ".commitCommittedInsts")
-        .desc("The number of committed instructions")
-        .prereq(commitCommittedInsts);
-    commitCommittedOps
-        .name(name() + ".commitCommittedOps")
-        .desc("The number of committed instructions")
-        .prereq(commitCommittedInsts);
     commitSquashedInsts
         .name(name() + ".commitSquashedInsts")
         .desc("The number of squashed insts skipped by commit")
@@ -357,7 +352,7 @@ DefaultCommit<Impl>::setROB(ROB *rob_ptr)
 
 template <class Impl>
 void
-DefaultCommit<Impl>::initStage()
+DefaultCommit<Impl>::startupStage()
 {
     rob->setActiveThreads(activeThreads);
     rob->resetEntries();
@@ -377,35 +372,59 @@ DefaultCommit<Impl>::initStage()
 }
 
 template <class Impl>
-bool
+void
 DefaultCommit<Impl>::drain()
 {
     drainPending = true;
-
-    return false;
 }
 
 template <class Impl>
 void
-DefaultCommit<Impl>::switchOut()
+DefaultCommit<Impl>::drainResume()
 {
-    switchedOut = true;
     drainPending = false;
-    rob->switchOut();
 }
 
 template <class Impl>
 void
-DefaultCommit<Impl>::resume()
+DefaultCommit<Impl>::drainSanityCheck() const
 {
-    drainPending = false;
+    assert(isDrained());
+    rob->drainSanityCheck();
+}
+
+template <class Impl>
+bool
+DefaultCommit<Impl>::isDrained() const
+{
+    /* Make sure no one is executing microcode. There are two reasons
+     * for this:
+     * - Hardware virtualized CPUs can't switch into the middle of a
+     *   microcode sequence.
+     * - The current fetch implementation will most likely get very
+     *   confused if it tries to start fetching an instruction that
+     *   is executing in the middle of a ucode sequence that changes
+     *   address mappings. This can happen on for example x86.
+     */
+    for (ThreadID tid = 0; tid < numThreads; tid++) {
+        if (pc[tid].microPC() != 0)
+            return false;
+    }
+
+    /* Make sure that all instructions have finished committing before
+     * declaring the system as drained. We want the pipeline to be
+     * completely empty when we declare the CPU to be drained. This
+     * makes debugging easier since CPU handover and restoring from a
+     * checkpoint with a different CPU should have the same timing.
+     */
+    return rob->isEmpty() &&
+        interrupt == NoFault;
 }
 
 template <class Impl>
 void
 DefaultCommit<Impl>::takeOverFrom()
 {
-    switchedOut = false;
     _status = Active;
     _nextStatus = Inactive;
     for (ThreadID tid = 0; tid < numThreads; tid++) {
@@ -413,6 +432,7 @@ DefaultCommit<Impl>::takeOverFrom()
         changedROBNumEntries[tid] = false;
         trapSquash[tid] = false;
         tcSquash[tid] = false;
+        squashAfterInst[tid] = NULL;
     }
     squashCounter = 0;
     rob->takeOverFrom();
@@ -568,7 +588,7 @@ DefaultCommit<Impl>::squashFromTrap(ThreadID tid)
     DPRINTF(Commit, "Squashing from trap, restarting at PC %s\n", pc[tid]);
 
     thread[tid]->trapPending = false;
-    thread[tid]->inSyscall = false;
+    thread[tid]->noSquashFromTC = false;
     trapInFlight[tid] = false;
 
     trapSquash[tid] = false;
@@ -585,7 +605,7 @@ DefaultCommit<Impl>::squashFromTC(ThreadID tid)
 
     DPRINTF(Commit, "Squashing from TC, restarting at PC %s\n", pc[tid]);
 
-    thread[tid]->inSyscall = false;
+    thread[tid]->noSquashFromTC = false;
     assert(!thread[tid]->trapPending);
 
     commitStatus[tid] = ROBSquashing;
@@ -596,31 +616,32 @@ DefaultCommit<Impl>::squashFromTC(ThreadID tid)
 
 template <class Impl>
 void
-DefaultCommit<Impl>::squashAfter(ThreadID tid, DynInstPtr &head_inst,
-        uint64_t squash_after_seq_num)
+DefaultCommit<Impl>::squashFromSquashAfter(ThreadID tid)
 {
-    youngestSeqNum[tid] = squash_after_seq_num;
+    DPRINTF(Commit, "Squashing after squash after request, "
+            "restarting at PC %s\n", pc[tid]);
 
-    rob->squash(squash_after_seq_num, tid);
-    changedROBNumEntries[tid] = true;
+    squashAll(tid);
+    // Make sure to inform the fetch stage of which instruction caused
+    // the squash. It'll try to re-fetch an instruction executing in
+    // microcode unless this is set.
+    toIEW->commitInfo[tid].squashInst = squashAfterInst[tid];
+    squashAfterInst[tid] = NULL;
 
-    // Send back the sequence number of the squashed instruction.
-    toIEW->commitInfo[tid].doneSeqNum = squash_after_seq_num;
-
-    toIEW->commitInfo[tid].squashInst = head_inst;
-    // Send back the squash signal to tell stages that they should squash.
-    toIEW->commitInfo[tid].squash = true;
-
-    // Send back the rob squashing signal so other stages know that
-    // the ROB is in the process of squashing.
-    toIEW->commitInfo[tid].robSquashing = true;
-
-    toIEW->commitInfo[tid].mispredictInst = NULL;
-
-    toIEW->commitInfo[tid].pc = pc[tid];
-    DPRINTF(Commit, "Executing squash after for [tid:%i] inst [sn:%lli]\n",
-            tid, squash_after_seq_num);
     commitStatus[tid] = ROBSquashing;
+    cpu->activityThisCycle();
+}
+
+template <class Impl>
+void
+DefaultCommit<Impl>::squashAfter(ThreadID tid, DynInstPtr &head_inst)
+{
+    DPRINTF(Commit, "Executing squash after for [tid:%i] inst [sn:%lli]\n",
+            tid, head_inst->seqNum);
+
+    assert(!squashAfterInst[tid] || squashAfterInst[tid] == head_inst);
+    commitStatus[tid] = SquashAfterPending;
+    squashAfterInst[tid] = head_inst;
 }
 
 template <class Impl>
@@ -629,13 +650,6 @@ DefaultCommit<Impl>::tick()
 {
     wroteToTimeBuffer = false;
     _nextStatus = Inactive;
-
-    if (drainPending && cpu->instList.empty() && !iewStage->hasStoresToWB() &&
-        interrupt == NoFault) {
-        cpu->signalDrained();
-        drainPending = false;
-        return;
-    }
 
     if (activeThreads->empty())
         return;
@@ -717,6 +731,7 @@ DefaultCommit<Impl>::handleInterrupt()
                 "it got handled. Restart fetching from the orig path.\n");
         toIEW->commitInfo[0].clearInterrupt = true;
         interrupt = NoFault;
+        avoidQuiesceLiveLock = true;
         return;
     }
 
@@ -730,17 +745,19 @@ DefaultCommit<Impl>::handleInterrupt()
         // Clear the interrupt now that it's going to be handled
         toIEW->commitInfo[0].clearInterrupt = true;
 
-        assert(!thread[0]->inSyscall);
-        thread[0]->inSyscall = true;
+        assert(!thread[0]->noSquashFromTC);
+        thread[0]->noSquashFromTC = true;
 
         if (cpu->checker) {
             cpu->checker->handlePendingInt();
         }
 
-        // CPU will handle interrupt.
-        cpu->processInterrupts(interrupt);
+        // CPU will handle interrupt. Note that we ignore the local copy of
+        // interrupt. This is because the local copy may no longer be the
+        // interrupt that the interrupt controller thinks is being handled.
+        cpu->processInterrupts(cpu->getInterrupts());
 
-        thread[0]->inSyscall = false;
+        thread[0]->noSquashFromTC = false;
 
         commitStatus[0] = TrapPending;
 
@@ -748,6 +765,7 @@ DefaultCommit<Impl>::handleInterrupt()
         generateTrapEvent(0);
 
         interrupt = NoFault;
+        avoidQuiesceLiveLock = false;
     } else {
         DPRINTF(Commit, "Interrupt pending: instruction is %sin "
                 "flight, ROB is %sempty\n",
@@ -806,6 +824,11 @@ DefaultCommit<Impl>::commit()
         } else if (tcSquash[tid] == true) {
             assert(commitStatus[tid] != TrapPending);
             squashFromTC(tid);
+        } else if (commitStatus[tid] == SquashAfterPending) {
+            // A squash from the previous cycle of the commit stage (i.e.,
+            // commitInsts() called squashAfter) is pending. Squash the
+            // thread now.
+            squashFromSquashAfter(tid);
         }
 
         // Squashed sequence number must be older than youngest valid
@@ -998,16 +1021,6 @@ DefaultCommit<Impl>::commitInsts()
                 // Set the doneSeqNum to the youngest committed instruction.
                 toIEW->commitInfo[tid].doneSeqNum = head_inst->seqNum;
 
-                if (!head_inst->isMicroop() || head_inst->isLastMicroop())
-                    ++commitCommittedInsts;
-                ++commitCommittedOps;
-
-                // To match the old model, don't count nops and instruction
-                // prefetches towards the total commit count.
-                if (!head_inst->isNop() && !head_inst->isInstPrefetch()) {
-                    cpu->instDone(tid, head_inst);
-                }
-
                 if (tid == 0) {
                     canHandleInterrupts =  (!head_inst->isDelayedCommit()) &&
                                            ((THE_ISA != ALPHA_ISA) ||
@@ -1027,13 +1040,21 @@ DefaultCommit<Impl>::commitInsts()
                 // If this is an instruction that doesn't play nicely with
                 // others squash everything and restart fetch
                 if (head_inst->isSquashAfter())
-                    squashAfter(tid, head_inst, head_inst->seqNum);
+                    squashAfter(tid, head_inst);
+
+                if (drainPending) {
+                    DPRINTF(Drain, "Draining: %i:%s\n", tid, pc[tid]);
+                    if (pc[tid].microPC() == 0 && interrupt == NoFault) {
+                        squashAfter(tid, head_inst);
+                        cpu->commitDrained(tid);
+                    }
+                }
 
                 int count = 0;
                 Addr oldpc;
                 // Debug statement.  Checks to make sure we're not
                 // currently updating state while handling PC events.
-                assert(!thread[tid]->inSyscall && !thread[tid]->trapPending);
+                assert(!thread[tid]->noSquashFromTC && !thread[tid]->trapPending);
                 do {
                     oldpc = pc[tid].instAddr();
                     cpu->system->pcEventQueue.service(thread[tid]->getTC());
@@ -1044,6 +1065,18 @@ DefaultCommit<Impl>::commitInsts()
                             "PC skip function event, stopping commit\n");
                     break;
                 }
+
+                // Check if an instruction just enabled interrupts and we've
+                // previously had an interrupt pending that was not handled
+                // because interrupts were subsequently disabled before the
+                // pipeline reached a place to handle the interrupt. In that
+                // case squash now to make sure the interrupt is handled.
+                //
+                // If we don't do this, we might end up in a live lock situation
+                if (!interrupt  && avoidQuiesceLiveLock &&
+                   (!head_inst->isMicroop() || head_inst->isLastMicroop()) &&
+                   cpu->checkInterrupts(cpu->tcBase(0)))
+                    squashAfter(tid, head_inst);
             } else {
                 DPRINTF(Commit, "Unable to commit head instruction PC:%s "
                         "[tid:%i] [sn:%i].\n",
@@ -1159,11 +1192,11 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
             cpu->checker->verify(head_inst);
         }
 
-        assert(!thread[tid]->inSyscall);
+        assert(!thread[tid]->noSquashFromTC);
 
         // Mark that we're in state update mode so that the trap's
         // execution doesn't generate extra squashes.
-        thread[tid]->inSyscall = true;
+        thread[tid]->noSquashFromTC = true;
 
         // Execute the trap.  Although it's slightly unrealistic in
         // terms of timing (as it doesn't wait for the full timing of
@@ -1174,7 +1207,7 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
         cpu->trap(inst_fault, tid, head_inst->staticInst);
 
         // Exit state update mode to avoid accidental updating.
-        thread[tid]->inSyscall = false;
+        thread[tid]->noSquashFromTC = false;
 
         commitStatus[tid] = TrapPending;
 
@@ -1237,19 +1270,9 @@ DefaultCommit<Impl>::commitHead(DynInstPtr &head_inst, unsigned inst_num)
     rob->retireHead(tid);
 
 #if TRACING_ON
-    // Print info needed by the pipeline activity viewer.
-    DPRINTFR(O3PipeView, "O3PipeView:fetch:%llu:0x%08llx:%d:%llu:%s\n",
-             head_inst->fetchTick,
-             head_inst->instAddr(),
-             head_inst->microPC(),
-             head_inst->seqNum,
-             head_inst->staticInst->disassemble(head_inst->instAddr()));
-    DPRINTFR(O3PipeView, "O3PipeView:decode:%llu\n", head_inst->fetchTick + head_inst->decodeTick);
-    DPRINTFR(O3PipeView, "O3PipeView:rename:%llu\n", head_inst->fetchTick + head_inst->renameTick);
-    DPRINTFR(O3PipeView, "O3PipeView:dispatch:%llu\n", head_inst->fetchTick + head_inst->dispatchTick);
-    DPRINTFR(O3PipeView, "O3PipeView:issue:%llu\n", head_inst->fetchTick + head_inst->issueTick);
-    DPRINTFR(O3PipeView, "O3PipeView:complete:%llu\n", head_inst->fetchTick + head_inst->completeTick);
-    DPRINTFR(O3PipeView, "O3PipeView:retire:%llu\n", curTick());
+    if (DTRACE(O3PipeView)) {
+        head_inst->commitTick = curTick() - head_inst->fetchTick;
+    }
 #endif
 
     // If this was a store, record it for this cycle.
@@ -1368,6 +1391,12 @@ DefaultCommit<Impl>::updateComInstStats(DynInstPtr &inst)
     if (!inst->isMicroop() || inst->isLastMicroop())
         instsCommitted[tid]++;
     opsCommitted[tid]++;
+
+    // To match the old model, don't count nops and instruction
+    // prefetches towards the total commit count.
+    if (!inst->isNop() && !inst->isInstPrefetch()) {
+        cpu->instDone(tid, inst);
+    }
 
     //
     //  Control Instructions

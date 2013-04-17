@@ -157,10 +157,8 @@ namespace X86ISA
         struct WalkerSenderState : public Packet::SenderState
         {
             WalkerState * senderWalk;
-            Packet::SenderState * saved;
-            WalkerSenderState(WalkerState * _senderWalk,
-                    Packet::SenderState * _saved) :
-                senderWalk(_senderWalk), saved(_saved) {}
+            WalkerSenderState(WalkerState * _senderWalk) :
+                senderWalk(_senderWalk) {}
         };
 
       public:
@@ -169,7 +167,8 @@ namespace X86ISA
                 RequestPtr req, BaseTLB::Mode mode);
         Fault startFunctional(ThreadContext * _tc, Addr &addr,
                 unsigned &logBytes, BaseTLB::Mode mode);
-        MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
+        BaseMasterPort &getMasterPort(const std::string &if_name,
+                                      PortID idx = InvalidPortID);
 
       protected:
         // The TLB we're supposed to load.

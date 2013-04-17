@@ -67,7 +67,6 @@ SimObject::SimObject(const Params *p)
 #endif
 
     simObjectList.push_back(this);
-    state = Running;
 }
 
 void
@@ -151,34 +150,10 @@ debugObjectBreak(const char *objs)
 #endif
 
 unsigned int
-SimObject::drain(Event *drain_event)
+SimObject::drain(DrainManager *drain_manager)
 {
-    state = Drained;
+    setDrainState(Drained);
     return 0;
-}
-
-void
-SimObject::resume()
-{
-    state = Running;
-}
-
-void
-SimObject::setMemoryMode(Enums::MemoryMode new_mode)
-{
-    panic("setMemoryMode() should only be called on systems");
-}
-
-void
-SimObject::switchOut()
-{
-    panic("Unimplemented!");
-}
-
-void
-SimObject::takeOverFrom(BaseCPU *cpu)
-{
-    panic("Unimplemented!");
 }
 
 

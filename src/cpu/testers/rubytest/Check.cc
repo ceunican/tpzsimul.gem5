@@ -111,16 +111,13 @@ Check::initiatePrefetch()
 
     // push the subblock onto the sender state.  The sequencer will
     // update the subblock on the return
-    pkt->senderState =
-        new SenderState(m_address, req->getSize(), pkt->senderState);
+    pkt->senderState = new SenderState(m_address, req->getSize());
 
     if (port->sendTimingReq(pkt)) {
         DPRINTF(RubyTest, "successfully initiated prefetch.\n");
     } else {
         // If the packet did not issue, must delete
-        SenderState* senderState =  safe_cast<SenderState*>(pkt->senderState);
-        pkt->senderState = senderState->saved;
-        delete senderState;
+        delete pkt->senderState;
         delete pkt->req;
         delete pkt;
 
@@ -151,8 +148,7 @@ Check::initiateFlush()
 
     // push the subblock onto the sender state.  The sequencer will
     // update the subblock on the return
-    pkt->senderState =
-        new SenderState(m_address, req->getSize(), pkt->senderState);
+    pkt->senderState = new SenderState(m_address, req->getSize());
 
     if (port->sendTimingReq(pkt)) {
         DPRINTF(RubyTest, "initiating Flush - successful\n");
@@ -189,7 +185,7 @@ Check::initiateAction()
     // }
 
     PacketPtr pkt = new Packet(req, cmd);
-    uint8_t* writeData = new uint8_t;
+    uint8_t *writeData = new uint8_t;
     *writeData = m_value + m_store_count;
     pkt->dataDynamic(writeData);
 
@@ -198,8 +194,7 @@ Check::initiateAction()
 
     // push the subblock onto the sender state.  The sequencer will
     // update the subblock on the return
-    pkt->senderState =
-        new SenderState(writeAddr, req->getSize(), pkt->senderState);
+    pkt->senderState = new SenderState(writeAddr, req->getSize());
 
     if (port->sendTimingReq(pkt)) {
         DPRINTF(RubyTest, "initiating action - successful\n");
@@ -210,9 +205,7 @@ Check::initiateAction()
         // If the packet did not issue, must delete
         // Note: No need to delete the data, the packet destructor
         // will delete it
-        SenderState* senderState = safe_cast<SenderState*>(pkt->senderState);
-        pkt->senderState = senderState->saved;
-        delete senderState;
+        delete pkt->senderState;
         delete pkt->req;
         delete pkt;
 
@@ -245,13 +238,12 @@ Check::initiateCheck()
 
     req->setThreadContext(index, 0);
     PacketPtr pkt = new Packet(req, MemCmd::ReadReq);
-    uint8_t* dataArray = new uint8_t[CHECK_SIZE];
+    uint8_t *dataArray = new uint8_t[CHECK_SIZE];
     pkt->dataDynamicArray(dataArray);
 
     // push the subblock onto the sender state.  The sequencer will
     // update the subblock on the return
-    pkt->senderState =
-        new SenderState(m_address, req->getSize(), pkt->senderState);
+    pkt->senderState = new SenderState(m_address, req->getSize());
 
     if (port->sendTimingReq(pkt)) {
         DPRINTF(RubyTest, "initiating check - successful\n");
@@ -262,9 +254,7 @@ Check::initiateCheck()
         // If the packet did not issue, must delete
         // Note: No need to delete the data, the packet destructor
         // will delete it
-        SenderState* senderState = safe_cast<SenderState*>(pkt->senderState);
-        pkt->senderState = senderState->saved;
-        delete senderState;
+        delete pkt->senderState;
         delete pkt->req;
         delete pkt;
 
@@ -276,7 +266,7 @@ Check::initiateCheck()
 }
 
 void
-Check::performCallback(NodeID proc, SubBlock* data)
+Check::performCallback(NodeID proc, SubBlock* data, Time curTime)
 {
     Address address = data->getAddress();
 
@@ -306,14 +296,13 @@ Check::performCallback(NodeID proc, SubBlock* data)
         DPRINTF(RubyTest, "Check callback\n");
         // Perform load/check
         for (int byte_number=0; byte_number<CHECK_SIZE; byte_number++) {
-            if (uint8(m_value + byte_number) != data->getByte(byte_number)) {
+            if (uint8_t(m_value + byte_number) != data->getByte(byte_number)) {
                 panic("Action/check failure: proc: %d address: %s data: %s "
                       "byte_number: %d m_value+byte_number: %d byte: %d %s"
                       "Time: %d\n",
                       proc, address, data, byte_number,
                       (int)m_value + byte_number,
-                      (int)data->getByte(byte_number), *this,
-                      g_system_ptr->getTime());
+                      (int)data->getByte(byte_number), *this, curTime);
             }
         }
         DPRINTF(RubyTest, "Action/check success\n");
@@ -327,8 +316,7 @@ Check::performCallback(NodeID proc, SubBlock* data)
 
     } else {
         panic("Unexpected TesterStatus: %s proc: %d data: %s m_status: %s "
-              "time: %d\n",
-              *this, proc, data, m_status, g_system_ptr->getTime());
+              "time: %d\n", *this, proc, data, m_status, curTime);
     }
 
     DPRINTF(RubyTest, "proc: %d, Address: 0x%x\n", proc,

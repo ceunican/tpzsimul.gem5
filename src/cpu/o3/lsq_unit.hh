@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2004-2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -91,14 +103,11 @@ class LSQUnit {
     /** Sets the pointer to the dcache port. */
     void setDcachePort(MasterPort *dcache_port);
 
-    /** Switches out LSQ unit. */
-    void switchOut();
+    /** Perform sanity checks after a drain. */
+    void drainSanityCheck() const;
 
     /** Takes over from another CPU's thread. */
     void takeOverFrom();
-
-    /** Returns if the LSQ is switched out. */
-    bool isSwitchedOut() { return switchedOut; }
 
     /** Ticks the LSQ unit, which in this case only resets the number of
      * used cache ports.
@@ -192,9 +201,6 @@ class LSQUnit {
     /** Returns the number of free entries (min of free LQ and SQ entries). */
     unsigned numFreeEntries();
 
-    /** Returns the number of loads ready to execute. */
-    int numLoadsReady();
-
     /** Returns the number of loads in the LQ. */
     int numLoads() { return loads; }
 
@@ -204,11 +210,20 @@ class LSQUnit {
     /** Returns if either the LQ or SQ is full. */
     bool isFull() { return lqFull() || sqFull(); }
 
+    /** Returns if both the LQ and SQ are empty. */
+    bool isEmpty() const { return lqEmpty() && sqEmpty(); }
+
     /** Returns if the LQ is full. */
     bool lqFull() { return loads >= (LQEntries - 1); }
 
     /** Returns if the SQ is full. */
     bool sqFull() { return stores >= (SQEntries - 1); }
+
+    /** Returns if the LQ is empty. */
+    bool lqEmpty() const { return loads == 0; }
+
+    /** Returns if the SQ is empty. */
+    bool sqEmpty() const { return stores == 0; }
 
     /** Returns the number of instructions in the LSQ. */
     unsigned getCount() { return loads + stores; }
@@ -228,6 +243,9 @@ class LSQUnit {
     void recvRetry();
 
   private:
+    /** Reset the LSQ state */
+    void resetState();
+
     /** Writes back the instruction, sending it to IEW. */
     void writeback(DynInstPtr &inst, PacketPtr pkt);
 
@@ -244,17 +262,17 @@ class LSQUnit {
     bool sendStore(PacketPtr data_pkt);
 
     /** Increments the given store index (circular queue). */
-    inline void incrStIdx(int &store_idx);
+    inline void incrStIdx(int &store_idx) const;
     /** Decrements the given store index (circular queue). */
-    inline void decrStIdx(int &store_idx);
+    inline void decrStIdx(int &store_idx) const;
     /** Increments the given load index (circular queue). */
-    inline void incrLdIdx(int &load_idx);
+    inline void incrLdIdx(int &load_idx) const;
     /** Decrements the given load index (circular queue). */
-    inline void decrLdIdx(int &load_idx);
+    inline void decrLdIdx(int &load_idx) const;
 
   public:
     /** Debugging function to dump instructions in the LSQ. */
-    void dumpInsts();
+    void dumpInsts() const;
 
   private:
     /** Pointer to the CPU. */
@@ -422,9 +440,6 @@ class LSQUnit {
 
     /** The number of used cache ports in this cycle. */
     int usedPorts;
-
-    /** Is the LSQ switched out. */
-    bool switchedOut;
 
     //list<InstSeqNum> mshrSeqNums;
 

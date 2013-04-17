@@ -35,9 +35,6 @@
 #include "arch/sparc/registers.hh"
 #include "arch/types.hh"
 #include "cpu/static_inst.hh"
-#include "cpu/thread_context.hh"
-
-class ThreadContext;
 
 namespace SparcISA
 {
@@ -45,26 +42,14 @@ namespace SparcISA
 class Decoder
 {
   protected:
-    ThreadContext * tc;
     // The extended machine instruction being generated
     ExtMachInst emi;
     bool instDone;
+    MiscReg asi;
 
   public:
-    Decoder(ThreadContext * _tc) : tc(_tc), instDone(false)
+    Decoder() : instDone(false), asi(0)
     {}
-
-    ThreadContext *
-    getTC()
-    {
-        return tc;
-    }
-
-    void
-    setTC(ThreadContext * _tc)
-    {
-        tc = _tc;
-    }
 
     void process() {}
 
@@ -86,8 +71,7 @@ class Decoder
         // into all the execute functions
         if (inst & (1 << 13)) {
             emi |= (static_cast<ExtMachInst>(
-                        tc->readMiscRegNoEffect(MISCREG_ASI))
-                    << (sizeof(MachInst) * 8));
+                        asi << (sizeof(MachInst) * 8)));
         } else {
             emi |= (static_cast<ExtMachInst>(bits(inst, 12, 5))
                     << (sizeof(MachInst) * 8));
@@ -106,6 +90,14 @@ class Decoder
     {
         return instDone;
     }
+
+    void
+    setContext(MiscReg _asi)
+    {
+        asi = _asi;
+    }
+
+    void takeOverFrom(Decoder *old) {}
 
   protected:
     /// A cache of decoded instruction objects.

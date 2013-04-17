@@ -49,7 +49,7 @@
 #include "sim/sim_object.hh"
 
 class ThreadContext;
-class MasterPort;
+class BaseMasterPort;
 
 class BaseTLB : public SimObject
 {
@@ -65,6 +65,11 @@ class BaseTLB : public SimObject
     virtual void demapPage(Addr vaddr, uint64_t asn) = 0;
 
     /**
+     * Remove all entries from the TLB
+     */
+    virtual void flushAll() = 0;
+
+    /**
      * Get the table walker master port if present. This is used for
      * migrating port connections during a CPU takeOverFrom()
      * call. For architectures that do not have a table walker, NULL
@@ -73,7 +78,9 @@ class BaseTLB : public SimObject
      *
      * @return A pointer to the walker master port or NULL if not present
      */
-    virtual MasterPort* getMasterPort() { return NULL; }
+    virtual BaseMasterPort* getMasterPort() { return NULL; }
+
+    void memInvalidate() { flushAll(); }
 
     class Translation
     {
@@ -94,6 +101,13 @@ class BaseTLB : public SimObject
          */
         virtual void finish(Fault fault, RequestPtr req, ThreadContext *tc,
                             Mode mode) = 0;
+
+        /** This function is used by the page table walker to determine if it
+         * should translate the a pending request or if the underlying request
+         * has been squashed.
+         * @ return Is the instruction that requested this translation squashed?
+         */
+        virtual bool squashed() const { return false; }
     };
 };
 

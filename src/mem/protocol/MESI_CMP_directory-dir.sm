@@ -38,8 +38,8 @@
 machine(Directory, "MESI_CMP_filter_directory protocol") 
  : DirectoryMemory * directory,
    MemoryControl * memBuffer,
-   int to_mem_ctrl_latency = 1,
-   int directory_latency = 6
+   Cycles to_mem_ctrl_latency = 1,
+   Cycles directory_latency = 6
 {
 
   MessageBuffer requestToDir, network="From", virtual_network="0", ordered="false", vnet_type="request";
@@ -105,12 +105,12 @@ machine(Directory, "MESI_CMP_filter_directory protocol")
 
   // ** OBJECTS **
 
-  TBETable TBEs, template_hack="<Directory_TBE>";
+  TBETable TBEs, template="<Directory_TBE>", constructor="m_number_of_TBEs";
 
   void set_tbe(TBE tbe);
   void unset_tbe();
   void wakeUpBuffers(Address a);
-      
+
   Entry getDirectoryEntry(Address addr), return_by_pointer="yes" {
     Entry dir_entry := static_cast(Entry, "pointer", directory[addr]);
 
@@ -170,6 +170,11 @@ machine(Directory, "MESI_CMP_filter_directory protocol")
   }
 
   DataBlock getDataBlock(Address addr), return_by_ref="yes" {
+    TBE tbe := TBEs[addr];
+    if(is_valid(tbe)) {
+        return tbe.DataBlk;
+    }
+
     return getDirectoryEntry(addr).DataBlk;
   }
 

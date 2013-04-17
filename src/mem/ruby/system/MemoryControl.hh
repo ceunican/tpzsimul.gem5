@@ -35,22 +35,15 @@
 #include <string>
 
 #include "mem/protocol/MemoryControlRequestType.hh"
-#include "mem/protocol/MemoryMsg.hh"
 #include "mem/ruby/common/Consumer.hh"
-#include "mem/ruby/profiler/MemCntrlProfiler.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
-#include "mem/ruby/system/AbstractMemOrCache.hh"
 #include "mem/ruby/system/MemoryNode.hh"
-#include "mem/ruby/system/System.hh"
 #include "params/MemoryControl.hh"
 #include "sim/clocked_object.hh"
 
 //////////////////////////////////////////////////////////////////////////////
 
-class Consumer;
-
-class MemoryControl :
-    public ClockedObject, public Consumer, public AbstractMemOrCache
+class MemoryControl : public ClockedObject, public Consumer
 {
   public:
     typedef MemoryControlParams Params;
@@ -63,17 +56,17 @@ class MemoryControl :
 
     ~MemoryControl();
 
-    unsigned int drain(Event *de) = 0;
-
     virtual void wakeup() = 0;
 
     virtual void setConsumer(Consumer* consumer_ptr) = 0;
     virtual Consumer* getConsumer() = 0;
+    virtual void setClockObj(ClockedObject* consumer_ptr) {}
+
     virtual void setDescription(const std::string& name) = 0;
     virtual std::string getDescription() = 0;
 
     // Called from the directory:
-    virtual void enqueue(const MsgPtr& message, int latency ) = 0;
+    virtual void enqueue(const MsgPtr& message, Cycles latency) = 0;
     virtual void enqueueMemRef(MemoryNode& memRef) = 0;
     virtual void dequeue() = 0;
     virtual const Message* peek() = 0;
@@ -98,6 +91,11 @@ class MemoryControl :
     virtual int getDimmsPerChannel() = 0;
 
     virtual void recordRequestType(MemoryControlRequestType requestType);
+
+    virtual bool functionalReadBuffers(Packet *pkt)
+    { fatal("Functional read access not implemented!");}
+    virtual uint32_t functionalWriteBuffers(Packet *pkt)
+    { fatal("Functional read access not implemented!");}
 
 protected:
     class MemCntrlEvent : public Event

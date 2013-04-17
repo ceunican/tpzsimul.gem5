@@ -42,7 +42,7 @@
 
 using namespace std;
 
-FALRU::FALRU(unsigned _blkSize, unsigned _size, unsigned hit_latency)
+FALRU::FALRU(unsigned _blkSize, unsigned _size, Cycles hit_latency)
     : blkSize(_blkSize), size(_size), hitLatency(hit_latency)
 {
     if (!isPowerOf2(blkSize))
@@ -152,17 +152,14 @@ FALRU::hashLookup(Addr addr) const
 }
 
 void
-FALRU::invalidateBlk(FALRU::BlkType *blk)
+FALRU::invalidate(FALRU::BlkType *blk)
 {
-    if (blk) {
-        blk->status = 0;
-        blk->isTouched = false;
-        tagsInUse--;
-    }
+    assert(blk);
+    tagsInUse--;
 }
 
 FALRUBlk*
-FALRU::accessBlock(Addr addr, int &lat, int context_src, int *inCache)
+FALRU::accessBlock(Addr addr, Cycles &lat, int context_src, int *inCache)
 {
     accesses++;
     int tmp_in_cache = 0;
@@ -273,16 +270,16 @@ bool
 FALRU::check()
 {
     FALRUBlk* blk = head;
-    int size = 0;
+    int tot_size = 0;
     int boundary = 1<<17;
     int j = 0;
     int flags = cacheMask;
     while (blk) {
-        size += blkSize;
+        tot_size += blkSize;
         if (blk->inCache != flags) {
             return false;
         }
-        if (size == boundary && blk != tail) {
+        if (tot_size == boundary && blk != tail) {
             if (cacheBoundaries[j] != blk) {
                 return false;
             }

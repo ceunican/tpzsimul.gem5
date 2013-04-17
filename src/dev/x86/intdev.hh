@@ -66,11 +66,11 @@ class IntDev
     class IntSlavePort : public MessageSlavePort
     {
         IntDev * device;
-        Tick latency;
+
       public:
         IntSlavePort(const std::string& _name, MemObject* _parent,
-                     IntDev* dev, Tick _latency) :
-            MessageSlavePort(_name, _parent), device(dev), latency(_latency)
+                     IntDev* dev) :
+            MessageSlavePort(_name, _parent), device(dev)
         {
         }
 
@@ -81,6 +81,8 @@ class IntDev
 
         Tick recvMessage(PacketPtr pkt)
         {
+            // @todo someone should pay for this
+            pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
             return device->recvMessage(pkt);
         }
     };

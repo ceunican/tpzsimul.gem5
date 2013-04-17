@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -111,8 +111,8 @@ RubyTester::init()
     m_checkTable_ptr = new CheckTable(m_num_writers, m_num_readers, this);
 }
 
-MasterPort &
-RubyTester::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort &
+RubyTester::getMasterPort(const std::string &if_name, PortID idx)
 {
     if (if_name != "cpuInstPort" && if_name != "cpuDataPort") {
         // pass it along to our super class
@@ -134,7 +134,7 @@ RubyTester::getMasterPort(const std::string &if_name, int idx)
             // index
             //
             int read_idx = idx + m_num_inst_ports;
-            if (read_idx >= static_cast<int>(readPorts.size())) {
+            if (read_idx >= static_cast<PortID>(readPorts.size())) {
                 panic("RubyTester::getMasterPort: unknown data port idx %d\n",
                       idx);
             }
@@ -149,17 +149,13 @@ RubyTester::CpuPort::recvTimingResp(PacketPtr pkt)
     // retrieve the subblock and call hitCallback
     RubyTester::SenderState* senderState =
         safe_cast<RubyTester::SenderState*>(pkt->senderState);
-    SubBlock* subblock = senderState->subBlock;
-    assert(subblock != NULL);
+    SubBlock& subblock = senderState->subBlock;
 
-    // pop the sender state from the packet
-    pkt->senderState = senderState->saved;
-
-    tester->hitCallback(id, subblock);
+    tester->hitCallback(id, &subblock);
 
     // Now that the tester has completed, delete the senderState
     // (includes sublock) and the packet, then return
-    delete senderState;
+    delete pkt->senderState;
     delete pkt->req;
     delete pkt;
     return true;
@@ -191,7 +187,7 @@ void
 RubyTester::hitCallback(NodeID proc, SubBlock* data)
 {
     // Mark that we made progress
-    m_last_progress_vector[proc] = g_system_ptr->getTime();
+    m_last_progress_vector[proc] = curCycle();
 
     DPRINTF(RubyTest, "completed request for proc: %d\n", proc);
     DPRINTF(RubyTest, "addr: 0x%x, size: %d, data: ",
@@ -205,7 +201,7 @@ RubyTester::hitCallback(NodeID proc, SubBlock* data)
     // back the data to make the check
     Check* check_ptr = m_checkTable_ptr->getCheck(data->getAddress());
     assert(check_ptr != NULL);
-    check_ptr->performCallback(proc, data);
+    check_ptr->performCallback(proc, data, curCycle());
 }
 
 void
@@ -229,7 +225,7 @@ void
 RubyTester::checkForDeadlock()
 {
     int size = m_last_progress_vector.size();
-    Time current_time = g_system_ptr->getTime();
+    Time current_time = curCycle();
     for (int processor = 0; processor < size; processor++) {
         if ((current_time - m_last_progress_vector[processor]) >
                 m_deadlock_threshold) {

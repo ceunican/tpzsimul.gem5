@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2003-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -85,7 +97,7 @@ class FALRU : public BaseTags
     /** The size of the cache. */
     const unsigned size;
     /** The hit latency of the cache. */
-    const unsigned hitLatency;
+    const Cycles hitLatency;
 
     /** Array of pointers to blocks at the cache size  boundaries. */
     FALRUBlk **cacheBoundaries;
@@ -155,7 +167,7 @@ public:
      * @param size The size of the cache.
      * @param hit_latency The hit latency of the cache.
      */
-    FALRU(unsigned blkSize, unsigned size, unsigned hit_latency);
+    FALRU(unsigned blkSize, unsigned size, Cycles hit_latency);
     ~FALRU();
 
     /**
@@ -168,7 +180,7 @@ public:
      * Invalidate a cache block.
      * @param blk The block to invalidate.
      */
-    void invalidateBlk(BlkType *blk);
+    void invalidate(BlkType *blk);
 
     /**
      * Access block and update replacement data.  May not succeed, in which case
@@ -181,7 +193,7 @@ public:
      * @param inCache The FALRUBlk::inCache flags.
      * @return Pointer to the cache block.
      */
-    FALRUBlk* accessBlock(Addr addr, int &lat, int context_src, int *inCache = 0);
+    FALRUBlk* accessBlock(Addr addr, Cycles &lat, int context_src, int *inCache = 0);
 
     /**
      * Find the block in the cache, do not update the replacement data.
@@ -205,7 +217,7 @@ public:
      * Return the hit latency of this cache.
      * @return The hit latency.
      */
-    int getHitLatency() const
+    Cycles getHitLatency() const
     {
         return hitLatency;
     }
@@ -287,6 +299,26 @@ public:
      *Needed to clear all lock tracking at once
      */
     virtual void clearLocks();
+
+    /**
+     * Visit each block in the tag store and apply a visitor to the
+     * block.
+     *
+     * The visitor should be a function (or object that behaves like a
+     * function) that takes a cache block reference as its parameter
+     * and returns a bool. A visitor can request the traversal to be
+     * stopped by returning false, returning true causes it to be
+     * called for the next block in the tag store.
+     *
+     * \param visitor Visitor to call on each block.
+     */
+    template <typename V>
+    void forEachBlk(V &visitor) {
+        for (int i = 0; i < numBlocks; i++) {
+            if (!visitor(blks[i]))
+                return;
+        }
+    }
 };
 
 #endif // __MEM_CACHE_TAGS_FA_LRU_HH__

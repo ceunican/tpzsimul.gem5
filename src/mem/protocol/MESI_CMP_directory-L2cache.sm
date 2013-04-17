@@ -34,9 +34,9 @@
 
 machine(L2Cache, "MESI Directory L2 Cache CMP")
  : CacheMemory * L2cacheMemory,
-   int l2_request_latency = 2,  
-   int l2_response_latency = 2,
-   int to_l1_latency = 1
+   Cycles l2_request_latency = 2,
+   Cycles l2_response_latency = 2,
+   Cycles to_l1_latency = 1
 {
   // L2 BANK QUEUES
   // From local bank of L2 cache TO the network
@@ -151,7 +151,7 @@ machine(L2Cache, "MESI Directory L2 Cache CMP")
     bool isPresent(Address);
   }
 
-  TBETable L2_TBEs, template_hack="<L2Cache_TBE>";
+  TBETable L2_TBEs, template="<L2Cache_TBE>", constructor="m_number_of_TBEs";
 
   void set_cache_entry(AbstractCacheEntry a);
   void unset_cache_entry();
@@ -232,6 +232,11 @@ machine(L2Cache, "MESI Directory L2 Cache CMP")
   }
 
   DataBlock getDataBlock(Address addr), return_by_ref="yes" {
+    TBE tbe := L2_TBEs[addr];
+    if(is_valid(tbe)) {
+        return tbe.DataBlk;
+    }
+
     return getCacheEntry(addr).DataBlk;
   }
 

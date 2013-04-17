@@ -46,7 +46,9 @@
 #define __SIM_CLOCKED_OBJECT_HH__
 
 #include "base/intmath.hh"
+#include "base/misc.hh"
 #include "params/ClockedObject.hh"
+#include "sim/core.hh"
 #include "sim/sim_object.hh"
 
 /**
@@ -101,10 +103,10 @@ class ClockedObject : public SimObject
         tick += elapsedCycles * clock;
     }
 
-  protected:
-
     // Clock period in ticks
     Tick clock;
+
+  protected:
 
     /**
      * Create a clocked object and set the clock based on the
@@ -112,12 +114,28 @@ class ClockedObject : public SimObject
      */
     ClockedObject(const ClockedObjectParams* p) :
         SimObject(p), tick(0), cycle(0), clock(p->clock)
-    { }
+    {
+        if (clock == 0) {
+            fatal("%s has a clock period of zero\n", name());
+        }
+    }
 
     /**
      * Virtual destructor due to inheritance.
      */
     virtual ~ClockedObject() { }
+
+    /**
+     * Reset the object's clock using the current global tick value. Likely
+     * to be used only when the global clock is reset. Currently, this done
+     * only when Ruby is done warming up the memory system.
+     */
+    void resetClock() const
+    {
+        Cycles elapsedCycles(divCeil(curTick(), clock));
+        cycle = elapsedCycles;
+        tick = elapsedCycles * clock;
+    }
 
   public:
 
@@ -166,8 +184,8 @@ class ClockedObject : public SimObject
 
     inline Tick clockPeriod() const { return clock; }
 
-    inline Cycles ticksToCycles(Tick tick) const
-    { return Cycles(tick / clock); }
+    inline Cycles ticksToCycles(Tick t) const
+    { return Cycles(t / clock); }
 
 };
 

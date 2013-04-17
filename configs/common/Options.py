@@ -31,11 +31,19 @@ from m5.defines import buildEnv
 from m5.objects import *
 from Benchmarks import *
 
+import CpuConfig
+
+def _listCpuTypes(option, opt, value, parser):
+    CpuConfig.print_cpu_list()
+    sys.exit(0)
+
 def addCommonOptions(parser):
     # system options
+    parser.add_option("--list-cpu-types",
+                      action="callback", callback=_listCpuTypes,
+                      help="List available CPU types")
     parser.add_option("--cpu-type", type="choice", default="atomic",
-                      choices = ["atomic", "timing", "detailed", "inorder",
-                                 "arm_detailed"],
+                      choices=CpuConfig.cpu_names(),
                       help = "type of cpu to run with")
     parser.add_option("--checker", action="store_true");
     parser.add_option("-n", "--num-cpus", type="int", default=1)
@@ -85,7 +93,7 @@ def addCommonOptions(parser):
     ###Note that performing checkpointing via python script files will override
     ###checkpoint instructions built into binaries.
     parser.add_option("--take-checkpoints", action="store", type="string",
-        help="<M,N> will take checkpoint at cycle M and every N cycles thereafter")
+        help="<M,N> take checkpoints at tick M and every N ticks thereafter")
     parser.add_option("--max-checkpoints", action="store", type="int",
         help="the maximum number of checkpoints to drop", default=5)
     parser.add_option("--checkpoint-dir", action="store", type="string",
@@ -115,7 +123,7 @@ def addCommonOptions(parser):
     parser.add_option("-s", "--standard-switch", action="store", type="int",
         default=None,
         help="switch from timing to Detailed CPU after warmup period of <N>")
-    parser.add_option("-p", "--prog-interval", type="int",
+    parser.add_option("-p", "--prog-interval", type="str",
         help="CPU Progress Interval")
 
     # Fastforwarding and simpoint related materials
@@ -165,6 +173,9 @@ def addFSOptions(parser):
                    help="Provide the raw system without the linux specific bits")
         parser.add_option("--machine-type", action="store", type="choice",
                 choices=ArmMachineType.map.keys(), default="RealView_PBX")
+        parser.add_option("--dtb-filename", action="store", type="string",
+              help="Specifies device tree blob file to use with device-tree-"\
+              "enabled kernels")
     # Benchmark options
     parser.add_option("--dual", action="store_true",
                       help="Simulate two systems attached with an ethernet link")

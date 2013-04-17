@@ -43,10 +43,14 @@ from MemObject import MemObject
 # with periodic dumping and resetting of stats using schedStatEvent
 class CommMonitor(MemObject):
     type = 'CommMonitor'
+    cxx_header = "mem/comm_monitor.hh"
 
     # one port in each direction
     master = MasterPort("Master port")
     slave = SlavePort("Slave port")
+
+    # packet trace output file, disabled by default
+    trace_file = Param.String("", "Packet trace output file")
 
     # control the sample period window length of this monitor
     sample_period = Param.Clock("1ms", "Sample period for histograms")

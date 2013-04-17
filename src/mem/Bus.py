@@ -40,19 +40,20 @@
 #          Andreas Hansson
 
 from MemObject import MemObject
+from System import System
 from m5.params import *
+from m5.proxy import *
 
 class BaseBus(MemObject):
     type = 'BaseBus'
     abstract = True
+    cxx_header = "mem/bus.hh"
     slave = VectorSlavePort("vector port for connecting masters")
     master = VectorMasterPort("vector port for connecting slaves")
-    # Override the default clock
-    clock = '1GHz'
     header_cycles = Param.Cycles(1, "cycles of overhead per transaction")
-    width = Param.Int(8, "bus width (bytes)")
-    block_size = Param.Int(64, "The default block size if not set by " \
-                               "any connected module")
+    width = Param.Unsigned(8, "bus width (bytes)")
+    block_size = Param.Unsigned(64, "The default block size if not set by " \
+                                    "any connected module")
 
     # The default port can be left unconnected, or be used to connect
     # a default slave port
@@ -68,6 +69,10 @@ class BaseBus(MemObject):
 
 class NoncoherentBus(BaseBus):
     type = 'NoncoherentBus'
+    cxx_header = "mem/noncoherent_bus.hh"
 
 class CoherentBus(BaseBus):
     type = 'CoherentBus'
+    cxx_header = "mem/coherent_bus.hh"
+
+    system = Param.System(Parent.any, "System that the bus belongs to.")

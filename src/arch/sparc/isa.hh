@@ -37,14 +37,16 @@
 #include "arch/sparc/registers.hh"
 #include "arch/sparc/types.hh"
 #include "cpu/cpuevent.hh"
+#include "sim/sim_object.hh"
 
 class Checkpoint;
 class EventManager;
+struct SparcISAParams;
 class ThreadContext;
 
 namespace SparcISA
 {
-class ISA
+class ISA : public SimObject
 {
   private:
 
@@ -165,10 +167,14 @@ class ISA
 
     void clear();
 
-    void serialize(EventManager *em, std::ostream & os);
+    void serialize(std::ostream & os);
 
-    void unserialize(EventManager *em, Checkpoint *cp,
-                     const std::string & section);
+    void unserialize(Checkpoint *cp, const std::string & section);
+
+    void startup(ThreadContext *tc) {}
+
+    /// Explicitly import the otherwise hidden startup
+    using SimObject::startup;
 
   protected:
 
@@ -200,14 +206,10 @@ class ISA
         return reg;
     }
 
-    ISA()
-    {
-        tickCompare = NULL;
-        sTickCompare = NULL;
-        hSTickCompare = NULL;
+    typedef SparcISAParams Params;
+    const Params *params() const;
 
-        clear();
-    }
+    ISA(Params *p);
 };
 }
 

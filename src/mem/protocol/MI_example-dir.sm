@@ -1,8 +1,36 @@
+/*
+ * Copyright (c) 2009-2012 Mark D. Hill and David A. Wood
+ * Copyright (c) 2010-2012 Advanced Micro Devices, Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 machine(Directory, "Directory protocol") 
 : DirectoryMemory * directory,
   MemoryControl * memBuffer,
-  int directory_latency = 12
+  Cycles directory_latency = 12
 {
 
   MessageBuffer forwardFromDir, network="To", virtual_network="3", ordered="false", vnet_type="forward";
@@ -74,7 +102,7 @@ machine(Directory, "Directory protocol")
   }
 
   // ** OBJECTS **
-  TBETable TBEs, template_hack="<Directory_TBE>";
+  TBETable TBEs, template="<Directory_TBE>", constructor="m_number_of_TBEs";
 
   void set_tbe(TBE b);
   void unset_tbe();
@@ -144,6 +172,11 @@ machine(Directory, "Directory protocol")
   }
 
   DataBlock getDataBlock(Address addr), return_by_ref="yes" {
+    TBE tbe := TBEs[addr];
+    if(is_valid(tbe)) {
+      return tbe.DataBlk;
+    }
+
     return getDirectoryEntry(addr).DataBlk;
   }
 
@@ -478,7 +511,6 @@ machine(Directory, "Directory protocol")
         out_msg.OriginalRequestorMachId := in_msg.Requestor;
         out_msg.DataBlk := in_msg.DataBlk;
         out_msg.MessageSize := in_msg.MessageSize;
-        //out_msg.Prefetch := in_msg.Prefetch;
 
         DPRINTF(RubySlicc,"%s\n", out_msg);
       }
@@ -490,12 +522,8 @@ machine(Directory, "Directory protocol")
   }
 
   action(w_writeDataToMemoryFromTBE, "\w", desc="Write date to directory memory from TBE") {
-    //getDirectoryEntry(address).DataBlk := TBEs[address].DataBlk;
     assert(is_valid(tbe));
-    getDirectoryEntry(address).DataBlk.copyPartial(tbe.DataBlk, 
-                                addressOffset(tbe.PhysicalAddress), 
-                                tbe.Len);
-
+    getDirectoryEntry(address).DataBlk := TBEs[address].DataBlk;
   }
 
   // TRANSITIONS
@@ -605,7 +633,6 @@ machine(Directory, "Directory protocol")
   }
 
   transition(M, PUTX, MI) {
-    l_writeDataToMemory;
     c_clearOwner;
     v_allocateTBEFromRequestNet;
     l_queueMemoryWBRequest;

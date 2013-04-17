@@ -76,6 +76,15 @@ def template DataImmConstructor {{
                 _srcRegIdx[_numSrcRegs++] = _destRegIdx[x];
             }
         }
+
+        if (%(is_branch)s && !isFloating()){
+            flags[IsControl] = true;
+            flags[IsIndirectControl] = true;
+            if (condCode == COND_AL || condCode == COND_UC)
+                flags[IsUncondControl] = true;
+            else
+                flags[IsCondControl] = true;
+        }
     }
 }};
 
@@ -108,7 +117,7 @@ def template DataRegConstructor {{
             }
         }
 
-        if (%(is_branch)s){
+        if (%(is_branch)s && !isFloating()){
             flags[IsControl] = true;
             flags[IsIndirectControl] = true;
             if (condCode == COND_AL || condCode == COND_UC)

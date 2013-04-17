@@ -32,9 +32,7 @@
 #include <iostream>
 
 #include "base/refcnt.hh"
-#include "mem/ruby/common/Global.hh"
-#include "mem/ruby/common/TypeDefines.hh"
-#include "mem/ruby/system/System.hh"
+#include "mem/packet.hh"
 
 class Message;
 typedef RefCountingPtr<Message> MsgPtr;
@@ -42,16 +40,16 @@ typedef RefCountingPtr<Message> MsgPtr;
 class Message : public RefCounted
 {
   public:
-    Message()
-        : m_time(g_system_ptr->getTime()),
-          m_LastEnqueueTime(g_system_ptr->getTime()),
-          m_DelayedCycles(0)
+    Message(Tick curTime)
+        : m_time(curTime),
+          m_LastEnqueueTime(curTime),
+          m_DelayedTicks(0)
     { }
 
     Message(const Message &other)
         : m_time(other.m_time),
           m_LastEnqueueTime(other.m_LastEnqueueTime),
-          m_DelayedCycles(other.m_DelayedCycles)
+          m_DelayedTicks(other.m_DelayedTicks)
     { }
 
     virtual ~Message() { }
@@ -61,20 +59,31 @@ class Message : public RefCounted
     virtual void setIncomingLink(int) {}
     virtual void setVnet(int) {}
 
-    void setDelayedCycles(const int& cycles) { m_DelayedCycles = cycles; }
-    const int& getDelayedCycles() const {return m_DelayedCycles;}
-    int& getDelayedCycles() {return m_DelayedCycles;}
-    void setLastEnqueueTime(const Time& time) { m_LastEnqueueTime = time; }
-    const Time& getLastEnqueueTime() const {return m_LastEnqueueTime;}
-    Time& getLastEnqueueTime() {return m_LastEnqueueTime;}
+    /**
+     * The two functions below are used for reading / writing the message
+     * functionally. The methods return true if the address in the packet
+     * matches the address / address range in the message. Each message
+     * class that can be potentially searched for the address needs to
+     * implement these methods.
+     */
+    virtual bool functionalRead(Packet *pkt) = 0;
+    //{ fatal("Read functional access not implemented!"); }
+    virtual bool functionalWrite(Packet *pkt) = 0;
+    //{ fatal("Write functional access not implemented!"); }
 
-    const Time& getTime() const { return m_time; }
-    void setTime(const Time& new_time) { m_time = new_time; }
+    void setDelayedTicks(const Tick ticks) { m_DelayedTicks = ticks; }
+    const Tick getDelayedTicks() const {return m_DelayedTicks;}
+
+    void setLastEnqueueTime(const Tick& time) { m_LastEnqueueTime = time; }
+    const Tick getLastEnqueueTime() const {return m_LastEnqueueTime;}
+
+    const Tick& getTime() const { return m_time; }
+    void setTime(const Tick& new_time) { m_time = new_time; }
 
   private:
-    Time m_time;
-    Time m_LastEnqueueTime; // my last enqueue time
-    int m_DelayedCycles; // my delayed cycles
+    Tick m_time;
+    Tick m_LastEnqueueTime; // my last enqueue time
+    Tick m_DelayedTicks; // my delayed cycles
 };
 
 inline std::ostream&

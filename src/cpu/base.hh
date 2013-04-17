@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -103,37 +103,19 @@ class BaseCPU : public MemObject
     /** data side request id that must be placed in all requests */
     MasterID _dataMasterId;
 
-    /**
-     * Define a base class for the CPU ports (instruction and data)
-     * that is refined in the subclasses. This class handles the
-     * common cases, i.e. the functional accesses and the status
-     * changes and address range queries. The default behaviour for
-     * both atomic and timing access is to panic and the corresponding
-     * subclasses have to override these methods.
+    /** An intrenal representation of a task identifier within gem5. This is
+     * used so the CPU can add which taskId (which is an internal representation
+     * of the OS process ID) to each request so components in the memory system
+     * can track which process IDs are ultimately interacting with them
      */
-    class CpuPort : public MasterPort
-    {
-      public:
+    uint32_t _taskId;
 
-        /**
-         * Create a CPU port with a name and a structural owner.
-         *
-         * @param _name port name including the owner
-         * @param _name structural owner of this port
-         */
-        CpuPort(const std::string& _name, MemObject* _owner) :
-            MasterPort(_name, _owner)
-        { }
+    /** The current OS process ID that is executing on this processor. This is
+     * used to generate a taskId */
+    uint32_t _pid;
 
-      protected:
-
-        virtual bool recvTimingResp(PacketPtr pkt);
-
-        virtual void recvRetry();
-
-        virtual void recvFunctionalSnoop(PacketPtr pkt);
-
-    };
+    /** Is the CPU switched out or active? */
+    bool _switchedOut;
 
   public:
 
@@ -143,7 +125,7 @@ class BaseCPU : public MemObject
      *
      * @return a reference to the data port
      */
-    virtual CpuPort &getDataPort() = 0;
+    virtual MasterPort &getDataPort() = 0;
 
     /**
      * Purely virtual method that returns a reference to the instruction
@@ -151,7 +133,7 @@ class BaseCPU : public MemObject
      *
      * @return a reference to the instruction port
      */
-    virtual CpuPort &getInstPort() = 0;
+    virtual MasterPort &getInstPort() = 0;
 
     /** Reads this CPU's ID. */
     int cpuId() { return _cpuId; }
@@ -171,7 +153,16 @@ class BaseCPU : public MemObject
      *
      * @return a reference to the port with the given name
      */
-    MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
+    BaseMasterPort &getMasterPort(const std::string &if_name,
+                                  PortID idx = InvalidPortID);
+
+    /** Get cpu task id */
+    uint32_t taskId() const { return _taskId; }
+    /** Set cpu task id */
+    void taskId(uint32_t id) { _taskId = id; }
+
+    uint32_t getPid() const { return _pid; }
+    void setPid(uint32_t pid) { _pid = pid; }
 
     inline void workItemBegin() { numWorkItemsStarted++; }
     inline void workItemEnd() { numWorkItemsCompleted++; }
@@ -278,13 +269,56 @@ class BaseCPU : public MemObject
 
     void registerThreadContexts();
 
-    /// Prepare for another CPU to take over execution.  When it is
-    /// is ready (drained pipe) it signals the sampler.
+    /**
+     * Prepare for another CPU to take over execution.
+     *
+     * When this method exits, all internal state should have been
+     * flushed. After the method returns, the simulator calls
+     * takeOverFrom() on the new CPU with this CPU as its parameter.
+     */
     virtual void switchOut();
 
-    /// Take over execution from the given CPU.  Used for warm-up and
-    /// sampling.
-    virtual void takeOverFrom(BaseCPU *);
+    /**
+     * Load the state of a CPU from the previous CPU object, invoked
+     * on all new CPUs that are about to be switched in.
+     *
+     * A CPU model implementing this method is expected to initialize
+     * its state from the old CPU and connect its memory (unless they
+     * are already connected) to the memories connected to the old
+     * CPU.
+     *
+     * @param cpu CPU to initialize read state from.
+     */
+    virtual void takeOverFrom(BaseCPU *cpu);
+
+    /**
+     * Flush all TLBs in the CPU.
+     *
+     * This method is mainly used to flush stale translations when
+     * switching CPUs. It is also exported to the Python world to
+     * allow it to request a TLB flush after draining the CPU to make
+     * it easier to compare traces when debugging
+     * handover/checkpointing.
+     */
+    void flushTLBs();
+
+    /**
+     * Determine if the CPU is switched out.
+     *
+     * @return True if the CPU is switched out, false otherwise.
+     */
+    bool switchedOut() const { return _switchedOut; }
+
+    /**
+     * Verify that the system is in a memory mode supported by the
+     * CPU.
+     *
+     * Implementations are expected to query the system for the
+     * current memory mode and ensure that it is what the CPU model
+     * expects. If the check fails, the implementation should
+     * terminate the simulation using fatal().
+     */
+    virtual void verifyMemoryMode() const { };
 
     /**
      *  Number of threads we're actually simulating (<= SMT_MAX_THREADS).
@@ -310,16 +344,46 @@ class BaseCPU : public MemObject
 
     /**
      * Serialize this object to the given output stream.
+     *
+     * @note CPU models should normally overload the serializeThread()
+     * method instead of the serialize() method as this provides a
+     * uniform data format for all CPU models and promotes better code
+     * reuse.
+     *
      * @param os The stream to serialize to.
      */
     virtual void serialize(std::ostream &os);
 
     /**
      * Reconstruct the state of this object from a checkpoint.
+     *
+     * @note CPU models should normally overload the
+     * unserializeThread() method instead of the unserialize() method
+     * as this provides a uniform data format for all CPU models and
+     * promotes better code reuse.
+
      * @param cp The checkpoint use.
-     * @param section The section name of this object
+     * @param section The section name of this object.
      */
     virtual void unserialize(Checkpoint *cp, const std::string &section);
+
+    /**
+     * Serialize a single thread.
+     *
+     * @param os The stream to serialize to.
+     * @param tid ID of the current thread.
+     */
+    virtual void serializeThread(std::ostream &os, ThreadID tid) {};
+
+    /**
+     * Unserialize one thread.
+     *
+     * @param cp The checkpoint use.
+     * @param section The section name of this thread.
+     * @param tid ID of the current thread.
+     */
+    virtual void unserializeThread(Checkpoint *cp, const std::string &section,
+                                   ThreadID tid) {};
 
     /**
      * Return pointer to CPU's branch predictor (NULL if none).

@@ -43,7 +43,7 @@ struct DMARequest
     bool write;
     int bytes_completed;
     int bytes_issued;
-    uint8* data;
+    uint8_t *data;
     PacketPtr pkt;
 };
 
@@ -73,7 +73,6 @@ class DMASequencer : public RubyPort
     bool m_is_busy;
     uint64_t m_data_block_mask;
     DMARequest active_request;
-    int num_active_requests;
 };
 
 #endif // __MEM_RUBY_SYSTEM_DMASEQUENCER_HH__

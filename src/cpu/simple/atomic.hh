@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -73,20 +73,60 @@ class AtomicSimpleCPU : public BaseSimpleCPU
     const bool simulate_data_stalls;
     const bool simulate_inst_stalls;
 
+    /**
+     * Drain manager to use when signaling drain completion
+     *
+     * This pointer is non-NULL when draining and NULL otherwise.
+     */
+    DrainManager *drain_manager;
+
     // main simulation loop (one cycle)
     void tick();
 
     /**
-     * An AtomicCPUPort overrides the default behaviour of the
-     * recvAtomic and ignores the packet instead of panicking.
+     * Check if a system is in a drained state.
+     *
+     * We need to drain if:
+     * <ul>
+     * <li>We are in the middle of a microcode sequence as some CPUs
+     *     (e.g., HW accelerated CPUs) can't be started in the middle
+     *     of a gem5 microcode sequence.
+     *
+     * <li>The CPU is in a LLSC region. This shouldn't normally happen
+     *     as these are executed atomically within a single tick()
+     *     call. The only way this can happen at the moment is if
+     *     there is an event in the PC event queue that affects the
+     *     CPU state while it is in an LLSC region.
+     *
+     * <li>Stay at PC is true.
+     * </ul>
      */
-    class AtomicCPUPort : public CpuPort
+    bool isDrained() {
+        return microPC() == 0 &&
+            !locked &&
+            !stayAtPC;
+    }
+
+    /**
+     * Try to complete a drain request.
+     *
+     * @returns true if the CPU is drained, false otherwise.
+     */
+    bool tryCompleteDrain();
+
+    /**
+     * An AtomicCPUPort overrides the default behaviour of the
+     * recvAtomicSnoop and ignores the packet instead of panicking. It
+     * also provides an implementation for the purely virtual timing
+     * functions and panics on either of these.
+     */
+    class AtomicCPUPort : public MasterPort
     {
 
       public:
 
         AtomicCPUPort(const std::string &_name, BaseCPU* _cpu)
-            : CpuPort(_name, _cpu)
+            : MasterPort(_name, _cpu)
         { }
 
       protected:
@@ -95,6 +135,17 @@ class AtomicSimpleCPU : public BaseSimpleCPU
         {
             // Snooping a coherence request, just return
             return 0;
+        }
+
+        bool recvTimingResp(PacketPtr pkt)
+        {
+            panic("Atomic CPU doesn't expect recvTimingResp!\n");
+            return true;
+        }
+
+        void recvRetry()
+        {
+            panic("Atomic CPU doesn't expect recvRetry!\n");
         }
 
     };
@@ -113,19 +164,20 @@ class AtomicSimpleCPU : public BaseSimpleCPU
   protected:
 
     /** Return a reference to the data port. */
-    virtual CpuPort &getDataPort() { return dcachePort; }
+    virtual MasterPort &getDataPort() { return dcachePort; }
 
     /** Return a reference to the instruction port. */
-    virtual CpuPort &getInstPort() { return icachePort; }
+    virtual MasterPort &getInstPort() { return icachePort; }
 
   public:
 
-    virtual void serialize(std::ostream &os);
-    virtual void unserialize(Checkpoint *cp, const std::string &section);
-    virtual void resume();
+    unsigned int drain(DrainManager *drain_manager);
+    void drainResume();
 
     void switchOut();
     void takeOverFrom(BaseCPU *oldCPU);
+
+    void verifyMemoryMode() const;
 
     virtual void activateContext(ThreadID thread_num, Cycles delay);
     virtual void suspendContext(ThreadID thread_num);

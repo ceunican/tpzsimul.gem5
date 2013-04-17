@@ -39,11 +39,11 @@
 #include "mem/ruby/network/garnet/NetworkHeader.hh"
 #include "mem/ruby/network/orion/NetworkPower.hh"
 #include "params/NetworkLink_d.hh"
-#include "sim/sim_object.hh"
+#include "sim/clocked_object.hh"
 
 class GarnetNetwork_d;
 
-class NetworkLink_d : public SimObject, public Consumer
+class NetworkLink_d : public ClockedObject, public Consumer
 {
   public:
     typedef NetworkLink_dParams Params;
@@ -62,17 +62,18 @@ class NetworkLink_d : public SimObject, public Consumer
 
     double calculate_power();
 
-    inline bool isReady()           { return linkBuffer->isReady(); }
+    inline bool isReady(Cycles curTime)
+    { return linkBuffer->isReady(curTime); }
+
     inline flit_d* peekLink()       { return linkBuffer->peekTopFlit(); }
     inline flit_d* consumeLink()    { return linkBuffer->getTopFlit(); }
-    void init_net_ptr(GarnetNetwork_d* net_ptr)
-    {
-        m_net_ptr = net_ptr;
-    }
+
+    void init_net_ptr(GarnetNetwork_d* net_ptr) { m_net_ptr = net_ptr; }
+    uint32_t functionalWrite(Packet *);
 
   protected:
     int m_id;
-    int m_latency;
+    Cycles m_latency;
     int channel_width;
 
     GarnetNetwork_d *m_net_ptr;

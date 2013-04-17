@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -91,14 +91,6 @@ class TLB : public BaseTLB
 
     TableWalker *tableWalker;
 
-    /** Lookup an entry in the TLB
-     * @param vpn virtual address
-     * @param asn context id/address space id to use
-     * @param functional if the lookup should modify state
-     * @return pointer to TLB entrry if it exists
-     */
-    TlbEntry *lookup(Addr vpn, uint8_t asn, bool functional = false);
-
     // Access Stats
     mutable Stats::Scalar instHits;
     mutable Stats::Scalar instMisses;
@@ -131,6 +123,14 @@ class TLB : public BaseTLB
   public:
     typedef ArmTLBParams Params;
     TLB(const Params *p);
+
+    /** Lookup an entry in the TLB
+     * @param vpn virtual address
+     * @param asn context id/address space id to use
+     * @param functional if the lookup should modify state
+     * @return pointer to TLB entrry if it exists
+     */
+    TlbEntry *lookup(Addr vpn, uint8_t asn, bool functional = false);
 
     virtual ~TLB();
     int getsize() const { return size; }
@@ -208,6 +208,8 @@ class TLB : public BaseTLB
     Fault translateTiming(RequestPtr req, ThreadContext *tc,
             Translation *translation, Mode mode);
 
+    void drainResume();
+
     // Checkpointing
     void serialize(std::ostream &os);
     void unserialize(Checkpoint *cp, const std::string &section);
@@ -224,7 +226,7 @@ class TLB : public BaseTLB
      *
      * @return A pointer to the walker master port
      */
-    virtual MasterPort* getMasterPort();
+    virtual BaseMasterPort* getMasterPort();
 
     // Caching misc register values here.
     // Writing to misc registers needs to invalidate them.

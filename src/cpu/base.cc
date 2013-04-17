@@ -118,7 +118,9 @@ BaseCPU::BaseCPU(Params *p, bool is_checker)
     : MemObject(p), instCnt(0), _cpuId(p->cpu_id),
       _instMasterId(p->system->getMasterId(name() + ".inst")),
       _dataMasterId(p->system->getMasterId(name() + ".data")),
-      interrupts(p->interrupts),
+      _taskId(ContextSwitchTaskId::Unknown), _pid(Request::invldPid),
+      _switchedOut(p->switched_out),
+      interrupts(p->interrupts), profileEvent(NULL),
       numThreads(p->numThreads), system(p->system)
 {
     // if Python did not provide a valid ID, do it here
@@ -215,7 +217,7 @@ BaseCPU::BaseCPU(Params *p, bool is_checker)
 
     // The interrupts should always be present unless this CPU is
     // switched in later or in case it is a checker CPU
-    if (!params()->defer_registration && !is_checker) {
+    if (!params()->switched_out && !is_checker) {
         if (interrupts) {
             interrupts->setCPU(this);
         } else {
@@ -225,11 +227,15 @@ BaseCPU::BaseCPU(Params *p, bool is_checker)
     }
 
     if (FullSystem) {
-        profileEvent = NULL;
         if (params()->profile)
             profileEvent = new ProfileEvent(this, params()->profile);
     }
     tracer = params()->tracer;
+
+    if (params()->isa.size() != numThreads) {
+        fatal("Number of ISAs (%i) assigned to the CPU does not equal number "
+              "of threads (%i).\n", params()->isa.size(), numThreads);
+    }
 }
 
 void
@@ -248,15 +254,18 @@ BaseCPU::~BaseCPU()
 void
 BaseCPU::init()
 {
-    if (!params()->defer_registration)
+    if (!params()->switched_out) {
         registerThreadContexts();
+
+        verifyMemoryMode();
+    }
 }
 
 void
 BaseCPU::startup()
 {
     if (FullSystem) {
-        if (!params()->defer_registration && profileEvent)
+        if (!params()->switched_out && profileEvent)
             schedule(profileEvent, curTick());
     }
 
@@ -297,13 +306,13 @@ BaseCPU::regStats()
         threadContexts[0]->regStats(name());
 }
 
-MasterPort &
-BaseCPU::getMasterPort(const string &if_name, int idx)
+BaseMasterPort &
+BaseCPU::getMasterPort(const string &if_name, PortID idx)
 {
     // Get the right port based on name. This applies to all the
     // subclasses of the base CPU and relies on their implementation
     // of getDataPort and getInstPort. In all cases there methods
-    // return a CpuPort pointer.
+    // return a MasterPort pointer.
     if (if_name == "dcache_port")
         return getDataPort();
     else if (if_name == "icache_port")
@@ -351,8 +360,14 @@ BaseCPU::findContext(ThreadContext *tc)
 void
 BaseCPU::switchOut()
 {
+    assert(!_switchedOut);
+    _switchedOut = true;
     if (profileEvent && profileEvent->scheduled())
         deschedule(profileEvent);
+
+    // Flush all TLBs in the CPU to avoid having stale translations if
+    // it gets switched in later.
+    flushTLBs();
 }
 
 void
@@ -360,6 +375,11 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
 {
     assert(threadContexts.size() == oldCPU->threadContexts.size());
     assert(_cpuId == oldCPU->cpuId());
+    assert(_switchedOut);
+    assert(oldCPU != this);
+    _pid = oldCPU->getPid();
+    _taskId = oldCPU->taskId();
+    _switchedOut = false;
 
     ThreadID size = threadContexts.size();
     for (ThreadID i = 0; i < size; ++i) {
@@ -381,17 +401,17 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
             ThreadContext::compare(oldTC, newTC);
         */
 
-        MasterPort *old_itb_port = oldTC->getITBPtr()->getMasterPort();
-        MasterPort *old_dtb_port = oldTC->getDTBPtr()->getMasterPort();
-        MasterPort *new_itb_port = newTC->getITBPtr()->getMasterPort();
-        MasterPort *new_dtb_port = newTC->getDTBPtr()->getMasterPort();
+        BaseMasterPort *old_itb_port = oldTC->getITBPtr()->getMasterPort();
+        BaseMasterPort *old_dtb_port = oldTC->getDTBPtr()->getMasterPort();
+        BaseMasterPort *new_itb_port = newTC->getITBPtr()->getMasterPort();
+        BaseMasterPort *new_dtb_port = newTC->getDTBPtr()->getMasterPort();
 
         // Move over any table walker ports if they exist
         if (new_itb_port) {
             assert(!new_itb_port->isConnected());
             assert(old_itb_port);
             assert(old_itb_port->isConnected());
-            SlavePort &slavePort = old_itb_port->getSlavePort();
+            BaseSlavePort &slavePort = old_itb_port->getSlavePort();
             old_itb_port->unbind();
             new_itb_port->bind(slavePort);
         }
@@ -399,7 +419,7 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
             assert(!new_dtb_port->isConnected());
             assert(old_dtb_port);
             assert(old_dtb_port->isConnected());
-            SlavePort &slavePort = old_dtb_port->getSlavePort();
+            BaseSlavePort &slavePort = old_dtb_port->getSlavePort();
             old_dtb_port->unbind();
             new_dtb_port->bind(slavePort);
         }
@@ -409,13 +429,13 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
         CheckerCPU *oldChecker = oldTC->getCheckerCpuPtr();
         CheckerCPU *newChecker = newTC->getCheckerCpuPtr();
         if (oldChecker && newChecker) {
-            MasterPort *old_checker_itb_port =
+            BaseMasterPort *old_checker_itb_port =
                 oldChecker->getITBPtr()->getMasterPort();
-            MasterPort *old_checker_dtb_port =
+            BaseMasterPort *old_checker_dtb_port =
                 oldChecker->getDTBPtr()->getMasterPort();
-            MasterPort *new_checker_itb_port =
+            BaseMasterPort *new_checker_itb_port =
                 newChecker->getITBPtr()->getMasterPort();
-            MasterPort *new_checker_dtb_port =
+            BaseMasterPort *new_checker_dtb_port =
                 newChecker->getDTBPtr()->getMasterPort();
 
             // Move over any table walker ports if they exist for checker
@@ -423,7 +443,8 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
                 assert(!new_checker_itb_port->isConnected());
                 assert(old_checker_itb_port);
                 assert(old_checker_itb_port->isConnected());
-                SlavePort &slavePort = old_checker_itb_port->getSlavePort();
+                BaseSlavePort &slavePort =
+                    old_checker_itb_port->getSlavePort();
                 old_checker_itb_port->unbind();
                 new_checker_itb_port->bind(slavePort);
             }
@@ -431,7 +452,8 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
                 assert(!new_checker_dtb_port->isConnected());
                 assert(old_checker_dtb_port);
                 assert(old_checker_dtb_port->isConnected());
-                SlavePort &slavePort = old_checker_dtb_port->getSlavePort();
+                BaseSlavePort &slavePort =
+                    old_checker_dtb_port->getSlavePort();
                 old_checker_dtb_port->unbind();
                 new_checker_dtb_port->bind(slavePort);
             }
@@ -456,15 +478,31 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
     // we are switching to.
     assert(!getInstPort().isConnected());
     assert(oldCPU->getInstPort().isConnected());
-    SlavePort &inst_peer_port = oldCPU->getInstPort().getSlavePort();
+    BaseSlavePort &inst_peer_port = oldCPU->getInstPort().getSlavePort();
     oldCPU->getInstPort().unbind();
     getInstPort().bind(inst_peer_port);
 
     assert(!getDataPort().isConnected());
     assert(oldCPU->getDataPort().isConnected());
-    SlavePort &data_peer_port = oldCPU->getDataPort().getSlavePort();
+    BaseSlavePort &data_peer_port = oldCPU->getDataPort().getSlavePort();
     oldCPU->getDataPort().unbind();
     getDataPort().bind(data_peer_port);
+}
+
+void
+BaseCPU::flushTLBs()
+{
+    for (ThreadID i = 0; i < threadContexts.size(); ++i) {
+        ThreadContext &tc(*threadContexts[i]);
+        CheckerCPU *checker(tc.getCheckerCpuPtr());
+
+        tc.getITBPtr()->flushAll();
+        tc.getDTBPtr()->flushAll();
+        if (checker) {
+            checker->getITBPtr()->flushAll();
+            checker->getDTBPtr()->flushAll();
+        }
+    }
 }
 
 
@@ -488,14 +526,37 @@ void
 BaseCPU::serialize(std::ostream &os)
 {
     SERIALIZE_SCALAR(instCnt);
-    interrupts->serialize(os);
+
+    if (!_switchedOut) {
+        /* Unlike _pid, _taskId is not serialized, as they are dynamically
+         * assigned unique ids that are only meaningful for the duration of
+         * a specific run. We will need to serialize the entire taskMap in
+         * system. */
+        SERIALIZE_SCALAR(_pid);
+
+        interrupts->serialize(os);
+
+        // Serialize the threads, this is done by the CPU implementation.
+        for (ThreadID i = 0; i < numThreads; ++i) {
+            nameOut(os, csprintf("%s.xc.%i", name(), i));
+            serializeThread(os, i);
+        }
+    }
 }
 
 void
 BaseCPU::unserialize(Checkpoint *cp, const std::string &section)
 {
     UNSERIALIZE_SCALAR(instCnt);
-    interrupts->unserialize(cp, section);
+
+    if (!_switchedOut) {
+        UNSERIALIZE_SCALAR(_pid);
+        interrupts->unserialize(cp, section);
+
+        // Unserialize the threads, this is done by the CPU implementation.
+        for (ThreadID i = 0; i < numThreads; ++i)
+            unserializeThread(cp, csprintf("%s.xc.%i", section, i), i);
+    }
 }
 
 void
@@ -523,25 +584,4 @@ BaseCPU::traceFunctionsInternal(Addr pc)
                  curTick() - functionEntryTick, curTick(), sym_str);
         functionEntryTick = curTick();
     }
-}
-
-bool
-BaseCPU::CpuPort::recvTimingResp(PacketPtr pkt)
-{
-    panic("BaseCPU doesn't expect recvTiming!\n");
-    return true;
-}
-
-void
-BaseCPU::CpuPort::recvRetry()
-{
-    panic("BaseCPU doesn't expect recvRetry!\n");
-}
-
-void
-BaseCPU::CpuPort::recvFunctionalSnoop(PacketPtr pkt)
-{
-    // No internal storage to update (in the general case). A CPU with
-    // internal storage, e.g. an LSQ that should be part of the
-    // coherent memory has to check against stored data.
 }

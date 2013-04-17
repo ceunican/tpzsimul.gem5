@@ -41,6 +41,7 @@
  *          Andreas Hansson
  */
 
+#include "base/trace.hh"
 #include "debug/Drain.hh"
 #include "debug/PacketQueue.hh"
 #include "mem/packet_queue.hh"
@@ -48,7 +49,7 @@
 using namespace std;
 
 PacketQueue::PacketQueue(EventManager& _em, const std::string& _label)
-    : em(_em), sendEvent(this), drainEvent(NULL), label(_label),
+    : em(_em), sendEvent(this), drainManager(NULL), label(_label),
       waitingOnRetry(false)
 {
 }
@@ -112,6 +113,13 @@ PacketQueue::schedSendTiming(PacketPtr pkt, Tick when, bool send_as_snoop)
     // express snoops should never be queued
     assert(!pkt->isExpressSnoop());
 
+    // add a very basic sanity check on the port to ensure the
+    // invisible buffer is not growing beyond reasonable limits
+    if (transmitList.size() > 100) {
+        panic("Packet queue %s has grown beyond 100 packets\n",
+              name());
+    }
+
     // nothing on the list, or earlier than current front element,
     // schedule an event
     if (transmitList.empty() || when < transmitList.front().tick) {
@@ -173,11 +181,11 @@ PacketQueue::scheduleSend(Tick time)
             em.schedule(&sendEvent, std::max(nextReady, curTick() + 1));
     } else {
         // no more to send, so if we're draining, we may be done
-        if (drainEvent && transmitList.empty() && !sendEvent.scheduled()) {
+        if (drainManager && transmitList.empty() && !sendEvent.scheduled()) {
             DPRINTF(Drain, "PacketQueue done draining,"
                     "processing drain event\n");
-            drainEvent->process();
-            drainEvent = NULL;
+            drainManager->signalDrainDone();
+            drainManager = NULL;
         }
     }
 }
@@ -204,12 +212,12 @@ PacketQueue::processSendEvent()
 }
 
 unsigned int
-PacketQueue::drain(Event *de)
+PacketQueue::drain(DrainManager *dm)
 {
     if (transmitList.empty() && !sendEvent.scheduled())
         return 0;
     DPRINTF(Drain, "PacketQueue not drained\n");
-    drainEvent = de;
+    drainManager = dm;
     return 1;
 }
 

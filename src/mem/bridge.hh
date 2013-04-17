@@ -84,20 +84,11 @@ class Bridge : public MemObject
 
       public:
 
-        Packet::SenderState *origSenderState;
         PortID origSrc;
 
-        RequestState(PacketPtr _pkt)
-            : origSenderState(_pkt->senderState),
-              origSrc(_pkt->getSrc())
+        RequestState(PortID orig_src) : origSrc(orig_src)
         { }
 
-        void fixResponse(PacketPtr pkt)
-        {
-            assert(pkt->senderState == this);
-            pkt->setDest(origSrc);
-            pkt->senderState = origSenderState;
-        }
     };
 
     /**
@@ -193,7 +184,7 @@ class Bridge : public MemObject
          */
         BridgeSlavePort(const std::string& _name, Bridge& _bridge,
                         BridgeMasterPort& _masterPort, Cycles _delay,
-                        int _resp_limit, std::vector<Range<Addr> > _ranges);
+                        int _resp_limit, std::vector<AddrRange> _ranges);
 
         /**
          * Queue a response packet to be sent out later and also schedule
@@ -338,9 +329,10 @@ class Bridge : public MemObject
 
   public:
 
-    virtual MasterPort& getMasterPort(const std::string& if_name,
-                                      int idx = -1);
-    virtual SlavePort& getSlavePort(const std::string& if_name, int idx = -1);
+    virtual BaseMasterPort& getMasterPort(const std::string& if_name,
+                                          PortID idx = InvalidPortID);
+    virtual BaseSlavePort& getSlavePort(const std::string& if_name,
+                                        PortID idx = InvalidPortID);
 
     virtual void init();
 

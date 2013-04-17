@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -38,17 +38,18 @@
  *          Ali Saidi
  */
 
-#include "base/vnc/vncserver.hh"
+#include "base/vnc/vncinput.hh"
 #include "base/bitmap.hh"
 #include "base/output.hh"
 #include "base/trace.hh"
 #include "debug/PL111.hh"
 #include "debug/Uart.hh"
 #include "dev/arm/amba_device.hh"
-#include "dev/arm/gic.hh"
+#include "dev/arm/base_gic.hh"
 #include "dev/arm/pl111.hh"
 #include "mem/packet.hh"
 #include "mem/packet_access.hh"
+#include "sim/system.hh"
 
 // clang complains about std::set being overloaded with Packet::set if
 // we open up the entire namespace std
@@ -64,24 +65,27 @@ Pl111::Pl111(const Params *p)
       clcdCrsrCtrl(0), clcdCrsrConfig(0), clcdCrsrPalette0(0),
       clcdCrsrPalette1(0), clcdCrsrXY(0), clcdCrsrClip(0), clcdCrsrImsc(0),
       clcdCrsrIcr(0), clcdCrsrRis(0), clcdCrsrMis(0),
-      vncserver(p->vnc), bmp(NULL), width(LcdMaxWidth), height(LcdMaxHeight),
+      pixelClock(p->pixel_clock), vnc(p->vnc), bmp(NULL), pic(NULL),
+      width(LcdMaxWidth), height(LcdMaxHeight),
       bytesPerPixel(4), startTime(0), startAddr(0), maxAddr(0), curAddr(0),
       waterMark(0), dmaPendingNum(0), readEvent(this), fillFifoEvent(this),
-      dmaDoneEvent(maxOutstandingDma, this), intEvent(this)
+      dmaDoneEventAll(maxOutstandingDma, this),
+      dmaDoneEventFree(maxOutstandingDma),
+      intEvent(this)
 {
     pioSize = 0xFFFF;
 
-    pic = simout.create(csprintf("%s.framebuffer.bmp", sys->name()), true);
-
-    const int buffer_size = LcdMaxWidth * LcdMaxHeight * sizeof(uint32_t);
     dmaBuffer = new uint8_t[buffer_size];
 
     memset(lcdPalette, 0, sizeof(lcdPalette));
     memset(cursorImage, 0, sizeof(cursorImage));
     memset(dmaBuffer, 0, buffer_size);
 
-    if (vncserver)
-        vncserver->setFramebufferAddr(dmaBuffer);
+    for (int i = 0; i < maxOutstandingDma; ++i)
+        dmaDoneEventFree[i] = &dmaDoneEventAll[i];
+
+    if (vnc)
+        vnc->setFramebufferAddr(dmaBuffer);
 }
 
 Pl111::~Pl111()
@@ -386,18 +390,18 @@ Pl111::updateVideoParams()
             bytesPerPixel = 2;
         }
 
-        if (vncserver) {
+        if (vnc) {
             if (lcdControl.lcdbpp == bpp24 && lcdControl.bgr)
-                vncserver->setFrameBufferParams(VideoConvert::bgr8888, width,
+                vnc->setFrameBufferParams(VideoConvert::bgr8888, width,
                        height);
             else if (lcdControl.lcdbpp == bpp24 && !lcdControl.bgr)
-                vncserver->setFrameBufferParams(VideoConvert::rgb8888, width,
+                vnc->setFrameBufferParams(VideoConvert::rgb8888, width,
                        height);
             else if (lcdControl.lcdbpp == bpp16m565 && lcdControl.bgr)
-                vncserver->setFrameBufferParams(VideoConvert::bgr565, width,
+                vnc->setFrameBufferParams(VideoConvert::bgr565, width,
                        height);
             else if (lcdControl.lcdbpp == bpp16m565 && !lcdControl.bgr)
-                vncserver->setFrameBufferParams(VideoConvert::rgb565, width,
+                vnc->setFrameBufferParams(VideoConvert::rgb565, width,
                        height);
             else
                 panic("Unimplemented video mode\n");
@@ -440,13 +444,11 @@ Pl111::readFramebuffer()
         schedule(intEvent, nextCycle());
 
     curAddr = 0;
-    startTime = curCycle();
+    startTime = curTick();
 
     maxAddr = static_cast<Addr>(length * bytesPerPixel);
 
     DPRINTF(PL111, " lcd frame buffer size of %d bytes \n", maxAddr);
-
-    dmaPendingNum = 0;
 
     fillFifo();
 }
@@ -459,14 +461,17 @@ Pl111::fillFifo()
         // due to assertion in scheduling state
         ++dmaPendingNum;
 
-        assert(!dmaDoneEvent[dmaPendingNum-1].scheduled());
+        assert(!dmaDoneEventFree.empty());
+        DmaDoneEvent *event(dmaDoneEventFree.back());
+        dmaDoneEventFree.pop_back();
+        assert(!event->scheduled());
 
         // We use a uncachable request here because the requests from the CPU
         // will be uncacheable as well. If we have uncacheable and cacheable
         // requests in the memory system for the same address it won't be
         // pleased
         dmaPort.dmaAction(MemCmd::ReadReq, curAddr + startAddr, dmaSize,
-                          &dmaDoneEvent[dmaPendingNum-1], curAddr + dmaBuffer,
+                          event, curAddr + dmaBuffer,
                           0, Request::UNCACHEABLE);
         curAddr += dmaSize;
     }
@@ -475,13 +480,15 @@ Pl111::fillFifo()
 void
 Pl111::dmaDone()
 {
-    Cycles maxFrameTime(lcdTiming2.cpl * height);
+    DPRINTF(PL111, "DMA Done\n");
+
+    Tick maxFrameTime = lcdTiming2.cpl * height * pixelClock;
 
     --dmaPendingNum;
 
     if (maxAddr == curAddr && !dmaPendingNum) {
-        if ((curCycle() - startTime) > maxFrameTime) {
-            warn("CLCD controller buffer underrun, took %d cycles when should"
+        if ((curTick() - startTime) > maxFrameTime) {
+            warn("CLCD controller buffer underrun, took %d ticks when should"
                  " have taken %d\n", curTick() - startTime, maxFrameTime);
             lcdRis.underflow = 1;
             if (!intEvent.scheduled())
@@ -489,25 +496,26 @@ Pl111::dmaDone()
         }
 
         assert(!readEvent.scheduled());
-        if (vncserver)
-            vncserver->setDirty();
+        if (vnc)
+            vnc->setDirty();
 
         DPRINTF(PL111, "-- write out frame buffer into bmp\n");
 
+        if (!pic)
+            pic = simout.create(csprintf("%s.framebuffer.bmp", sys->name()), true);
+
         assert(bmp);
+        assert(pic);
         pic->seekp(0);
         bmp->write(pic);
 
         // schedule the next read based on when the last frame started
         // and the desired fps (i.e. maxFrameTime), we turn the
-        // argument into a relative number of cycles in the future by
-        // subtracting curCycle()
+        // argument into a relative number of cycles in the future
         if (lcdControl.lcden)
-            // @todo: This is a terrible way of doing the time
-            // keeping, make it all relative
-            schedule(readEvent,
-                     clockEdge(Cycles(startTime - curCycle() +
-                                      maxFrameTime)));
+            schedule(readEvent, clockEdge(ticksToCycles(startTime -
+                                                        curTick() +
+                                                        maxFrameTime)));
     }
 
     if (dmaPendingNum > (maxOutstandingDma - waterMark))
@@ -575,7 +583,7 @@ Pl111::serialize(std::ostream &os)
     SERIALIZE_SCALAR(width);
     SERIALIZE_SCALAR(bytesPerPixel);
 
-    SERIALIZE_ARRAY(dmaBuffer, height * width);
+    SERIALIZE_ARRAY(dmaBuffer, buffer_size);
     SERIALIZE_SCALAR(startTime);
     SERIALIZE_SCALAR(startAddr);
     SERIALIZE_SCALAR(maxAddr);
@@ -601,8 +609,8 @@ Pl111::serialize(std::ostream &os)
     vector<Tick> dma_done_event_tick;
     dma_done_event_tick.resize(maxOutstandingDma);
     for (int x = 0; x < maxOutstandingDma; x++) {
-        dma_done_event_tick[x] = dmaDoneEvent[x].scheduled() ?
-            dmaDoneEvent[x].when() : 0;
+        dma_done_event_tick[x] = dmaDoneEventAll[x].scheduled() ?
+            dmaDoneEventAll[x].when() : 0;
     }
     arrayParamOut(os, "dma_done_event_tick", dma_done_event_tick);
 }
@@ -677,7 +685,7 @@ Pl111::unserialize(Checkpoint *cp, const std::string &section)
     UNSERIALIZE_SCALAR(width);
     UNSERIALIZE_SCALAR(bytesPerPixel);
 
-    UNSERIALIZE_ARRAY(dmaBuffer, height * width);
+    UNSERIALIZE_ARRAY(dmaBuffer, buffer_size);
     UNSERIALIZE_SCALAR(startTime);
     UNSERIALIZE_SCALAR(startAddr);
     UNSERIALIZE_SCALAR(maxAddr);
@@ -703,15 +711,19 @@ Pl111::unserialize(Checkpoint *cp, const std::string &section)
     vector<Tick> dma_done_event_tick;
     dma_done_event_tick.resize(maxOutstandingDma);
     arrayParamIn(cp, section, "dma_done_event_tick", dma_done_event_tick);
+    dmaDoneEventFree.clear();
     for (int x = 0; x < maxOutstandingDma; x++) {
         if (dma_done_event_tick[x])
-            schedule(dmaDoneEvent[x], dma_done_event_tick[x]);
+            schedule(dmaDoneEventAll[x], dma_done_event_tick[x]);
+        else
+            dmaDoneEventFree.push_back(&dmaDoneEventAll[x]);
     }
+    assert(maxOutstandingDma - dmaDoneEventFree.size() == dmaPendingNum);
 
     if (lcdControl.lcdpwr) {
         updateVideoParams();
-        if (vncserver)
-            vncserver->setDirty();
+        if (vnc)
+            vnc->setDirty();
     }
 }
 

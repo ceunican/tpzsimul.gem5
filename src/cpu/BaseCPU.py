@@ -51,31 +51,77 @@ from Bus import CoherentBus
 from InstTracer import InstTracer
 from ExeTracer import ExeTracer
 from MemObject import MemObject
+from BranchPredictor import BranchPredictor
 
 default_tracer = ExeTracer()
 
 if buildEnv['TARGET_ISA'] == 'alpha':
     from AlphaTLB import AlphaDTB, AlphaITB
     from AlphaInterrupts import AlphaInterrupts
+    from AlphaISA import AlphaISA
+    isa_class = AlphaISA
 elif buildEnv['TARGET_ISA'] == 'sparc':
     from SparcTLB import SparcTLB
     from SparcInterrupts import SparcInterrupts
+    from SparcISA import SparcISA
+    isa_class = SparcISA
 elif buildEnv['TARGET_ISA'] == 'x86':
     from X86TLB import X86TLB
     from X86LocalApic import X86LocalApic
+    from X86ISA import X86ISA
+    isa_class = X86ISA
 elif buildEnv['TARGET_ISA'] == 'mips':
     from MipsTLB import MipsTLB
     from MipsInterrupts import MipsInterrupts
+    from MipsISA import MipsISA
+    isa_class = MipsISA
 elif buildEnv['TARGET_ISA'] == 'arm':
     from ArmTLB import ArmTLB
     from ArmInterrupts import ArmInterrupts
+    from ArmISA import ArmISA
+    isa_class = ArmISA
 elif buildEnv['TARGET_ISA'] == 'power':
     from PowerTLB import PowerTLB
     from PowerInterrupts import PowerInterrupts
+    from PowerISA import PowerISA
+    isa_class = PowerISA
 
 class BaseCPU(MemObject):
     type = 'BaseCPU'
     abstract = True
+    cxx_header = "cpu/base.hh"
+
+    @classmethod
+    def export_methods(cls, code):
+        code('''
+    void switchOut();
+    void takeOverFrom(BaseCPU *cpu);
+    bool switchedOut();
+    void flushTLBs();
+''')
+
+    @classmethod
+    def memory_mode(cls):
+        """Which memory mode does this CPU require?"""
+        return 'invalid'
+
+    @classmethod
+    def require_caches(cls):
+        """Does the CPU model require caches?
+
+        Some CPU models might make assumptions that require them to
+        have caches.
+        """
+        return False
+
+    @classmethod
+    def support_take_over(cls):
+        """Does the CPU model support CPU takeOverFrom?"""
+        return False
+
+    def takeOverFrom(self, old_cpu):
+        self._ccObject.takeOverFrom(old_cpu._ccObject)
+
 
     system = Param.System(Parent.any, "system object")
     cpu_id = Param.Int(-1, "CPU identifier")
@@ -101,31 +147,37 @@ class BaseCPU(MemObject):
         itb = Param.SparcTLB(SparcTLB(), "Instruction TLB")
         interrupts = Param.SparcInterrupts(
                 NULL, "Interrupt Controller")
+        isa = VectorParam.SparcISA([ isa_class() ], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'alpha':
         dtb = Param.AlphaTLB(AlphaDTB(), "Data TLB")
         itb = Param.AlphaTLB(AlphaITB(), "Instruction TLB")
         interrupts = Param.AlphaInterrupts(
                 NULL, "Interrupt Controller")
+        isa = VectorParam.AlphaISA([ isa_class() ], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'x86':
         dtb = Param.X86TLB(X86TLB(), "Data TLB")
         itb = Param.X86TLB(X86TLB(), "Instruction TLB")
         interrupts = Param.X86LocalApic(NULL, "Interrupt Controller")
+        isa = VectorParam.X86ISA([ isa_class() ], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'mips':
         dtb = Param.MipsTLB(MipsTLB(), "Data TLB")
         itb = Param.MipsTLB(MipsTLB(), "Instruction TLB")
         interrupts = Param.MipsInterrupts(
                 NULL, "Interrupt Controller")
+        isa = VectorParam.MipsISA([ isa_class() ], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'arm':
         dtb = Param.ArmTLB(ArmTLB(), "Data TLB")
         itb = Param.ArmTLB(ArmTLB(), "Instruction TLB")
         interrupts = Param.ArmInterrupts(
                 NULL, "Interrupt Controller")
+        isa = VectorParam.ArmISA([ isa_class() ], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'power':
         UnifiedTLB = Param.Bool(True, "Is this a Unified TLB?")
         dtb = Param.PowerTLB(PowerTLB(), "Data TLB")
         itb = Param.PowerTLB(PowerTLB(), "Instruction TLB")
         interrupts = Param.PowerInterrupts(
                 NULL, "Interrupt Controller")
+        isa = VectorParam.PowerISA([ isa_class() ], "ISA instance")
     else:
         print "Don't know what TLB to use for ISA %s" % \
             buildEnv['TARGET_ISA']
@@ -142,14 +194,17 @@ class BaseCPU(MemObject):
     progress_interval = Param.Frequency('0Hz',
         "frequency to print out the progress message")
 
-    defer_registration = Param.Bool(False,
-        "defer registration with system (for sampling)")
+    switched_out = Param.Bool(False,
+        "Leave the CPU switched out after startup (used when switching " \
+        "between CPU models)")
 
     tracer = Param.InstTracer(default_tracer, "Instruction tracer")
 
     icache_port = MasterPort("Instruction Port")
     dcache_port = MasterPort("Data Port")
     _cached_ports = ['icache_port', 'dcache_port']
+
+    branchPred = Param.BranchPredictor(NULL, "Branch Predictor")
 
     if buildEnv['TARGET_ISA'] in ['x86', 'arm']:
         _cached_ports += ["itb.walker.port", "dtb.walker.port"]
@@ -166,8 +221,9 @@ class BaseCPU(MemObject):
         elif buildEnv['TARGET_ISA'] == 'alpha':
             self.interrupts = AlphaInterrupts()
         elif buildEnv['TARGET_ISA'] == 'x86':
-            _localApic = X86LocalApic(pio_addr=0x2000000000000000)
-            self.interrupts = _localApic
+            self.interrupts = X86LocalApic(clock = Parent.clock * 16,
+                                           pio_addr=0x2000000000000000)
+            _localApic = self.interrupts
         elif buildEnv['TARGET_ISA'] == 'mips':
             self.interrupts = MipsInterrupts()
         elif buildEnv['TARGET_ISA'] == 'arm':
@@ -220,11 +276,19 @@ class BaseCPU(MemObject):
 
     def addTwoLevelCacheHierarchy(self, ic, dc, l2c, iwc = None, dwc = None):
         self.addPrivateSplitL1Caches(ic, dc, iwc, dwc)
-        self.toL2Bus = CoherentBus()
+        # Override the default bus clock of 1 GHz and uses the CPU
+        # clock for the L1-to-L2 bus, and also set a width of 32 bytes
+        # (256-bits), which is four times that of the default bus.
+        self.toL2Bus = CoherentBus(clock = Parent.clock, width = 32)
         self.connectCachedPorts(self.toL2Bus)
         self.l2cache = l2c
         self.toL2Bus.master = self.l2cache.cpu_side
         self._cached_ports = ['l2cache.mem_side']
+
+    def createThreads(self):
+        self.isa = [ isa_class() for i in xrange(self.numThreads) ]
+        if self.checker != NULL:
+            self.checker.createThreads()
 
     def addCheckerCpu(self):
         pass

@@ -38,7 +38,9 @@
 #include "arch/alpha/registers.hh"
 #include "arch/alpha/types.hh"
 #include "base/types.hh"
+#include "sim/sim_object.hh"
 
+struct AlphaISAParams;
 class BaseCPU;
 class Checkpoint;
 class EventManager;
@@ -46,10 +48,11 @@ class ThreadContext;
 
 namespace AlphaISA
 {
-    class ISA
+    class ISA : public SimObject
     {
       public:
         typedef uint64_t InternalProcReg;
+        typedef AlphaISAParams Params;
 
       protected:
         uint64_t fpcr;       // floating point condition codes
@@ -85,9 +88,8 @@ namespace AlphaISA
             memset(ipr, 0, sizeof(ipr));
         }
 
-        void serialize(EventManager *em, std::ostream &os);
-        void unserialize(EventManager *em, Checkpoint *cp,
-                const std::string &section);
+        void serialize(std::ostream &os);
+        void unserialize(Checkpoint *cp, const std::string &section);
 
         int
         flattenIntIndex(int reg)
@@ -101,11 +103,14 @@ namespace AlphaISA
             return reg;
         }
 
-        ISA()
-        {
-            clear();
-            initializeIprTable();
-        }
+        const Params *params() const;
+
+        ISA(Params *p);
+
+        void startup(ThreadContext *tc) {}
+
+        /// Explicitly import the otherwise hidden startup
+        using SimObject::startup;
     };
 }
 

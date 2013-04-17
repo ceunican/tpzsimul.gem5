@@ -28,11 +28,20 @@
 #          Brad Beckmann
 
 from m5.params import *
+from m5.proxy import *
 from Network import RubyNetwork
+from BasicRouter import BasicRouter
 
 class SimpleNetwork(RubyNetwork):
     type = 'SimpleNetwork'
+    cxx_header = "mem/ruby/network/simple/SimpleNetwork.hh"
     buffer_size = Param.Int(0,
         "default buffer size; 0 indicates infinite buffering");
     endpoint_bandwidth = Param.Int(1000, "bandwidth adjustment factor");
     adaptive_routing = Param.Bool(False, "enable adaptive routing");
+
+class Switch(BasicRouter):
+    type = 'Switch'
+    cxx_header = 'mem/ruby/network/simple/Switch.hh'
+    virt_nets = Param.Int(Parent.number_of_virtual_networks,
+                          "number of virtual networks")

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -38,8 +38,12 @@
  *          Andreas Hansson
  */
 
+#include "base/callback.hh"
+#include "base/output.hh"
+#include "base/trace.hh"
 #include "debug/CommMonitor.hh"
 #include "mem/comm_monitor.hh"
+#include "proto/packet.pb.h"
 #include "sim/stats.hh"
 
 CommMonitor::CommMonitor(Params* params)
@@ -50,14 +54,44 @@ CommMonitor::CommMonitor(Params* params)
       samplePeriodTicks(params->sample_period),
       readAddrMask(params->read_addr_mask),
       writeAddrMask(params->write_addr_mask),
-      stats(params)
+      stats(params),
+      traceStream(NULL)
 {
+    // If we are using a trace file, then open the file,
+    if (params->trace_file != "") {
+        // If the trace file is not specified as an absolute path,
+        // append the current simulation output directory
+        std::string filename = simout.resolve(params->trace_file);
+        traceStream = new ProtoOutputStream(filename);
+
+        // Create a protobuf message for the header and write it to
+        // the stream
+        Message::PacketHeader header_msg;
+        header_msg.set_obj_id(name());
+        header_msg.set_tick_freq(SimClock::Frequency);
+        traceStream->write(header_msg);
+
+        // Register a callback to compensate for the destructor not
+        // being called. The callback forces the stream to flush and
+        // closes the output file.
+        Callback* cb = new MakeCallback<CommMonitor,
+            &CommMonitor::closeStreams>(this);
+        registerExitCallback(cb);
+    }
+
     // keep track of the sample period both in ticks and absolute time
     samplePeriod.setTick(params->sample_period);
 
     DPRINTF(CommMonitor,
             "Created monitor %s with sample period %d ticks (%f s)\n",
             name(), samplePeriodTicks, samplePeriod);
+}
+
+void
+CommMonitor::closeStreams()
+{
+    if (traceStream != NULL)
+        delete traceStream;
 }
 
 CommMonitor*
@@ -74,8 +108,8 @@ CommMonitor::init()
         fatal("Communication monitor is not connected on both sides.\n");
 }
 
-MasterPort&
-CommMonitor::getMasterPort(const std::string& if_name, int idx)
+BaseMasterPort&
+CommMonitor::getMasterPort(const std::string& if_name, PortID idx)
 {
     if (if_name == "master") {
         return masterPort;
@@ -84,8 +118,8 @@ CommMonitor::getMasterPort(const std::string& if_name, int idx)
     }
 }
 
-SlavePort&
-CommMonitor::getSlavePort(const std::string& if_name, int idx)
+BaseSlavePort&
+CommMonitor::getSlavePort(const std::string& if_name, PortID idx)
 {
     if (if_name == "slave") {
         return slavePort;
@@ -128,19 +162,19 @@ CommMonitor::recvTimingReq(PacketPtr pkt)
     // or even deleted when sendTiming() is called.
     bool isRead = pkt->isRead();
     bool isWrite = pkt->isWrite();
+    int cmd = pkt->cmdToIndex();
+    Request::FlagsType req_flags = pkt->req->getFlags();
     unsigned size = pkt->getSize();
     Addr addr = pkt->getAddr();
     bool needsResponse = pkt->needsResponse();
     bool memInhibitAsserted = pkt->memInhibitAsserted();
-    Packet::SenderState* senderState = pkt->senderState;
 
     // If a cache miss is served by a cache, a monitor near the memory
     // would see a request which needs a response, but this response
     // would be inhibited and not come back from the memory. Therefore
     // we additionally have to check the inhibit flag.
     if (needsResponse && !memInhibitAsserted && !stats.disableLatencyHists) {
-        pkt->senderState = new CommMonitorSenderState(senderState,
-                                                      curTick());
+        pkt->pushSenderState(new CommMonitorSenderState(curTick()));
     }
 
     // Attempt to send the packet (always succeeds for inhibited
@@ -149,8 +183,21 @@ CommMonitor::recvTimingReq(PacketPtr pkt)
 
     // If not successful, restore the sender state
     if (!successful && needsResponse && !stats.disableLatencyHists) {
-        delete pkt->senderState;
-        pkt->senderState = senderState;
+        delete pkt->popSenderState();
+    }
+
+    if (successful && traceStream != NULL) {
+        // Create a protobuf message representing the
+        // packet. Currently we do not preserve the flags in the
+        // trace.
+        Message::Packet pkt_msg;
+        pkt_msg.set_tick(curTick());
+        pkt_msg.set_cmd(cmd);
+        pkt_msg.set_flags(req_flags);
+        pkt_msg.set_addr(addr);
+        pkt_msg.set_size(size);
+
+        traceStream->write(pkt_msg);
     }
 
     if (successful && isRead) {
@@ -258,7 +305,7 @@ CommMonitor::recvTimingResp(PacketPtr pkt)
             panic("Monitor got a response without monitor sender state\n");
 
         // Restore the sate
-        pkt->senderState = commReceivedState->origSenderState;
+        pkt->senderState = commReceivedState->predecessor;
     }
 
     // Attempt to send the packet

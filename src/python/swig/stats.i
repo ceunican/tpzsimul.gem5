@@ -123,6 +123,7 @@ reset()
 %ignore Stats::Info::flags;
 
 %import  "base/stats/types.hh"
+%import  "base/types.hh"
 
 %include "base/stats/info.hh"
 %include "base/stats/output.hh"
@@ -151,6 +152,10 @@ Output *initText(const std::string &filename, bool desc);
 
 void schedStatEvent(bool dump, bool reset,
                     Tick when = curTick(), Tick repeat = 0);
+
+void periodicStatDump(Tick period = 0);
+
+void updateEvents();
 
 void processResetQueue();
 void processDumpQueue();

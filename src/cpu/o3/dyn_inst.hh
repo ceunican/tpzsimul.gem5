@@ -93,6 +93,8 @@ class BaseO3DynInst : public BaseDynInst<Impl>
     /** BaseDynInst constructor given a static inst pointer. */
     BaseO3DynInst(StaticInstPtr _staticInst, StaticInstPtr _macroop);
 
+    ~BaseO3DynInst();
+
     /** Executes the instruction.*/
     Fault execute();
 
@@ -123,12 +125,14 @@ class BaseO3DynInst : public BaseDynInst<Impl>
   public:
 #if TRACING_ON
     /** Tick records used for the pipeline activity viewer. */
-    Tick fetchTick;
-    uint32_t decodeTick;
-    uint32_t renameTick;
-    uint32_t dispatchTick;
-    uint32_t issueTick;
-    uint32_t completeTick;
+    Tick fetchTick;	     // instruction fetch is completed.
+    int32_t decodeTick;  // instruction enters decode phase
+    int32_t renameTick;  // instruction enters rename phase
+    int32_t dispatchTick;
+    int32_t issueTick;
+    int32_t completeTick;
+    int32_t commitTick;
+    int32_t storeTick;
 #endif
 
     /** Reads a misc. register, including any side-effects the read
@@ -145,8 +149,18 @@ class BaseO3DynInst : public BaseDynInst<Impl>
     void setMiscReg(int misc_reg, const MiscReg &val)
     {
         /** Writes to misc. registers are recorded and deferred until the
-         * commit stage, when updateMiscRegs() is called.
+         * commit stage, when updateMiscRegs() is called. First, check if
+         * the misc reg has been written before and update its value to be
+         * committed instead of making a new entry. If not, make a new
+         * entry and record the write.
          */
+        for (int idx = 0; idx < _numDestMiscRegs; idx++) {
+            if (_destMiscRegIdx[idx] == misc_reg) {
+               _destMiscRegVal[idx] = val;
+               return;
+            }
+        }
+
         assert(_numDestMiscRegs < TheISA::MaxMiscDestRegs);
         _destMiscRegIdx[_numDestMiscRegs] = misc_reg;
         _destMiscRegVal[_numDestMiscRegs] = val;
@@ -180,14 +194,14 @@ class BaseO3DynInst : public BaseDynInst<Impl>
         // using the TC during an instruction's execution (specifically for
         // instructions that have side-effects that use the TC).  Fix this.
         // See cpu/o3/dyn_inst_impl.hh.
-        bool in_syscall = this->thread->inSyscall;
-        this->thread->inSyscall = true;
+        bool no_squash_from_TC = this->thread->noSquashFromTC;
+        this->thread->noSquashFromTC = true;
 
         for (int i = 0; i < _numDestMiscRegs; i++)
             this->cpu->setMiscReg(
                 _destMiscRegIdx[i], _destMiscRegVal[i], this->threadNumber);
 
-        this->thread->inSyscall = in_syscall;
+        this->thread->noSquashFromTC = no_squash_from_TC;
     }
 
     void forwardOldRegs()

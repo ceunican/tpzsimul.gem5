@@ -78,6 +78,14 @@ SimpleNetwork::SimpleNetwork(const Params *p)
                 new MessageBuffer(csprintf("fromNet node %d j %d", node, j));
         }
     }
+
+    // record the routers
+    for (vector<BasicRouter*>::const_iterator i = p->routers.begin();
+         i != p->routers.end(); ++i) {
+        Switch* s = safe_cast<Switch*>(*i);
+        m_switch_ptr_vector.push_back(s);
+        s->init_net_ptr(this);
+    }
 }
 
 void
@@ -88,11 +96,6 @@ SimpleNetwork::init()
     // The topology pointer should have already been initialized in
     // the parent class network constructor.
     assert(m_topology_ptr != NULL);
-    int number_of_switches = m_topology_ptr->numSwitches();
-    for (int i = 0; i < number_of_switches; i++) {
-        m_switch_ptr_vector.push_back(new Switch(i, this));
-    }
-
     // false because this isn't a reconfiguration
     m_topology_ptr->createLinks(this, false);
 }
@@ -282,15 +285,14 @@ SimpleNetwork::printStats(ostream& out) const
         
         if (total_msg_counts[type] > 0) {
             out << "total_msg_count_" << type << ": " << total_msg_counts[type] 
-                << " " << total_msg_counts[type] * 
-                uint64(RubySystem::getNetwork()->MessageSizeType_to_int(type))
+                << " " << total_msg_counts[type] *
+                uint64(MessageSizeType_to_int(type))
                 << endl;
             
             total_msgs += total_msg_counts[type];
             
             total_bytes += total_msg_counts[type] * 
-                uint64(RubySystem::getNetwork()->MessageSizeType_to_int(type));
-            
+                uint64(MessageSizeType_to_int(type));
         }
     }
     
@@ -301,7 +303,6 @@ SimpleNetwork::printStats(ostream& out) const
     for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
         m_switch_ptr_vector[i]->printStats(out);
     }
-    m_topology_ptr->printStats(out);
 }
 
 void
@@ -310,7 +311,6 @@ SimpleNetwork::clearStats()
     for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
         m_switch_ptr_vector[i]->clearStats();
     }
-    m_topology_ptr->clearStats();
 }
 
 void
@@ -323,4 +323,42 @@ SimpleNetwork *
 SimpleNetworkParams::create()
 {
     return new SimpleNetwork(this);
+}
+
+/*
+ * The simple network has an array of switches. These switches have buffers
+ * that need to be accessed for functional reads and writes. Also the links
+ * between different switches have buffers that need to be accessed.
+ */
+bool
+SimpleNetwork::functionalRead(Packet *pkt)
+{
+    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
+        if (m_switch_ptr_vector[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        if (m_buffers_to_free[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32_t
+SimpleNetwork::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
+        num_functional_writes += m_switch_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        num_functional_writes += m_buffers_to_free[i]->functionalWrite(pkt);
+    }
+    return num_functional_writes;
 }

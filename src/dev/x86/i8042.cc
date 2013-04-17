@@ -411,10 +411,12 @@ X86ISA::I8042::write(PacketPtr pkt)
           case ReadOutputPort:
             panic("i8042 \"Read output port\" command not implemented.\n");
           case WriteOutputPort:
-            panic("i8042 \"Write output port\" command not implemented.\n");
+            warn("i8042 \"Write output port\" command not implemented.\n");
+            lastCommand = WriteOutputPort;
           case WriteKeyboardOutputBuff:
-            panic("i8042 \"Write keyboard output buffer\" "
+            warn("i8042 \"Write keyboard output buffer\" "
                     "command not implemented.\n");
+            lastCommand = WriteKeyboardOutputBuff;
           case WriteMouseOutputBuff:
             DPRINTF(I8042, "Got command to write to mouse output buffer.\n");
             lastCommand = WriteMouseOutputBuff;
@@ -432,7 +434,7 @@ X86ISA::I8042::write(PacketPtr pkt)
           case SystemReset:
             panic("i8042 \"System reset\" command not implemented.\n");
           default:
-            panic("Write to unknown i8042 "
+            warn("Write to unknown i8042 "
                     "(keyboard controller) command port.\n");
         }
     } else {
@@ -490,7 +492,7 @@ X86ISA::PS2Keyboard::serialize(const std::string &base, std::ostream &os)
     }
     arrayParamOut(os, base + ".outBuffer.elts", buffer,
             bufferSize*sizeof(uint8_t));
-    delete buffer;
+    delete[] buffer;
 }
 
 void
@@ -506,7 +508,7 @@ X86ISA::PS2Keyboard::unserialize(const std::string &base, Checkpoint *cp,
     for (int i = 0; i < bufferSize; ++i) {
         outBuffer.push(buffer[i]);
     }
-    delete buffer;
+    delete[] buffer;
 }
 
 void
@@ -523,7 +525,7 @@ X86ISA::PS2Mouse::serialize(const std::string &base, std::ostream &os)
     }
     arrayParamOut(os, base + ".outBuffer.elts", buffer,
             bufferSize*sizeof(uint8_t));
-    delete buffer;
+    delete[] buffer;
     paramOut(os, base + ".status", statusData);
     paramOut(os, base + ".resolution", resolution);
     paramOut(os, base + ".sampleRate", sampleRate);
@@ -543,7 +545,7 @@ X86ISA::PS2Mouse::unserialize(const std::string &base, Checkpoint *cp,
     for (int i = 0; i < bufferSize; ++i) {
         outBuffer.push(buffer[i]);
     }
-    delete buffer;
+    delete[] buffer;
     paramIn(cp, section, base + ".status", statusData);
     paramIn(cp, section, base + ".resolution", resolution);
     paramIn(cp, section, base + ".sampleRate", sampleRate);

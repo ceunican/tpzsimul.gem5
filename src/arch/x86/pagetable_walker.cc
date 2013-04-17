@@ -88,7 +88,7 @@ Walker::start(ThreadContext * _tc, BaseTLB::Translation *_translation,
     // outstanding requests, see if this request can be coalesced with
     // another one (i.e. either coalesce or start walk)
     WalkerState * newState = new WalkerState(this, _translation, _req);
-    newState->initState(_tc, _mode, sys->getMemoryMode() == Enums::timing);
+    newState->initState(_tc, _mode, sys->isTimingMode());
     if (currStates.size()) {
         assert(newState->isTiming());
         DPRINTF(PageTableWalker, "Walks in progress: %d\n", currStates.size());
@@ -123,8 +123,7 @@ bool
 Walker::recvTimingResp(PacketPtr pkt)
 {
     WalkerSenderState * senderState =
-        dynamic_cast<WalkerSenderState *>(pkt->senderState);
-    pkt->senderState = senderState->saved;
+        dynamic_cast<WalkerSenderState *>(pkt->popSenderState());
     WalkerState * senderWalk = senderState->senderWalk;
     bool walkComplete = senderWalk->recvPacket(pkt);
     delete senderState;
@@ -169,12 +168,12 @@ Walker::recvRetry()
 
 bool Walker::sendTiming(WalkerState* sendingState, PacketPtr pkt)
 {
-    pkt->senderState = new WalkerSenderState(sendingState, pkt->senderState);
+    pkt->pushSenderState(new WalkerSenderState(sendingState));
     return port.sendTimingReq(pkt);
 }
 
-MasterPort &
-Walker::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort &
+Walker::getMasterPort(const std::string &if_name, PortID idx)
 {
     if (if_name == "port")
         return port;
@@ -575,6 +574,9 @@ Walker::WalkerState::recvPacket(PacketPtr pkt)
     assert(!read);
     inflight--;
     if (pkt->isRead()) {
+        // @todo someone should pay for this
+        pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
+
         state = nextState;
         nextState = Ready;
         PacketPtr write = NULL;

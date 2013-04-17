@@ -32,7 +32,7 @@
 #include "mem/ruby/network/garnet/flexible-pipeline/NetworkLink.hh"
 
 NetworkLink::NetworkLink(const Params *p)
-    : SimObject(p)
+    : ClockedObject(p), FlexibleConsumer(this)
 {
     linkBuffer = new flitBuffer();
     m_in_port = 0;
@@ -78,7 +78,7 @@ NetworkLink::setSource(FlexibleConsumer *source)
 }
 
 void
-NetworkLink::request_vc_link(int vc, NetDest destination, Time request_time)
+NetworkLink::request_vc_link(int vc, NetDest destination, Cycles request_time)
 {
     link_consumer->request_vc(vc, m_in_port, destination, request_time);
 }
@@ -90,13 +90,13 @@ NetworkLink::isBufferNotFull_link(int vc)
 }
 
 void
-NetworkLink::grant_vc_link(int vc, Time grant_time)
+NetworkLink::grant_vc_link(int vc, Cycles grant_time)
 {
     link_source->grant_vc(m_out_port, vc, grant_time);
 }
 
 void
-NetworkLink::release_vc_link(int vc, Time release_time)
+NetworkLink::release_vc_link(int vc, Cycles release_time)
 {
     link_source->release_vc(m_out_port, vc, release_time);
 }
@@ -116,7 +116,7 @@ NetworkLink::getLinkUtilization()
 bool
 NetworkLink::isReady()
 {
-    return linkBuffer->isReady();
+    return linkBuffer->isReady(curCycle());
 }
 
 void
@@ -134,13 +134,14 @@ NetworkLink::setOutPort(int port)
 void
 NetworkLink::wakeup()
 {
-    if (!link_srcQueue->isReady())
+    if (!link_srcQueue->isReady(curCycle()))
         return;
 
     flit *t_flit = link_srcQueue->getTopFlit();
-    t_flit->set_time(g_system_ptr->getTime() + m_latency);
+    t_flit->set_time(curCycle() + m_latency);
     linkBuffer->insert(t_flit);
-    link_consumer->scheduleEvent(this, m_latency);
+    link_consumer->scheduleEventAbsolute(clockEdge(m_latency));
+
     m_link_utilized++;
     m_vc_load[t_flit->get_vc()]++;
 }
@@ -155,6 +156,18 @@ flit*
 NetworkLink::consumeLink()
 {
     return linkBuffer->getTopFlit();
+}
+
+bool
+NetworkLink::functionalRead(Packet *pkt)
+{
+    return linkBuffer->functionalRead(pkt);
+}
+
+uint32_t
+NetworkLink::functionalWrite(Packet *pkt)
+{
+    return linkBuffer->functionalWrite(pkt);
 }
 
 NetworkLink *

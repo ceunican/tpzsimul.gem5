@@ -43,6 +43,7 @@
 #include "base/cp_annotate.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "sim/full_system.hh"
+#include "debug/O3PipeView.hh"
 
 template <class Impl>
 BaseO3DynInst<Impl>::BaseO3DynInst(StaticInstPtr staticInst,
@@ -61,6 +62,42 @@ BaseO3DynInst<Impl>::BaseO3DynInst(StaticInstPtr _staticInst,
 {
     initVars();
 }
+
+template <class Impl>BaseO3DynInst<Impl>::~BaseO3DynInst()
+{
+#if TRACING_ON
+    if (DTRACE(O3PipeView)) {
+        Tick fetch = this->fetchTick;
+        // fetchTick can be -1 if the instruction fetched outside the trace window.
+        if (fetch != -1) {
+            Tick val;
+            // Print info needed by the pipeline activity viewer.
+            DPRINTFR(O3PipeView, "O3PipeView:fetch:%llu:0x%08llx:%d:%llu:%s\n",
+                     fetch,
+                     this->instAddr(),
+                     this->microPC(),
+                     this->seqNum,
+                     this->staticInst->disassemble(this->instAddr()));
+
+            val = (this->decodeTick == -1) ? 0 : fetch + this->decodeTick;
+            DPRINTFR(O3PipeView, "O3PipeView:decode:%llu\n", val);
+            val = (this->renameTick == -1) ? 0 : fetch + this->renameTick;
+            DPRINTFR(O3PipeView, "O3PipeView:rename:%llu\n", val);
+            val = (this->dispatchTick == -1) ? 0 : fetch + this->dispatchTick;
+            DPRINTFR(O3PipeView, "O3PipeView:dispatch:%llu\n", val);
+            val = (this->issueTick == -1) ? 0 : fetch + this->issueTick;
+            DPRINTFR(O3PipeView, "O3PipeView:issue:%llu\n", val);
+            val = (this->completeTick == -1) ? 0 : fetch + this->completeTick;
+            DPRINTFR(O3PipeView, "O3PipeView:complete:%llu\n", val);
+            val = (this->commitTick == -1) ? 0 : fetch + this->commitTick;
+
+            Tick valS = (this->storeTick == -1) ? 0 : fetch + this->storeTick;
+            DPRINTFR(O3PipeView, "O3PipeView:retire:%llu:store:%llu\n", val, valS);
+        }
+    }
+#endif
+};
+
 
 template <class Impl>
 void
@@ -82,12 +119,16 @@ BaseO3DynInst<Impl>::initVars()
     _numDestMiscRegs = 0;
 
 #if TRACING_ON
-    fetchTick = 0;
-    decodeTick = 0;
-    renameTick = 0;
-    dispatchTick = 0;
-    issueTick = 0;
-    completeTick = 0;
+    // Value -1 indicates that particular phase
+    // hasn't happened (yet).
+    fetchTick = -1;
+    decodeTick = -1;
+    renameTick = -1;
+    dispatchTick = -1;
+    issueTick = -1;
+    completeTick = -1;
+    commitTick = -1;
+    storeTick = -1;
 #endif
 }
 
@@ -99,12 +140,12 @@ BaseO3DynInst<Impl>::execute()
     // when using the TC during an instruction's execution
     // (specifically for instructions that have side-effects that use
     // the TC).  Fix this.
-    bool in_syscall = this->thread->inSyscall;
-    this->thread->inSyscall = true;
+    bool no_squash_from_TC = this->thread->noSquashFromTC;
+    this->thread->noSquashFromTC = true;
 
     this->fault = this->staticInst->execute(this, this->traceData);
 
-    this->thread->inSyscall = in_syscall;
+    this->thread->noSquashFromTC = no_squash_from_TC;
 
     return this->fault;
 }
@@ -117,12 +158,12 @@ BaseO3DynInst<Impl>::initiateAcc()
     // when using the TC during an instruction's execution
     // (specifically for instructions that have side-effects that use
     // the TC).  Fix this.
-    bool in_syscall = this->thread->inSyscall;
-    this->thread->inSyscall = true;
+    bool no_squash_from_TC = this->thread->noSquashFromTC;
+    this->thread->noSquashFromTC = true;
 
     this->fault = this->staticInst->initiateAcc(this, this->traceData);
 
-    this->thread->inSyscall = in_syscall;
+    this->thread->noSquashFromTC = no_squash_from_TC;
 
     return this->fault;
 }
@@ -135,8 +176,8 @@ BaseO3DynInst<Impl>::completeAcc(PacketPtr pkt)
     // when using the TC during an instruction's execution
     // (specifically for instructions that have side-effects that use
     // the TC).  Fix this.
-    bool in_syscall = this->thread->inSyscall;
-    this->thread->inSyscall = true;
+    bool no_squash_from_TC = this->thread->noSquashFromTC;
+    this->thread->noSquashFromTC = true;
 
     if (this->cpu->checker) {
         if (this->isStoreConditional()) {
@@ -146,7 +187,7 @@ BaseO3DynInst<Impl>::completeAcc(PacketPtr pkt)
 
     this->fault = this->staticInst->completeAcc(pkt, this, this->traceData);
 
-    this->thread->inSyscall = in_syscall;
+    this->thread->noSquashFromTC = no_squash_from_TC;
 
     return this->fault;
 }

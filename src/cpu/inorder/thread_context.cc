@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2007 MIPS Technologies, Inc.
  * All rights reserved.
  *
@@ -81,19 +93,11 @@ InOrderThreadContext::profileSample()
 void
 InOrderThreadContext::takeOverFrom(ThreadContext *old_context)
 {
-    // some things should already be set up
-    assert(getSystemPtr() == old_context->getSystemPtr());
-    assert(getProcessPtr() == old_context->getProcessPtr());
-
-    // copy over functional state
-    setStatus(old_context->status());
-    copyArchRegs(old_context);
+    ::takeOverFrom(*this, *old_context);
 
     thread->funcExeInst = old_context->readFuncExeInst();
- 
-    old_context->setStatus(ThreadContext::Halted);
 
-    thread->inSyscall = false;
+    thread->noSquashFromTC = false;
     thread->trapPending = false;
 }
 
@@ -148,21 +152,6 @@ InOrderThreadContext::regStats(const std::string &name)
     }
 }
 
-
-void
-InOrderThreadContext::serialize(std::ostream &os)
-{
-    panic("serialize unimplemented");
-}
-
-
-void
-InOrderThreadContext::unserialize(Checkpoint *cp, const std::string &section)
-{
-    panic("unserialize unimplemented");    
-}
-
-
 void
 InOrderThreadContext::copyArchRegs(ThreadContext *src_tc)
 {
@@ -173,7 +162,7 @@ InOrderThreadContext::copyArchRegs(ThreadContext *src_tc)
 void
 InOrderThreadContext::clearArchRegs()
 {
-    cpu->isa[thread->threadId()].clear();
+    cpu->isa[thread->threadId()]->clear();
 }
 
 
@@ -181,7 +170,7 @@ uint64_t
 InOrderThreadContext::readIntReg(int reg_idx)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenIntIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenIntIndex(reg_idx);
     return cpu->readIntReg(reg_idx, tid);
 }
 
@@ -189,7 +178,7 @@ FloatReg
 InOrderThreadContext::readFloatReg(int reg_idx)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenFloatIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenFloatIndex(reg_idx);
     return cpu->readFloatReg(reg_idx, tid);
 }
 
@@ -197,7 +186,7 @@ FloatRegBits
 InOrderThreadContext::readFloatRegBits(int reg_idx)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenFloatIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenFloatIndex(reg_idx);
     return cpu->readFloatRegBits(reg_idx, tid);
 }
 
@@ -211,7 +200,7 @@ void
 InOrderThreadContext::setIntReg(int reg_idx, uint64_t val)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenIntIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenIntIndex(reg_idx);
     cpu->setIntReg(reg_idx, val, tid);
 }
 
@@ -219,7 +208,7 @@ void
 InOrderThreadContext::setFloatReg(int reg_idx, FloatReg val)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenFloatIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenFloatIndex(reg_idx);
     cpu->setFloatReg(reg_idx, val, tid);
 }
 
@@ -227,7 +216,7 @@ void
 InOrderThreadContext::setFloatRegBits(int reg_idx, FloatRegBits val)
 {
     ThreadID tid = thread->threadId();
-    reg_idx = cpu->isa[tid].flattenFloatIndex(reg_idx);
+    reg_idx = cpu->isa[tid]->flattenFloatIndex(reg_idx);
     cpu->setFloatRegBits(reg_idx, val, tid);
 }
 
@@ -248,4 +237,47 @@ void
 InOrderThreadContext::setMiscReg(int misc_reg, const MiscReg &val)
 {
     cpu->setMiscReg(misc_reg, val, thread->threadId());
+}
+
+
+uint64_t
+InOrderThreadContext::readIntRegFlat(int idx)
+{
+    const ThreadID tid = thread->threadId();
+    return cpu->readIntReg(idx, tid);
+}
+
+void
+InOrderThreadContext::setIntRegFlat(int idx, uint64_t val)
+{
+    const ThreadID tid = thread->threadId();
+    cpu->setIntReg(idx, val, tid);
+}
+
+FloatReg
+InOrderThreadContext::readFloatRegFlat(int idx)
+{
+    const ThreadID tid = thread->threadId();
+    return cpu->readFloatReg(idx, tid);
+}
+
+void
+InOrderThreadContext::setFloatRegFlat(int idx, FloatReg val)
+{
+    const ThreadID tid = thread->threadId();
+    cpu->setFloatReg(idx, val, tid);
+}
+
+FloatRegBits
+InOrderThreadContext::readFloatRegBitsFlat(int idx)
+{
+    const ThreadID tid = thread->threadId();
+    return cpu->readFloatRegBits(idx, tid);
+}
+
+void
+InOrderThreadContext::setFloatRegBitsFlat(int idx, FloatRegBits val)
+{
+    const ThreadID tid = thread->threadId();
+    cpu->setFloatRegBits(idx, val, tid);
 }

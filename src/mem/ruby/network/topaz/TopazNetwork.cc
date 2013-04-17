@@ -31,19 +31,23 @@
 
 #include "base/cast.hh"
 #include "base/stl_helpers.hh"
-#include "debug/RubyNetwork.hh"
-#include "mem/protocol/MachineType.hh"
 #include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/common/NetDest.hh"
-#include "mem/ruby/network/simple/SimpleLink.hh"
-#include "mem/ruby/network/simple/Throttle.hh"
-#include "mem/ruby/network/topaz/TopazNetwork.hh"
-#include "mem/ruby/network/topaz/TopazSwitch.hh"
-#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
 #include "mem/ruby/network/BasicLink.hh"
+#include "mem/ruby/network/simple/SimpleLink.hh"
+#include "mem/ruby/network/simple/SimpleNetwork.hh"
+#include "mem/ruby/network/simple/Switch.hh"
+#include "mem/ruby/network/simple/Throttle.hh"
 #include "mem/ruby/network/Topology.hh"
 #include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/system/System.hh"
+
+//TOPAZ INCLUDES
+#include "mem/ruby/network/topaz/TopazNetwork.hh"
+#include "mem/ruby/network/topaz/TopazSwitch.hh"
+#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
+#include "debug/RubyNetwork.hh"
+
 
 using namespace std;
 using m5::stl_helpers::deletePointers;
@@ -114,6 +118,14 @@ TopazNetwork::TopazNetwork(const Params *p)
              m_fromNetQueues[node][j]->setFromNet();
         }
     }
+    // record the routers
+    for (vector<BasicRouter*>::const_iterator i = p->routers.begin();
+         i != p->routers.end(); ++i) {
+        TopazSwitch* s = safe_cast<TopazSwitch*>(*i);
+        m_switch_ptr_vector.push_back(s);
+        s->init_net_ptr(this);
+    }
+
     m_flitSize=p->topaz_flit_size;
     m_processorClockRatio=p->topaz_clock_ratio;
     m_simulName = (p->topaz_network).c_str();
@@ -129,10 +141,6 @@ TopazNetwork::init()
     // The topology pointer should have already been initialized in
     // the parent class network constructor.
     assert(m_topology_ptr != NULL);
-    int number_of_switches = m_topology_ptr->numSwitches();
-    for (int i = 0; i < number_of_switches; i++) {
-        m_switch_ptr_vector.push_back(new TopazSwitch(i, this));
-    }
 
     // false because this isn't a reconfiguration
     m_topology_ptr->createLinks(this, false);
@@ -205,7 +213,7 @@ TopazNetwork::init()
 
 int TopazNetwork::getMessageSizeTopaz(MessageSizeType size_type) const {
     //Padding last flit
-    return (int) ceil((double) RubySystem::getNetwork()-> MessageSizeType_to_int(
+    return (int) ceil((double) g_system_ptr->getNetwork()-> MessageSizeType_to_int(
         size_type)/m_flitSize);
 }
 
@@ -481,13 +489,13 @@ TopazNetwork::printStats(ostream& out) const
         if (total_msg_counts[type] > 0) {
             out << "total_msg_count_" << type << ": " << total_msg_counts[type]
                 << " " << total_msg_counts[type] *
-                uint64(RubySystem::getNetwork()->MessageSizeType_to_int(type))
+                uint64(MessageSizeType_to_int(type))
                 << endl;
 
             total_msgs += total_msg_counts[type];
 
             total_bytes += total_msg_counts[type] *
-                uint64(RubySystem::getNetwork()->MessageSizeType_to_int(type));
+                uint64(MessageSizeType_to_int(type));
 
         }
     }
@@ -499,7 +507,7 @@ TopazNetwork::printStats(ostream& out) const
     for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
         m_switch_ptr_vector[i]->printStats(out);
     }
-    m_topology_ptr->printStats(out);
+    //m_topology_ptr->printStats(out);
 }
 
 void
@@ -508,7 +516,7 @@ TopazNetwork::clearStats()
     for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
         m_switch_ptr_vector[i]->clearStats();
     }
-    m_topology_ptr->clearStats();
+    //m_topology_ptr->clearStats();
 }
 
 void
@@ -518,7 +526,7 @@ TopazNetwork::printConfig(ostream& out) const
     out << "Network Configuration" << endl;
     out << "---------------------" << endl;
     out << "network: SIMPLE_NETWORK" << endl;
-    out << "topology: " << m_topology_ptr->getName() << endl;
+    //out << "topology: " << m_topology_ptr->getName() << endl;
     out << endl;
 
     for (int i = 0; i < m_virtual_networks; i++) {
@@ -536,9 +544,9 @@ TopazNetwork::printConfig(ostream& out) const
     }
     out << endl;
 
-    for(int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        m_switch_ptr_vector[i]->printConfig(out);
-    }
+   // for(int i = 0; i < m_switch_ptr_vector.size(); i++) {
+   //     m_switch_ptr_vector[i]->printConfig(out);
+   // }
 
 }
 
@@ -596,4 +604,42 @@ TopazNetwork *
 TopazNetworkParams::create()
 {
     return new TopazNetwork(this);
+}
+
+/*
+ * The simple network has an array of switches. These switches have buffers
+ * that need to be accessed for functional reads and writes. Also the links
+ * between different switches have buffers that need to be accessed.
+ */
+bool
+TopazNetwork::functionalRead(Packet *pkt)
+{
+    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
+        if (m_switch_ptr_vector[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        if (m_buffers_to_free[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32_t
+TopazNetwork::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
+        num_functional_writes += m_switch_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {
+        num_functional_writes += m_buffers_to_free[i]->functionalWrite(pkt);
+    }
+    return num_functional_writes;
 }

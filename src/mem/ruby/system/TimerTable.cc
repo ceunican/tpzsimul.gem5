@@ -31,11 +31,13 @@
 #include "mem/ruby/system/TimerTable.hh"
 
 TimerTable::TimerTable()
+    : m_next_time(0)
 {
     m_consumer_ptr  = NULL;
+    m_clockobj_ptr = NULL;
+
     m_next_valid = false;
     m_next_address = Address(0);
-    m_next_time = 0;
 }
 
 bool
@@ -48,7 +50,7 @@ TimerTable::isReady() const
         updateNext();
     }
     assert(m_next_valid);
-    return (g_system_ptr->getTime() >= m_next_time);
+    return (m_clockobj_ptr->curCycle() >= m_next_time);
 }
 
 const Address&
@@ -64,15 +66,17 @@ TimerTable::readyAddress() const
 }
 
 void
-TimerTable::set(const Address& address, Time relative_latency)
+TimerTable::set(const Address& address, Cycles relative_latency)
 {
     assert(address == line_address(address));
     assert(relative_latency > 0);
     assert(!m_map.count(address));
-    Time ready_time = g_system_ptr->getTime() + relative_latency;
+
+    Cycles ready_time = m_clockobj_ptr->curCycle() + relative_latency;
     m_map[address] = ready_time;
     assert(m_consumer_ptr != NULL);
-    m_consumer_ptr->scheduleEventAbsolute(ready_time);
+    m_consumer_ptr->
+        scheduleEventAbsolute(m_clockobj_ptr->clockPeriod() * ready_time);
     m_next_valid = false;
 
     // Don't always recalculate the next ready address

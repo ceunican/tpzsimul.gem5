@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012-2013 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2002-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -43,9 +55,6 @@ class TimingSimpleCPU : public BaseSimpleCPU
     virtual ~TimingSimpleCPU();
 
     virtual void init();
-
-  public:
-    Event *drainEvent;
 
   private:
 
@@ -109,7 +118,7 @@ class TimingSimpleCPU : public BaseSimpleCPU
         void
         markDelayed()
         {
-            assert(cpu->_status == Running);
+            assert(cpu->_status == BaseSimpleCPU::Running);
             cpu->_status = ITBWaitResponse;
         }
 
@@ -143,12 +152,12 @@ class TimingSimpleCPU : public BaseSimpleCPU
      * scheduling of handling of incoming packets in the following
      * cycle.
      */
-    class TimingCPUPort : public CpuPort
+    class TimingCPUPort : public MasterPort
     {
       public:
 
         TimingCPUPort(const std::string& _name, TimingSimpleCPU* _cpu)
-            : CpuPort(_name, _cpu), cpu(_cpu), retryEvent(this)
+            : MasterPort(_name, _cpu), cpu(_cpu), retryEvent(this)
         { }
 
       protected:
@@ -239,21 +248,20 @@ class TimingSimpleCPU : public BaseSimpleCPU
   protected:
 
      /** Return a reference to the data port. */
-    virtual CpuPort &getDataPort() { return dcachePort; }
+    virtual MasterPort &getDataPort() { return dcachePort; }
 
     /** Return a reference to the instruction port. */
-    virtual CpuPort &getInstPort() { return icachePort; }
+    virtual MasterPort &getInstPort() { return icachePort; }
 
   public:
 
-    virtual void serialize(std::ostream &os);
-    virtual void unserialize(Checkpoint *cp, const std::string &section);
-
-    virtual unsigned int drain(Event *drain_event);
-    virtual void resume();
+    unsigned int drain(DrainManager *drain_manager);
+    void drainResume();
 
     void switchOut();
     void takeOverFrom(BaseCPU *oldCPU);
+
+    void verifyMemoryMode() const;
 
     virtual void activateContext(ThreadID thread_num, Cycles delay);
     virtual void suspendContext(ThreadID thread_num);
@@ -268,6 +276,14 @@ class TimingSimpleCPU : public BaseSimpleCPU
     void completeIfetch(PacketPtr );
     void completeDataAccess(PacketPtr pkt);
     void advanceInst(Fault fault);
+
+    /** This function is used by the page table walker to determine if it could
+     * translate the a pending request or if the underlying request has been
+     * squashed. This always returns false for the simple timing CPU as it never
+     * executes any instructions speculatively.
+     * @ return Is the current instruction squashed?
+     */
+    bool isSquashed() const { return false; }
 
     /**
      * Print state of address in memory system via PrintReq (for
@@ -294,7 +310,36 @@ class TimingSimpleCPU : public BaseSimpleCPU
         virtual const char *description() const;
     };
 
-    void completeDrain();
+    /**
+     * Check if a system is in a drained state.
+     *
+     * We need to drain if:
+     * <ul>
+     * <li>We are in the middle of a microcode sequence as some CPUs
+     *     (e.g., HW accelerated CPUs) can't be started in the middle
+     *     of a gem5 microcode sequence.
+     *
+     * <li>Stay at PC is true.
+     * </ul>
+     */
+    bool isDrained() {
+        return microPC() == 0 &&
+            !stayAtPC;
+    }
+
+    /**
+     * Try to complete a drain request.
+     *
+     * @returns true if the CPU is drained, false otherwise.
+     */
+    bool tryCompleteDrain();
+
+    /**
+     * Drain manager to use when signaling drain completion
+     *
+     * This pointer is non-NULL when draining and NULL otherwise.
+     */
+    DrainManager *drainManager;
 };
 
 #endif // __CPU_SIMPLE_TIMING_HH__

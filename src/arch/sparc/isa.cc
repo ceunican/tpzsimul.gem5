@@ -29,6 +29,7 @@
  */
 
 #include "arch/sparc/asi.hh"
+#include "arch/sparc/decoder.hh"
 #include "arch/sparc/isa.hh"
 #include "base/bitfield.hh"
 #include "base/trace.hh"
@@ -36,6 +37,7 @@
 #include "cpu/thread_context.hh"
 #include "debug/MiscRegs.hh"
 #include "debug/Timer.hh"
+#include "params/SparcISA.hh"
 
 namespace SparcISA
 {
@@ -56,6 +58,22 @@ buildPstateMask()
 }
 
 static const PSTATE PstateMask = buildPstateMask();
+
+ISA::ISA(Params *p)
+    : SimObject(p)
+{
+    tickCompare = NULL;
+    sTickCompare = NULL;
+    hSTickCompare = NULL;
+
+    clear();
+}
+
+const SparcISAParams *
+ISA::params() const
+{
+    return dynamic_cast<const Params *>(_params);
+}
 
 void
 ISA::reloadRegMap()
@@ -549,6 +567,9 @@ ISA::setMiscReg(int miscReg, MiscReg val, ThreadContext * tc)
     MiscReg new_val = val;
 
     switch (miscReg) {
+      case MISCREG_ASI:
+        tc->getDecoderPtr()->setContext(val);
+        break;
       case MISCREG_STICK:
       case MISCREG_TICK:
         // stick and tick are same thing on niagra
@@ -617,7 +638,7 @@ ISA::setMiscReg(int miscReg, MiscReg val, ThreadContext * tc)
 }
 
 void
-ISA::serialize(EventManager *em, std::ostream &os)
+ISA::serialize(std::ostream &os)
 {
     SERIALIZE_SCALAR(asi);
     SERIALIZE_SCALAR(tick);
@@ -693,7 +714,7 @@ ISA::serialize(EventManager *em, std::ostream &os)
 }
 
 void
-ISA::unserialize(EventManager *em, Checkpoint *cp, const std::string &section)
+ISA::unserialize(Checkpoint *cp, const std::string &section)
 {
     UNSERIALIZE_SCALAR(asi);
     UNSERIALIZE_SCALAR(tick);
@@ -760,19 +781,25 @@ ISA::unserialize(EventManager *em, Checkpoint *cp, const std::string &section)
 
             if (tick_cmp) {
                 tickCompare = new TickCompareEvent(this, tc);
-                em->schedule(tickCompare, tick_cmp);
+                schedule(tickCompare, tick_cmp);
             }
             if (stick_cmp)  {
                 sTickCompare = new STickCompareEvent(this, tc);
-                em->schedule(sTickCompare, stick_cmp);
+                schedule(sTickCompare, stick_cmp);
             }
             if (hstick_cmp)  {
                 hSTickCompare = new HSTickCompareEvent(this, tc);
-                em->schedule(hSTickCompare, hstick_cmp);
+                schedule(hSTickCompare, hstick_cmp);
             }
         }
     }
 
 }
 
+}
+
+SparcISA::ISA *
+SparcISAParams::create()
+{
+    return new SparcISA::ISA(this);
 }

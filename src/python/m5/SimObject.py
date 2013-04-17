@@ -105,6 +105,9 @@ allClasses = {}
 # dict to look up SimObjects based on path
 instanceDict = {}
 
+# Did any of the SimObjects lack a header file?
+noCxxHeader = False
+
 def public_value(key, value):
     return key.startswith('_') or \
                isinstance(value, (FunctionType, MethodType, ModuleType,
@@ -119,7 +122,9 @@ class MetaSimObject(type):
     init_keywords = { 'abstract' : bool,
                       'cxx_class' : str,
                       'cxx_type' : str,
-                      'type' : str }
+                      'cxx_header' : str,
+                      'type' : str,
+                      'cxx_bases' : list }
     # Attributes that can be set any time
     keywords = { 'check' : FunctionType }
 
@@ -144,6 +149,8 @@ class MetaSimObject(type):
                 value_dict[key] = val
         if 'abstract' not in value_dict:
             value_dict['abstract'] = False
+        if 'cxx_bases' not in value_dict:
+            value_dict['cxx_bases'] = []
         cls_dict['_value_dict'] = value_dict
         cls = super(MetaSimObject, mcls).__new__(mcls, name, bases, cls_dict)
         if 'type' in value_dict:
@@ -202,6 +209,11 @@ class MetaSimObject(type):
                 cls._value_dict['cxx_class'] = cls._value_dict['type']
 
             cls._value_dict['cxx_type'] = '%s *' % cls._value_dict['cxx_class']
+
+            if 'cxx_header' not in cls._value_dict:
+                global noCxxHeader
+                noCxxHeader = True
+                warn("No header file specified for SimObject: %s", name)
 
         # Export methods are automatically inherited via C++, so we
         # don't want the method declarations to get inherited on the
@@ -404,9 +416,11 @@ class MetaSimObject(type):
         code('%module(package="m5.internal") param_$cls')
         code()
         code('%{')
+        code('#include "sim/sim_object.hh"')
         code('#include "params/$cls.hh"')
         for param in params:
             param.cxx_predecls(code)
+        code('#include "${{cls.cxx_header}}"')
         cls.export_method_cxx_predecls(code)
         code('''\
 /**
@@ -447,7 +461,17 @@ using std::ptrdiff_t;
         code('%nodefault $classname;')
         code('class $classname')
         if cls._base:
-            code('    : public ${{cls._base.cxx_class}}')
+            bases = [ cls._base.cxx_class ] + cls.cxx_bases
+        else:
+            bases = cls.cxx_bases
+        base_first = True
+        for base in bases:
+            if base_first:
+                code('    : public ${{base}}')
+                base_first = False
+            else:
+                code('    , public ${{base}}')
+
         code('{')
         code('  public:')
         cls.export_methods(code)
@@ -568,42 +592,28 @@ class SimObject(object):
     __metaclass__ = MetaSimObject
     type = 'SimObject'
     abstract = True
+    cxx_header = "sim/sim_object.hh"
 
-    @classmethod
-    def export_method_cxx_predecls(cls, code):
-        code('''
-#include <Python.h>
-
-#include "sim/serialize.hh"
-#include "sim/sim_object.hh"
-''')
+    cxx_bases = [ "Drainable", "Serializable" ]
 
     @classmethod
     def export_method_swig_predecls(cls, code):
         code('''
 %include <std_string.i>
+
+%import "python/swig/drain.i"
+%import "python/swig/serialize.i"
 ''')
 
     @classmethod
     def export_methods(cls, code):
         code('''
-    enum State {
-      Running,
-      Draining,
-      Drained
-    };
-
     void init();
     void loadState(Checkpoint *cp);
     void initState();
     void regStats();
     void resetStats();
     void startup();
-
-    unsigned int drain(Event *drain_event);
-    void resume();
-    void switchOut();
-    void takeOverFrom(BaseCPU *cpu);
 ''')
 
     # Initialize new instance.  For objects with SimObject-valued
@@ -793,8 +803,8 @@ class SimObject(object):
     def add_child(self, name, child):
         child = coerceSimObjectOrVector(child)
         if child.has_parent():
-            print "warning: add_child('%s'): child '%s' already has parent" % \
-                  (name, child.get_name())
+            warn("add_child('%s'): child '%s' already has parent", name,
+                child.get_name())
         if self._children.has_key(name):
             # This code path had an undiscovered bug that would make it fail
             # at runtime. It had been here for a long time and was only
@@ -817,8 +827,7 @@ class SimObject(object):
                 val = SimObjectVector(val)
                 self._values[key] = val
             if isSimObjectOrVector(val) and not val.has_parent():
-                print "warning: %s adopting orphan SimObject param '%s'" \
-                      % (self, key)
+                warn("%s adopting orphan SimObject param '%s'", self, key)
                 self.add_child(key, val)
 
     def path(self):
@@ -861,13 +870,20 @@ class SimObject(object):
         all = {}
         # search children
         for child in self._children.itervalues():
-            if isinstance(child, ptype) and not isproxy(child) and \
-               not isNullPointer(child):
-                all[child] = True
-            if isSimObject(child):
-                # also add results from the child itself
-                child_all, done = child.find_all(ptype)
-                all.update(dict(zip(child_all, [done] * len(child_all))))
+            # a child could be a list, so ensure we visit each item
+            if isinstance(child, list):
+                children = child
+            else:
+                children = [child]
+
+            for child in children:
+                if isinstance(child, ptype) and not isproxy(child) and \
+                        not isNullPointer(child):
+                    all[child] = True
+                if isSimObject(child):
+                    # also add results from the child itself
+                    child_all, done = child.find_all(ptype)
+                    all.update(dict(zip(child_all, [done] * len(child_all))))
         # search param space
         for pname,pdesc in self._params.iteritems():
             if issubclass(pdesc.ptype, ptype):
@@ -1050,22 +1066,6 @@ class SimObject(object):
         for portRef in self._port_refs.itervalues():
             portRef.ccConnect()
 
-    def getMemoryMode(self):
-        if not isinstance(self, m5.objects.System):
-            return None
-
-        return self._ccObject.getMemoryMode()
-
-    def changeTiming(self, mode):
-        if isinstance(self, m5.objects.System):
-            # i don't know if there's a better way to do this - calling
-            # setMemoryMode directly from self._ccObject results in calling
-            # SimObject::setMemoryMode, not the System::setMemoryMode
-            self._ccObject.setMemoryMode(mode)
-
-    def takeOverFrom(self, old_cpu):
-        self._ccObject.takeOverFrom(old_cpu._ccObject)
-
 # Function to provide to C++ so it can look up instances based on paths
 def resolveSimObject(name):
     obj = instanceDict[name]
@@ -1117,10 +1117,11 @@ baseClasses = allClasses.copy()
 baseInstances = instanceDict.copy()
 
 def clear():
-    global allClasses, instanceDict
+    global allClasses, instanceDict, noCxxHeader
 
     allClasses = baseClasses.copy()
     instanceDict = baseInstances.copy()
+    noCxxHeader = False
 
 # __all__ defines the list of symbols that get exported when
 # 'from config import *' is invoked.  Try to keep this reasonably

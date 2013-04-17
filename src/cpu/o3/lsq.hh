@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -79,8 +79,11 @@ class LSQ {
 
     /** Sets the pointer to the list of active threads. */
     void setActiveThreads(std::list<ThreadID> *at_ptr);
-    /** Switches out the LSQ. */
-    void switchOut();
+
+    /** Perform sanity checks after a drain. */
+    void drainSanityCheck() const;
+    /** Has the LSQ drained? */
+    bool isDrained() const;
     /** Takes over execution from another CPU's thread. */
     void takeOverFrom();
 
@@ -198,12 +201,6 @@ class LSQ {
     int numStores(ThreadID tid)
     { return thread[tid].numStores(); }
 
-    /** Returns the total number of loads that are ready. */
-    int numLoadsReady();
-    /** Returns the number of loads that are ready for a single thread. */
-    int numLoadsReady(ThreadID tid)
-    { return thread[tid].numLoadsReady(); }
-
     /** Returns the number of free entries. */
     unsigned numFreeEntries();
     /** Returns the number of free entries for a specific thread. */
@@ -216,6 +213,13 @@ class LSQ {
      * full).
      */
     bool isFull(ThreadID tid);
+
+    /** Returns if the LSQ is empty (both LQ and SQ are empty). */
+    bool isEmpty() const;
+    /** Returns if all of the LQs are empty. */
+    bool lqEmpty() const;
+    /** Returns if all of the SQs are empty. */
+    bool sqEmpty() const;
 
     /** Returns if any of the LQs are full. */
     bool lqFull();
@@ -260,7 +264,7 @@ class LSQ {
     { return thread[tid].willWB(); }
 
     /** Returns if the cache is currently blocked. */
-    bool cacheBlocked()
+    bool cacheBlocked() const
     { return retryTid != InvalidThreadID; }
 
     /** Sets the retry thread id, indicating that one of the LSQUnits
@@ -269,9 +273,9 @@ class LSQ {
     { retryTid = tid; }
 
     /** Debugging function to print out all instructions. */
-    void dumpInsts();
+    void dumpInsts() const;
     /** Debugging function to print out instructions from a specific thread. */
-    void dumpInsts(ThreadID tid)
+    void dumpInsts(ThreadID tid) const
     { thread[tid].dumpInsts(); }
 
     /** Executes a read operation, using the load specified at the load

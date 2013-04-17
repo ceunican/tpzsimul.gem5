@@ -56,18 +56,18 @@ class InputUnit_d : public Consumer
     inline int get_inlink_id() { return m_in_link->get_id(); }
 
     inline void
-    set_vc_state(VC_state_type state, int vc)
+    set_vc_state(VC_state_type state, int vc, Cycles curTime)
     {
-        m_vcs[vc]->set_state(state);
+        m_vcs[vc]->set_state(state, curTime);
     }
 
     inline void
-    set_enqueue_time(int invc, Time time)
+    set_enqueue_time(int invc, Cycles time)
     {
         m_vcs[invc]->set_enqueue_time(time);
     }
 
-    inline Time
+    inline Cycles
     get_enqueue_time(int invc)
     {
         return m_vcs[invc]->get_enqueue_time();
@@ -86,11 +86,11 @@ class InputUnit_d : public Consumer
     }
 
     inline void
-    increment_credit(int in_vc, bool free_signal)
+    increment_credit(int in_vc, bool free_signal, Cycles curTime)
     {
-        flit_d *t_flit = new flit_d(in_vc, free_signal);
+        flit_d *t_flit = new flit_d(in_vc, free_signal, curTime);
         creditQueue->insert(t_flit);
-        m_credit_link->scheduleEvent(1);
+        m_credit_link->scheduleEventAbsolute(m_router->clockEdge(Cycles(1)));
     }
 
     inline int
@@ -100,16 +100,16 @@ class InputUnit_d : public Consumer
     }
 
     inline void
-    updateRoute(int vc, int outport)
+    updateRoute(int vc, int outport, Cycles curTime)
     {
         m_vcs[vc]->set_outport(outport);
-        m_vcs[vc]->set_state(VC_AB_);
+        m_vcs[vc]->set_state(VC_AB_, curTime);
     }
 
     inline void
-    grant_vc(int in_vc, int out_vc)
+    grant_vc(int in_vc, int out_vc, Cycles curTime)
     {
-        m_vcs[in_vc]->grant_vc(out_vc);
+        m_vcs[in_vc]->grant_vc(out_vc, curTime);
     }
 
     inline flit_d*
@@ -125,21 +125,22 @@ class InputUnit_d : public Consumer
     }
 
     inline bool
-    need_stage(int vc, VC_state_type state, flit_stage stage)
+    need_stage(int vc, VC_state_type state, flit_stage stage, Cycles curTime)
     {
-        return m_vcs[vc]->need_stage(state, stage);
+        return m_vcs[vc]->need_stage(state, stage, curTime);
     }
 
     inline bool
-    need_stage_nextcycle(int vc, VC_state_type state, flit_stage stage)
+    need_stage_nextcycle(int vc, VC_state_type state, flit_stage stage,
+                         Cycles curTime)
     {
-        return m_vcs[vc]->need_stage_nextcycle(state, stage);
+        return m_vcs[vc]->need_stage_nextcycle(state, stage, curTime);
     }
 
     inline bool
-    isReady(int invc)
+    isReady(int invc, Cycles curTime)
     {
-        return m_vcs[invc]->isReady();
+        return m_vcs[invc]->isReady(curTime);
     }
 
     inline int
@@ -171,6 +172,8 @@ class InputUnit_d : public Consumer
     {
         return m_num_buffer_writes[vnet];
     }
+
+    uint32_t functionalWrite(Packet *pkt);
 
   private:
     int m_id;

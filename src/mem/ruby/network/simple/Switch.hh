@@ -42,7 +42,10 @@
 #include <iostream>
 #include <vector>
 
-#include "mem/ruby/common/Global.hh"
+#include "mem/packet.hh"
+#include "mem/ruby/common/TypeDefines.hh"
+#include "mem/ruby/network/BasicRouter.hh"
+#include "params/Switch.hh"
 
 class MessageBuffer;
 class PerfectSwitch;
@@ -50,15 +53,17 @@ class NetDest;
 class SimpleNetwork;
 class Throttle;
 
-class Switch
+class Switch : public BasicRouter
 {
   public:
-    Switch(SwitchID sid, SimpleNetwork* network_ptr);
+    typedef SwitchParams Params;
+    Switch(const Params *p);
     ~Switch();
 
+    void init();
     void addInPort(const std::vector<MessageBuffer*>& in);
     void addOutPort(const std::vector<MessageBuffer*>& out,
-        const NetDest& routing_table_entry, int link_latency,
+        const NetDest& routing_table_entry, Cycles link_latency,
         int bw_multiplier);
     const Throttle* getThrottle(LinkID link_number) const;
     const std::vector<Throttle*>* getThrottles() const;
@@ -69,6 +74,10 @@ class Switch
     void printStats(std::ostream& out) const;
     void clearStats();
     void print(std::ostream& out) const;
+    void init_net_ptr(SimpleNetwork* net_ptr) { m_network_ptr = net_ptr; }
+
+    bool functionalRead(Packet *);
+    uint32_t functionalWrite(Packet *);
 
   private:
     // Private copy constructor and assignment operator
@@ -79,7 +88,6 @@ class Switch
     SimpleNetwork* m_network_ptr;
     std::vector<Throttle*> m_throttles;
     std::vector<MessageBuffer*> m_buffers_to_free;
-    SwitchID m_switch_id;
 };
 
 inline std::ostream&

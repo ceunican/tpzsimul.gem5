@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2003-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -50,6 +62,7 @@ class CacheSet;
 
 /**
  * A LRU cache tag store.
+ * @sa  \ref gem5MemorySystem "gem5 Memory System"
  */
 class LRU : public BaseTags
 {
@@ -67,7 +80,7 @@ class LRU : public BaseTags
     /** The associativity of the cache. */
     const unsigned assoc;
     /** The hit latency. */
-    const unsigned hitLatency;
+    const Cycles hitLatency;
 
     /** The cache sets. */
     CacheSet *sets;
@@ -127,7 +140,7 @@ public:
      * Invalidate the given block.
      * @param blk The block to invalidate.
      */
-    void invalidateBlk(BlkType *blk);
+    void invalidate(BlkType *blk);
 
     /**
      * Access block and update replacement data.  May not succeed, in which case
@@ -138,7 +151,7 @@ public:
      * @param lat The access latency.
      * @return Pointer to the cache block if found.
      */
-    BlkType* accessBlock(Addr addr, int &lat, int context_src);
+    BlkType* accessBlock(Addr addr, Cycles &lat, int context_src);
 
     /**
      * Finds the given address in the cache, do not update replacement data.
@@ -220,7 +233,7 @@ public:
      * Return the hit latency.
      * @return the hit latency.
      */
-    int getHitLatency() const
+    Cycles getHitLatency() const
     {
         return hitLatency;
     }
@@ -234,6 +247,26 @@ public:
      * Called at end of simulation to complete average block reference stats.
      */
     virtual void cleanupRefs();
+
+    /**
+     * Visit each block in the tag store and apply a visitor to the
+     * block.
+     *
+     * The visitor should be a function (or object that behaves like a
+     * function) that takes a cache block reference as its parameter
+     * and returns a bool. A visitor can request the traversal to be
+     * stopped by returning false, returning true causes it to be
+     * called for the next block in the tag store.
+     *
+     * \param visitor Visitor to call on each block.
+     */
+    template <typename V>
+    void forEachBlk(V &visitor) {
+        for (unsigned i = 0; i < numSets * assoc; ++i) {
+            if (!visitor(blks[i]))
+                return;
+        }
+    }
 };
 
 #endif // __MEM_CACHE_TAGS_LRU_HH__

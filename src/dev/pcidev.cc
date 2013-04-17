@@ -67,6 +67,8 @@ PciDev::PciConfigPort::recvAtomic(PacketPtr pkt)
 {
     assert(pkt->getAddr() >= configAddr &&
            pkt->getAddr() < configAddr + PCI_CONFIG_SIZE);
+    // @todo someone should pay for this
+    pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
     return pkt->isRead() ? device->readConfig(pkt) : device->writeConfig(pkt);
 }
 
@@ -157,14 +159,14 @@ PciDev::init()
 }
 
 unsigned int
-PciDev::drain(Event *de)
+PciDev::drain(DrainManager *dm)
 {
     unsigned int count;
-    count = pioPort.drain(de) + dmaPort.drain(de) + configPort.drain(de);
+    count = pioPort.drain(dm) + dmaPort.drain(dm) + configPort.drain(dm);
     if (count)
-        changeState(Draining);
+        setDrainState(Drainable::Draining);
     else
-        changeState(Drained);
+        setDrainState(Drainable::Drained);
     return count;
 }
 

@@ -38,27 +38,30 @@
 #include "arch/x86/regs/misc.hh"
 #include "arch/x86/registers.hh"
 #include "base/types.hh"
+#include "sim/sim_object.hh"
 
 class Checkpoint;
 class EventManager;
 class ThreadContext;
+struct X86ISAParams;
 
 namespace X86ISA
 {
-    class ISA
+    class ISA : public SimObject
     {
       protected:
         MiscReg regVal[NUM_MISCREGS];
         void updateHandyM5Reg(Efer efer, CR0 cr0,
-                SegAttr csAttr, SegAttr ssAttr, RFLAGS rflags);
+                SegAttr csAttr, SegAttr ssAttr, RFLAGS rflags,
+                ThreadContext *tc);
 
       public:
+        typedef X86ISAParams Params;
+
         void clear();
 
-        ISA()
-        {
-            clear();
-        }
+        ISA(Params *p);
+        const Params *params() const;
 
         MiscReg readMiscRegNoEffect(int miscReg);
         MiscReg readMiscReg(int miscReg, ThreadContext *tc);
@@ -82,9 +85,13 @@ namespace X86ISA
             return reg;
         }
 
-        void serialize(EventManager *em, std::ostream &os);
-        void unserialize(EventManager *em, Checkpoint *cp,
-                const std::string &section);
+        void serialize(std::ostream &os);
+        void unserialize(Checkpoint *cp, const std::string &section);
+        void startup(ThreadContext *tc);
+
+        /// Explicitly import the otherwise hidden startup
+        using SimObject::startup;
+
     };
 }
 

@@ -33,7 +33,7 @@
 #include "base/pollevent.hh"
 #include "base/types.hh"
 #include "sim/async.hh"
-#include "sim/eventq.hh"
+#include "sim/eventq_impl.hh"
 #include "sim/sim_events.hh"
 #include "sim/sim_exit.hh"
 #include "sim/simulate.hh"
@@ -44,6 +44,10 @@
  * terminate the loop.  Exported to Python via SWIG.
  * @return The SimLoopExitEvent that caused the loop to exit.
  */
+
+// record the clock cycle for last exit event
+Tick lastExitTick = 0;
+
 SimLoopExitEvent *
 simulate(Tick num_cycles)
 {
@@ -65,11 +69,18 @@ simulate(Tick num_cycles)
         assert(curTick() <= mainEventQueue.nextTick() &&
                "event scheduled in the past");
 
-        // forward current cycle to the time of the first event on the
-        // queue
-        curTick(mainEventQueue.nextTick());
         Event *exit_event = mainEventQueue.serviceOne();
         if (exit_event != NULL) {
+            /*
+             * if there are multiple exit events in the same cycle, drain the
+             * following exit events since gem5 only allows one * exit event in
+             * a cycle
+             */
+            if (lastExitTick == curTick())
+                continue;
+            else
+                lastExitTick = curTick();
+
             // hit some kind of exit event; return to Python
             // event must be subclass of SimLoopExitEvent...
             SimLoopExitEvent *se_event;

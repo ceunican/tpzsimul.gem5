@@ -35,10 +35,10 @@
 #include "base/inifile.hh"
 #include "base/output.hh"
 #include "dev/etherdevice.hh"
-#include "dev/etherint.hh"
 #include "dev/etherobject.hh"
 #include "mem/mem_object.hh"
 #include "mem/port.hh"
+#include "python/swig/pyobject.hh"
 #include "sim/full_system.hh"
 #include "sim/sim_object.hh"
 
@@ -102,8 +102,8 @@ connectPorts(SimObject *o1, const std::string &name1, int i1,
     }
 
     // generic master/slave port connection
-    MasterPort& masterPort = mo1->getMasterPort(name1, i1);
-    SlavePort& slavePort   = mo2->getSlavePort(name2, i2);
+    BaseMasterPort& masterPort = mo1->getMasterPort(name1, i1);
+    BaseSlavePort& slavePort   = mo2->getSlavePort(name2, i2);
 
     masterPort.bind(slavePort);
 

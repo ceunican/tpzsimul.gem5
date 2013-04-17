@@ -83,6 +83,7 @@ SimpleOzoneCPUParams::create()
 
     params->itb = itb;
     params->dtb = dtb;
+    params->isa = isa;
 
     params->system = system;
     params->cpu_id = cpu_id;
@@ -184,7 +185,7 @@ SimpleOzoneCPUParams::create()
 
     params->instShiftAmt = 2;
 
-    params->deferRegistration = defer_registration;
+    params->switchedOut = switched_out;
 
     params->functionTrace = function_trace;
     params->functionTraceStart = function_trace_start;

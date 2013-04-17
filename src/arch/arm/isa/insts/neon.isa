@@ -565,7 +565,7 @@ output exec {{
     static float
     vcgtFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (op1 > op2) ? 0.0 : 1.0;
     }
@@ -573,7 +573,7 @@ output exec {{
     static float
     vcgeFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (op1 >= op2) ? 0.0 : 1.0;
     }
@@ -589,7 +589,7 @@ output exec {{
     static float
     vcleFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (op1 <= op2) ? 0.0 : 1.0;
     }
@@ -597,7 +597,7 @@ output exec {{
     static float
     vcltFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (op1 < op2) ? 0.0 : 1.0;
     }
@@ -605,7 +605,7 @@ output exec {{
     static float
     vacgtFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (fabsf(op1) > fabsf(op2)) ? 0.0 : 1.0;
     }
@@ -613,7 +613,7 @@ output exec {{
     static float
     vacgeFunc(float op1, float op2)
     {
-        if (isSnan(op1) || isSnan(op2))
+        if (std::isnan(op1) || std::isnan(op2))
             return 2.0;
         return (fabsf(op1) >= fabsf(op2)) ? 0.0 : 1.0;
     }
@@ -2820,6 +2820,7 @@ let {{
             4, vcvts2fpCode, fromInt = True)
 
     vcvts2hCode = '''
+        destElem = 0;
         FPSCR fpscr = (FPSCR) FpscrExc;
         float srcFp1 = bitsToFp(srcElem1, (float)0.0);
         if (flushToZero(srcFp1))
@@ -2836,6 +2837,7 @@ let {{
     twoRegNarrowMiscInst("vcvt", "NVcvts2h", "SimdCvtOp", ("uint16_t",), vcvts2hCode)
 
     vcvth2sCode = '''
+        destElem = 0;
         FPSCR fpscr = (FPSCR) FpscrExc;
         VfpSavedState state = prepFpState(VfpRoundNearest);
         __asm__ __volatile__("" : "=m" (srcElem1), "=m" (destElem)

@@ -53,8 +53,8 @@ def define_options(parser):
                  help="check src/mem/ruby/network/topologies for complete set")
     parser.add_option("--mesh-rows", type="int", default=1,
                       help="the number of rows in the mesh topology")
-    parser.add_option("--garnet-network", type="string", default=None,
-                      help="'fixed'|'flexible'")
+    parser.add_option("--garnet-network", type="choice",
+                      choices=['fixed', 'flexible'], help="'fixed'|'flexible'")
     parser.add_option("--network-fault-model", action="store_true", default=False,
                       help="enable network fault model: see src/mem/ruby/network/fault_model/")
 
@@ -92,6 +92,7 @@ def define_options(parser):
     parser.add_option("--topaz-adaptive-interface-threshold",  type = "int", default=0,
                        help="TOPAZ: Number of messages that has to be transmitted "\
                              "before to activate TOPAZ" )
+
 
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
@@ -153,48 +154,41 @@ def create_system(options, system, piobus = None, dma_ports = []):
         class NetworkClass(TopazNetwork): pass
         class IntLinkClass(SimpleIntLink): pass
         class ExtLinkClass(SimpleExtLink): pass
-        class RouterClass(BasicRouter): pass
+        class RouterClass(TopazSwitch): pass
     else:
         class NetworkClass(SimpleNetwork): pass
         class IntLinkClass(SimpleIntLink): pass
         class ExtLinkClass(SimpleExtLink): pass
-        class RouterClass(BasicRouter): pass
+        class RouterClass(Switch): pass
 
     #
     # Important: the topology must be instantiated before the network and after
     # the controllers. Hence the separation between topology definition and
     # instantiation.
     #
-    # gem5 SimObject defined in src/mem/ruby/network/Network.py
-    net_topology = Topology()
-    net_topology.description = topology.description
 
     routers, int_links, ext_links = topology.makeTopology(options,
                                     IntLinkClass, ExtLinkClass, RouterClass)
-
-    net_topology.routers = routers
-    net_topology.int_links = int_links
-    net_topology.ext_links = ext_links
-
-
+    network = NetworkClass(ruby_system = ruby, routers = routers,
+                           int_links = int_links, ext_links = ext_links,
+                           topology = topology.description)
 
     if options.network_fault_model:
-       assert(options.garnet_network == "fixed")
-       fault_model = FaultModel()
-       network = NetworkClass(ruby_system = ruby, topology = net_topology,\
-                              enable_fault_model=True, fault_model = fault_model)
-    elif options.topaz_network:
+        assert(options.garnet_network == "fixed")
+        network.enable_fault_model = True
+        network.fault_model = FaultModel()
+
+    #
+    #  TOPAZ INPUT PARAMETERS
+    #
+    if options.topaz_network:
        #Garnet and Topaz are incompatible
        assert (not(options.garnet_network !=None))
-       network = NetworkClass(ruby_system = ruby, topology = net_topology, \
-                              topaz_network = options.topaz_network,\
-                              topaz_flit_size = options.topaz_flit_size,\
-                              topaz_clock_ratio =  options.topaz_clock_ratio, \
-                              topaz_adaptive_interface_threshold = options.topaz_adaptive_interface_threshold, \
-                              topaz_init_file =options.topaz_init_file )
-    else:
-       network = NetworkClass(ruby_system = ruby, topology = net_topology)
-
+       network.topaz_network =  options.topaz_network
+       network.topaz_flit_size =  options.topaz_flit_size
+       network.topaz_clock_ratio = options.topaz_clock_ratio
+       network.topaz_adaptive_interface_threshold = options.topaz_adaptive_interface_threshold
+       network.topaz_init_file = options.topaz_init_file
 
     #
     # Loop through the directory controlers.
@@ -207,24 +201,23 @@ def create_system(options, system, piobus = None, dma_ports = []):
     total_mem_size = MemorySize('0B')
 
     dir_bits = int(math.log(options.num_dirs, 2))
+    ruby.block_size_bytes = options.cacheline_size
+    block_size_bits = int(math.log(options.cacheline_size, 2))
 
     if options.numa_high_bit:
         numa_bit = options.numa_high_bit
     else:
-        # if not specified, use the lowest bits above the block offest
-        if dir_bits > 0:
-            # add 5 because bits 0-5 are the block offset
-            numa_bit = dir_bits + 5
-        else:
-            numa_bit = 6
+        # if the numa_bit is not specified, set the directory bits as the
+        # lowest bits above the block offset bits, and the numa_bit as the
+        # highest of those directory bits
+        numa_bit = block_size_bits + dir_bits - 1
 
     for dir_cntrl in dir_cntrls:
         total_mem_size.value += dir_cntrl.directory.size.value
         dir_cntrl.directory.numa_high_bit = numa_bit
 
-    phys_mem_size = 0
-    for mem in system.memories.unproxy(system):
-        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
+    phys_mem_size = sum(map(lambda mem: mem.range.size(),
+                            system.memories.unproxy(system)))
     assert(total_mem_size.value == phys_mem_size)
 
     ruby_profiler = RubyProfiler(ruby_system = ruby,

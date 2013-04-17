@@ -117,22 +117,66 @@ class System : public MemObject
     /**
      * Additional function to return the Port of a memory object.
      */
-    MasterPort& getMasterPort(const std::string &if_name, int idx = -1);
+    BaseMasterPort& getMasterPort(const std::string &if_name,
+                                  PortID idx = InvalidPortID);
 
-    static const char *MemoryModeStrings[3];
+    static const char *MemoryModeStrings[4];
 
-    Enums::MemoryMode
-    getMemoryMode()
-    {
-        assert(memoryMode);
-        return memoryMode;
+    /** @{ */
+    /**
+     * Is the system in atomic mode?
+     *
+     * There are currently two different atomic memory modes:
+     * 'atomic', which supports caches; and 'atomic_noncaching', which
+     * bypasses caches. The latter is used by hardware virtualized
+     * CPUs. SimObjects are expected to use Port::sendAtomic() and
+     * Port::recvAtomic() when accessing memory in this mode.
+     */
+    bool isAtomicMode() const {
+        return memoryMode == Enums::atomic ||
+            memoryMode == Enums::atomic_noncaching;
     }
 
-    /** Change the memory mode of the system. This should only be called by the
-     * python!!
-     * @param mode Mode to change to (atomic/timing)
+    /**
+     * Is the system in timing mode?
+     *
+     * SimObjects are expected to use Port::sendTiming() and
+     * Port::recvTiming() when accessing memory in this mode.
+     */
+    bool isTimingMode() const {
+        return memoryMode == Enums::timing;
+    }
+
+    /**
+     * Should caches be bypassed?
+     *
+     * Some CPUs need to bypass caches to allow direct memory
+     * accesses, which is required for hardware virtualization.
+     */
+    bool bypassCaches() const {
+        return memoryMode == Enums::atomic_noncaching;
+    }
+    /** @} */
+
+    /** @{ */
+    /**
+     * Get the memory mode of the system.
+     *
+     * \warn This should only be used by the Python world. The C++
+     * world should use one of the query functions above
+     * (isAtomicMode(), isTimingMode(), bypassCaches()).
+     */
+    Enums::MemoryMode getMemoryMode() const { return memoryMode; }
+
+    /**
+     * Change the memory mode of the system.
+     *
+     * \warn This should only be called by the Python!
+     *
+     * @param mode Mode to change to (atomic/timing/...)
      */
     void setMemoryMode(Enums::MemoryMode mode);
+    /** @} */
 
     PCEventQueue pcEventQueue;
 
@@ -381,7 +425,9 @@ class System : public MemObject
 
     void serialize(std::ostream &os);
     void unserialize(Checkpoint *cp, const std::string &section);
-    virtual void resume();
+
+    unsigned int drain(DrainManager *dm);
+    void drainResume();
 
   public:
     Counter totalNumInsts;
@@ -403,7 +449,29 @@ class System : public MemObject
     // For futex system call
     std::map<uint64_t, std::list<ThreadContext *> * > futexMap;
 
+  protected:
+
+    /**
+     * If needed, serialize additional symbol table entries for a
+     * specific subclass of this sytem. Currently this is used by
+     * Alpha and MIPS.
+     *
+     * @param os stream to serialize to
+     */
+    virtual void serializeSymtab(std::ostream &os) {}
+
+    /**
+     * If needed, unserialize additional symbol table entries for a
+     * specific subclass of this system.
+     *
+     * @param cp checkpoint to unserialize from
+     * @param section relevant section in the checkpoint
+     */
+    virtual void unserializeSymtab(Checkpoint *cp,
+                                   const std::string &section) {}
 
 };
+
+void printSystems();
 
 #endif // __SYSTEM_HH__

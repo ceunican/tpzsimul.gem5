@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -109,11 +109,13 @@ class InOrderCPU : public BaseCPU
     /* Destructor */
     ~InOrderCPU();
     
+    void verifyMemoryMode() const;
+
     /** Return a reference to the data port. */
-    virtual CpuPort &getDataPort() { return dataPort; }
+    virtual MasterPort &getDataPort() { return dataPort; }
 
     /** Return a reference to the instruction port. */
-    virtual CpuPort &getInstPort() { return instPort; }
+    virtual MasterPort &getInstPort() { return instPort; }
 
     /** CPU ID */
     int cpu_id;
@@ -156,7 +158,7 @@ class InOrderCPU : public BaseCPU
      * CachePort class for the in-order CPU, interacting with a
      * specific CacheUnit in the pipeline.
      */
-    class CachePort : public CpuPort
+    class CachePort : public MasterPort
     {
 
       private:
@@ -325,7 +327,7 @@ class InOrderCPU : public BaseCPU
     TheISA::IntReg intRegs[ThePipeline::MaxThreads][TheISA::NumIntRegs];
 
     /** ISA state */
-    TheISA::ISA isa[ThePipeline::MaxThreads];
+    std::vector<TheISA::ISA *> isa;
 
     /** Dependency Tracker for Integer & Floating Point Regs */
     RegDepMap archRegDepMap[ThePipeline::MaxThreads];
@@ -855,9 +857,6 @@ class InOrderCPU : public BaseCPU
 
     /** Pointers to all of the threads in the CPU. */
     std::vector<Thread *> thread;
-
-    /** Whether or not the CPU should defer its registration. */
-    bool deferRegistration;
 
     /** Per-Stage Instruction Tracing */
     bool stageTracing;

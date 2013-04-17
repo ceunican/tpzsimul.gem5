@@ -36,22 +36,6 @@
 using namespace std;
 
 void
-profile_request(const string& L1CacheState, const string& L2CacheState,
-                const string& directoryState, const string& requestType)
-{
-    string requestStr = L1CacheState + ":" + L2CacheState + ":" +
-        directoryState + ":" + requestType;
-
-    g_system_ptr->getProfiler()->profileRequest(requestStr);
-}
-
-void
-profile_outstanding_request(int outstanding)
-{
-    g_system_ptr->getProfiler()->profileOutstandingRequest(outstanding);
-}
-
-void
 profile_average_latency_estimate(int latency)
 {
     g_system_ptr->getProfiler()->profileAverageLatencyEstimate(latency);
@@ -63,12 +47,6 @@ profile_sharing(const Address& addr, AccessType type, NodeID requestor,
 {
     g_system_ptr->getProfiler()->
         profileSharing(addr, type, requestor, sharers, owner);
-}
-
-void
-profileMsgDelay(int virtualNetwork, int delayCycles)
-{
-    g_system_ptr->getProfiler()->profileMsgDelay(virtualNetwork, delayCycles);
 }
 
 void
@@ -86,6 +64,3 @@ profileGetS(const Address& datablock, const Address& PC, const Set& owner,
     g_system_ptr->getProfiler()->getAddressProfiler()->
         profileGetS(datablock, PC, owner, sharers, requestor);
 }
-
-
-

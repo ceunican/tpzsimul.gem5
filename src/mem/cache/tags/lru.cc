@@ -92,7 +92,7 @@ LRU::LRU(unsigned _numSets, unsigned _blkSize, unsigned _assoc,
             ++blkIndex;
 
             // invalidate new cache block
-            blk->status = 0;
+            blk->invalidate();
 
             //EGH Fix Me : do we need to initialize blk?
 
@@ -116,7 +116,7 @@ LRU::~LRU()
 }
 
 LRU::BlkType*
-LRU::accessBlock(Addr addr, int &lat, int master_id)
+LRU::accessBlock(Addr addr, Cycles &lat, int master_id)
 {
     Addr tag = extractTag(addr);
     unsigned set = extractSet(addr);
@@ -128,8 +128,8 @@ LRU::accessBlock(Addr addr, int &lat, int master_id)
         DPRINTF(CacheRepl, "set %x: moving blk %x to MRU\n",
                 set, regenerateBlkAddr(tag, set));
         if (blk->whenReady > curTick()
-            && blk->whenReady - curTick() > hitLatency) {
-            lat = blk->whenReady - curTick();
+            && cache->ticksToCycles(blk->whenReady - curTick()) > hitLatency) {
+            lat = cache->ticksToCycles(blk->whenReady - curTick());
         }
         blk->refCount += 1;
     }
@@ -186,8 +186,11 @@ LRU::insertBlock(Addr addr, BlkType *blk, int master_id)
         // deal with evicted block
         assert(blk->srcMasterId < cache->system->maxMasters());
         occupancies[blk->srcMasterId]--;
+
+        blk->invalidate();
     }
 
+    blk->isTouched = true;
     // Set tag for new block.  Caller is responsible for setting status.
     blk->tag = extractTag(addr);
 
@@ -201,23 +204,18 @@ LRU::insertBlock(Addr addr, BlkType *blk, int master_id)
 }
 
 void
-LRU::invalidateBlk(BlkType *blk)
+LRU::invalidate(BlkType *blk)
 {
-    if (blk) {
-        if (blk->isValid()) {
-            tagsInUse--;
-            assert(blk->srcMasterId < cache->system->maxMasters());
-            occupancies[blk->srcMasterId]--;
-            blk->srcMasterId = Request::invldMasterId;
-        }
-        blk->status = 0;
-        blk->isTouched = false;
-        blk->clearLoadLocks();
+    assert(blk);
+    assert(blk->isValid());
+    tagsInUse--;
+    assert(blk->srcMasterId < cache->system->maxMasters());
+    occupancies[blk->srcMasterId]--;
+    blk->srcMasterId = Request::invldMasterId;
 
-        // should be evicted before valid blocks
-        unsigned set = blk->set;
-        sets[set].moveToTail(blk);
-    }
+    // should be evicted before valid blocks
+    unsigned set = blk->set;
+    sets[set].moveToTail(blk);
 }
 
 void

@@ -108,7 +108,7 @@ class SimpleThread : public ThreadState
         FloatRegBits i[TheISA::NumFloatRegs];
     } floatRegs;
     TheISA::IntReg intRegs[TheISA::NumIntRegs];
-    TheISA::ISA isa;    // one "instance" of the current ISA.
+    TheISA::ISA *const isa;    // one "instance" of the current ISA.
 
     TheISA::PCState _pcState;
 
@@ -133,13 +133,12 @@ class SimpleThread : public ThreadState
     // constructor: initialize SimpleThread from given process structure
     // FS
     SimpleThread(BaseCPU *_cpu, int _thread_num, System *_system,
-                 TheISA::TLB *_itb, TheISA::TLB *_dtb,
+                 TheISA::TLB *_itb, TheISA::TLB *_dtb, TheISA::ISA *_isa,
                  bool use_kernel_stats = true);
     // SE
     SimpleThread(BaseCPU *_cpu, int _thread_num, System *_system,
-                 Process *_process, TheISA::TLB *_itb, TheISA::TLB *_dtb);
-
-    SimpleThread();
+                 Process *_process, TheISA::TLB *_itb, TheISA::TLB *_dtb,
+                 TheISA::ISA *_isa);
 
     virtual ~SimpleThread();
 
@@ -147,12 +146,11 @@ class SimpleThread : public ThreadState
 
     void regStats(const std::string &name);
 
-    void copyTC(ThreadContext *context);
-
     void copyState(ThreadContext *oldContext);
 
     void serialize(std::ostream &os);
     void unserialize(Checkpoint *cp, const std::string &section);
+    void startup();
 
     /***************************************************************
      *  SimpleThread functions to provide CPU with access to various
@@ -226,7 +224,7 @@ class SimpleThread : public ThreadState
         _pcState = 0;
         memset(intRegs, 0, sizeof(intRegs));
         memset(floatRegs.i, 0, sizeof(floatRegs.i));
-        isa.clear();
+        isa->clear();
     }
 
     //
@@ -234,9 +232,9 @@ class SimpleThread : public ThreadState
     //
     uint64_t readIntReg(int reg_idx)
     {
-        int flatIndex = isa.flattenIntIndex(reg_idx);
+        int flatIndex = isa->flattenIntIndex(reg_idx);
         assert(flatIndex < TheISA::NumIntRegs);
-        uint64_t regVal = intRegs[flatIndex];
+        uint64_t regVal(readIntRegFlat(flatIndex));
         DPRINTF(IntRegs, "Reading int reg %d (%d) as %#x.\n",
                 reg_idx, flatIndex, regVal);
         return regVal;
@@ -244,9 +242,9 @@ class SimpleThread : public ThreadState
 
     FloatReg readFloatReg(int reg_idx)
     {
-        int flatIndex = isa.flattenFloatIndex(reg_idx);
+        int flatIndex = isa->flattenFloatIndex(reg_idx);
         assert(flatIndex < TheISA::NumFloatRegs);
-        FloatReg regVal = floatRegs.f[flatIndex];
+        FloatReg regVal(readFloatRegFlat(flatIndex));
         DPRINTF(FloatRegs, "Reading float reg %d (%d) as %f, %#x.\n",
                 reg_idx, flatIndex, regVal, floatRegs.i[flatIndex]);
         return regVal;
@@ -254,9 +252,9 @@ class SimpleThread : public ThreadState
 
     FloatRegBits readFloatRegBits(int reg_idx)
     {
-        int flatIndex = isa.flattenFloatIndex(reg_idx);
+        int flatIndex = isa->flattenFloatIndex(reg_idx);
         assert(flatIndex < TheISA::NumFloatRegs);
-        FloatRegBits regVal = floatRegs.i[flatIndex];
+        FloatRegBits regVal(readFloatRegBitsFlat(flatIndex));
         DPRINTF(FloatRegs, "Reading float reg %d (%d) bits as %#x, %f.\n",
                 reg_idx, flatIndex, regVal, floatRegs.f[flatIndex]);
         return regVal;
@@ -264,30 +262,30 @@ class SimpleThread : public ThreadState
 
     void setIntReg(int reg_idx, uint64_t val)
     {
-        int flatIndex = isa.flattenIntIndex(reg_idx);
+        int flatIndex = isa->flattenIntIndex(reg_idx);
         assert(flatIndex < TheISA::NumIntRegs);
         DPRINTF(IntRegs, "Setting int reg %d (%d) to %#x.\n",
                 reg_idx, flatIndex, val);
-        intRegs[flatIndex] = val;
+        setIntRegFlat(flatIndex, val);
     }
 
     void setFloatReg(int reg_idx, FloatReg val)
     {
-        int flatIndex = isa.flattenFloatIndex(reg_idx);
+        int flatIndex = isa->flattenFloatIndex(reg_idx);
         assert(flatIndex < TheISA::NumFloatRegs);
-        floatRegs.f[flatIndex] = val;
+        setFloatRegFlat(flatIndex, val);
         DPRINTF(FloatRegs, "Setting float reg %d (%d) to %f, %#x.\n",
                 reg_idx, flatIndex, val, floatRegs.i[flatIndex]);
     }
 
     void setFloatRegBits(int reg_idx, FloatRegBits val)
     {
-        int flatIndex = isa.flattenFloatIndex(reg_idx);
+        int flatIndex = isa->flattenFloatIndex(reg_idx);
         assert(flatIndex < TheISA::NumFloatRegs);
         // XXX: Fix array out of bounds compiler error for gem5.fast
         // when checkercpu enabled
         if (flatIndex < TheISA::NumFloatRegs)
-            floatRegs.i[flatIndex] = val;
+            setFloatRegBitsFlat(flatIndex, val);
         DPRINTF(FloatRegs, "Setting float reg %d (%d) bits to %#x, %#f.\n",
                 reg_idx, flatIndex, val, floatRegs.f[flatIndex]);
     }
@@ -341,37 +339,37 @@ class SimpleThread : public ThreadState
     MiscReg
     readMiscRegNoEffect(int misc_reg, ThreadID tid = 0)
     {
-        return isa.readMiscRegNoEffect(misc_reg);
+        return isa->readMiscRegNoEffect(misc_reg);
     }
 
     MiscReg
     readMiscReg(int misc_reg, ThreadID tid = 0)
     {
-        return isa.readMiscReg(misc_reg, tc);
+        return isa->readMiscReg(misc_reg, tc);
     }
 
     void
     setMiscRegNoEffect(int misc_reg, const MiscReg &val, ThreadID tid = 0)
     {
-        return isa.setMiscRegNoEffect(misc_reg, val);
+        return isa->setMiscRegNoEffect(misc_reg, val);
     }
 
     void
     setMiscReg(int misc_reg, const MiscReg &val, ThreadID tid = 0)
     {
-        return isa.setMiscReg(misc_reg, val, tc);
+        return isa->setMiscReg(misc_reg, val, tc);
     }
 
     int
     flattenIntIndex(int reg)
     {
-        return isa.flattenIntIndex(reg);
+        return isa->flattenIntIndex(reg);
     }
 
     int
     flattenFloatIndex(int reg)
     {
-        return isa.flattenFloatIndex(reg);
+        return isa->flattenFloatIndex(reg);
     }
 
     unsigned readStCondFailures() { return storeCondFailures; }
@@ -383,6 +381,18 @@ class SimpleThread : public ThreadState
     {
         process->syscall(callnum, tc);
     }
+
+    uint64_t readIntRegFlat(int idx) { return intRegs[idx]; }
+    void setIntRegFlat(int idx, uint64_t val) { intRegs[idx] = val; }
+
+    FloatReg readFloatRegFlat(int idx) { return floatRegs.f[idx]; }
+    void setFloatRegFlat(int idx, FloatReg val) { floatRegs.f[idx] = val; }
+
+    FloatRegBits readFloatRegBitsFlat(int idx) { return floatRegs.i[idx]; }
+    void setFloatRegBitsFlat(int idx, FloatRegBits val) {
+        floatRegs.i[idx] = val;
+    }
+
 };
 
 

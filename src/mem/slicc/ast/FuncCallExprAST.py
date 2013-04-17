@@ -142,7 +142,7 @@ class FuncCallExprAST(ExprAST):
     }
 
     if (result == TransitionResult_ResourceStall) {
-        scheduleEvent(this, 1);
+        scheduleEvent(Cycles(1));
 
         // Cannot do anything with this transition, go check next doable transition (mostly likely of next port)
     }
@@ -173,7 +173,7 @@ class FuncCallExprAST(ExprAST):
     }
 
     if (result1 == TransitionResult_ResourceStall) {
-        scheduleEvent(this, 1);
+        scheduleEvent(Cycles(1));
         // Cannot do anything with this transition, go check next
         // doable transition (mostly likely of next port)
     }
@@ -206,12 +206,8 @@ if (!(${{cvec[0]}})) {
 
         else:
             # Normal function
-
-            # if the func is internal to the chip but not the machine
-            # then it can only be accessed through the chip pointer
-            internal = ""
             if "external" not in func and not func.isInternalMachineFunc:
-                internal = "m_chip_ptr->"
+                self.error("Invalid function")
 
             params = ""
             first_param = True
@@ -225,7 +221,7 @@ if (!(${{cvec[0]}})) {
                     params += str(param_code);
 
             fix = code.nofix()
-            code('(${internal}${{func.c_ident}}($params))')
+            code('(${{func.c_ident}}($params))')
             code.fix(fix)
 
         return func.return_type

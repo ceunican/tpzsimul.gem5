@@ -306,7 +306,6 @@ Checker<Impl>::verify(DynInstPtr &completed_inst)
                     StaticInstPtr instPtr = NULL;
 
                     //Predecode, ie bundle up an ExtMachInst
-                    thread->decoder.setTC(thread->getTC());
                     //If more fetch data is needed, pass it in.
                     Addr fetchPC = (pcState.instAddr() & PCMask) + fetchOffset;
                     thread->decoder.moreBytes(pcState, fetchPC, machInst);
@@ -574,12 +573,12 @@ Checker<Impl>::validateState()
              "registers from main CPU", curTick(), unverifiedInst->instAddr());
 
         // Terribly convoluted way to make sure O3 model does not implode
-        bool inSyscall = unverifiedInst->thread->inSyscall;
-        unverifiedInst->thread->inSyscall = true;
+        bool no_squash_from_TC = unverifiedInst->thread->noSquashFromTC;
+        unverifiedInst->thread->noSquashFromTC = true;
 
         // Heavy-weight copying of all registers
         thread->copyArchRegs(unverifiedInst->tcBase());
-        unverifiedInst->thread->inSyscall = inSyscall;
+        unverifiedInst->thread->noSquashFromTC = no_squash_from_TC;
 
         // Set curStaticInst to unverifiedInst->staticInst
         curStaticInst = unverifiedInst->staticInst;

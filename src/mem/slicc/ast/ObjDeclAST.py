@@ -41,12 +41,8 @@ class ObjDeclAST(DeclAST):
     def generate(self):
         machineComponentSym = False
 
-        self["chip_object"] = "yes"
-
-        if "hack" in self:
-            warning("'hack=' is now deprecated")
-
-        if "network" in self and "virtual_network" not in self:
+        if "network" in self and not ("virtual_network" in self or
+                                      "physical_network" in self) :
             self.error("Network queues require a 'virtual_network' attribute")
 
         type = self.type_ast.type
@@ -70,9 +66,7 @@ class ObjDeclAST(DeclAST):
 
         # FIXME : should all use accessors here to avoid public member
         # variables
-        if self.ident == "id":
-            c_code = "m_chip_ptr.getID()"
-        elif self.ident == "version":
+        if self.ident == "version":
             c_code = "m_version"
         elif self.ident == "machineID":
             c_code = "m_machineID"

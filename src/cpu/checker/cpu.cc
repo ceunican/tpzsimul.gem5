@@ -96,14 +96,17 @@ CheckerCPU::~CheckerCPU()
 void
 CheckerCPU::setSystem(System *system)
 {
+    const Params *p(dynamic_cast<const Params *>(_params));
+
     systemPtr = system;
 
     if (FullSystem) {
-        thread = new SimpleThread(this, 0, systemPtr, itb, dtb, false);
+        thread = new SimpleThread(this, 0, systemPtr, itb, dtb,
+                                  p->isa[0], false);
     } else {
         thread = new SimpleThread(this, 0, systemPtr,
                                   workload.size() ? workload[0] : NULL,
-                                  itb, dtb);
+                                  itb, dtb, p->isa[0]);
     }
 
     tc = thread->getTC();
@@ -114,13 +117,13 @@ CheckerCPU::setSystem(System *system)
 }
 
 void
-CheckerCPU::setIcachePort(CpuPort *icache_port)
+CheckerCPU::setIcachePort(MasterPort *icache_port)
 {
     icachePort = icache_port;
 }
 
 void
-CheckerCPU::setDcachePort(CpuPort *dcache_port)
+CheckerCPU::setDcachePort(MasterPort *dcache_port)
 {
     dcachePort = dcache_port;
 }

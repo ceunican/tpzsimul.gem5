@@ -422,7 +422,6 @@ Trace::LegionTraceRecord::dump()
                          << endl;
 
                     TheISA::Decoder *decoder = thread->getDecoderPtr();
-                    decoder->setTC(thread);
                     decoder->moreBytes(m5Pc, m5Pc, shared_data->instruction);
 
                     assert(decoder->instReady());
@@ -536,7 +535,7 @@ Trace::LegionTraceRecord::dump()
                     }
                     if (diffTlb) {
                         printColumnLabels(outs);
-                        char label[8];
+                        char label[9];
                         for (int x = 0; x < 64; x++) {
                             if (shared_data->itb[x] !=
                                     ULL(0xFFFFFFFFFFFFFFFF) ||

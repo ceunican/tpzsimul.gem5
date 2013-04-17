@@ -51,22 +51,22 @@ flitBuffer::isEmpty()
 }
 
 bool
-flitBuffer::isReady()
+flitBuffer::isReady(Cycles curTime)
 {
     if (m_buffer.size() != 0 ) {
         flit *t_flit = m_buffer.front();
-        if (t_flit->get_time() <= g_system_ptr->getTime())
+        if (t_flit->get_time() <= curTime)
             return true;
     }
     return false;
 }
 
 bool
-flitBuffer::isReadyForNext()
+flitBuffer::isReadyForNext(Cycles curTime)
 {
     if (m_buffer.size() != 0 ) {
         flit *t_flit = m_buffer.front();
-        if (t_flit->get_time() <= (g_system_ptr->getTime() + 1))
+        if (t_flit->get_time() <= (curTime + 1))
             return true;
     }
     return false;
@@ -111,4 +111,28 @@ flitBuffer::print(std::ostream& out) const
 {
     out << "[flitBuffer: ";
     out << m_buffer.size() << "] " << std::endl;
+}
+
+bool
+flitBuffer::functionalRead(Packet *pkt)
+{
+    for (unsigned int i = 0; i < m_buffer.size(); ++i) {
+        if (m_buffer[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t
+flitBuffer::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_buffer.size(); ++i) {
+        if (m_buffer[i]->functionalWrite(pkt)) {
+            num_functional_writes++;
+        }
+    }
+    return num_functional_writes;
 }

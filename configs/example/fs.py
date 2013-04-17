@@ -101,9 +101,8 @@ elif buildEnv['TARGET_ISA'] == "sparc":
 elif buildEnv['TARGET_ISA'] == "x86":
     test_sys = makeLinuxX86System(test_mem_mode, options.num_cpus, bm[0])
 elif buildEnv['TARGET_ISA'] == "arm":
-    test_sys = makeArmSystem(test_mem_mode,
-            options.machine_type, bm[0],
-            bare_metal=options.bare_metal)
+    test_sys = makeArmSystem(test_mem_mode, options.machine_type, bm[0],
+            options.dtb_filename, bare_metal=options.bare_metal)
 else:
     fatal("Incapable of building %s full system!", buildEnv['TARGET_ISA'])
 
@@ -117,28 +116,29 @@ test_sys.init_param = options.init_param
 
 test_sys.cpu = [TestCPUClass(cpu_id=i) for i in xrange(np)]
 
-if bm[0]:
-    mem_size = bm[0].mem()
-else:
-    mem_size = SysConfig().mem()
 if options.caches or options.l2cache:
-    test_sys.iocache = IOCache(addr_ranges=[test_sys.physmem.range])
+    test_sys.iocache = IOCache(clock = '1GHz',
+                               addr_ranges = test_sys.mem_ranges)
     test_sys.iocache.cpu_side = test_sys.iobus.master
     test_sys.iocache.mem_side = test_sys.membus.slave
 else:
-    test_sys.iobridge = Bridge(delay='50ns', ranges = [test_sys.physmem.range])
+    test_sys.iobridge = Bridge(delay='50ns', ranges = test_sys.mem_ranges)
     test_sys.iobridge.slave = test_sys.iobus.master
     test_sys.iobridge.master = test_sys.membus.slave
 
 # Sanity check
-if options.fastmem and (options.caches or options.l2cache):
-    fatal("You cannot use fastmem in combination with caches!")
+if options.fastmem:
+    if TestCPUClass != AtomicSimpleCPU:
+        fatal("Fastmem can only be used with atomic CPU!")
+    if (options.caches or options.l2cache):
+        fatal("You cannot use fastmem in combination with caches!")
 
 for i in xrange(np):
     if options.fastmem:
         test_sys.cpu[i].fastmem = True
     if options.checker:
         test_sys.cpu[i].addCheckerCpu()
+    test_sys.cpu[i].createThreads()
 
 CacheConfig.config_cache(options, test_sys)
 
@@ -155,14 +155,16 @@ if len(bm) == 2:
         drive_sys = makeArmSystem(drive_mem_mode, options.machine_type, bm[1])
 
     drive_sys.cpu = DriveCPUClass(cpu_id=0)
+    drive_sys.cpu.createThreads()
     drive_sys.cpu.createInterruptController()
     drive_sys.cpu.connectAllPorts(drive_sys.membus)
     if options.fastmem:
         drive_sys.cpu.fastmem = True
     if options.kernel is not None:
         drive_sys.kernel = binary(options.kernel)
+
     drive_sys.iobridge = Bridge(delay='50ns',
-                                ranges = [drive_sys.physmem.range])
+                                ranges = drive_sys.mem_ranges)
     drive_sys.iobridge.slave = drive_sys.iobus.master
     drive_sys.iobridge.master = drive_sys.membus.slave
 

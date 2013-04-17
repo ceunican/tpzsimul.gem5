@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -54,7 +54,9 @@
 #include "cpu/timebuf.hh"
 #include "debug/Activity.hh"
 #include "debug/Decode.hh"
+#include "debug/Drain.hh"
 #include "debug/IEW.hh"
+#include "debug/O3PipeView.hh"
 #include "params/DerivO3CPU.hh"
 
 using namespace std;
@@ -73,8 +75,7 @@ DefaultIEW<Impl>::DefaultIEW(O3CPU *_cpu, DerivO3CPUParams *params)
       issueWidth(params->issueWidth),
       wbOutstanding(0),
       wbWidth(params->wbWidth),
-      numThreads(params->numThreads),
-      switchedOut(false)
+      numThreads(params->numThreads)
 {
     _status = Active;
     exeStatus = Running;
@@ -283,7 +284,7 @@ DefaultIEW<Impl>::regStats()
 
 template<class Impl>
 void
-DefaultIEW<Impl>::initStage()
+DefaultIEW<Impl>::startupStage()
 {
     for (ThreadID tid = 0; tid < numThreads; tid++) {
         toRename->iewInfo[tid].usedIQ = true;
@@ -360,38 +361,33 @@ DefaultIEW<Impl>::setScoreboard(Scoreboard *sb_ptr)
 
 template <class Impl>
 bool
-DefaultIEW<Impl>::drain()
+DefaultIEW<Impl>::isDrained() const
 {
-    // IEW is ready to drain at any time.
-    cpu->signalDrained();
-    return true;
-}
-
-template <class Impl>
-void
-DefaultIEW<Impl>::resume()
-{
-}
-
-template <class Impl>
-void
-DefaultIEW<Impl>::switchOut()
-{
-    // Clear any state.
-    switchedOut = true;
-    assert(insts[0].empty());
-    assert(skidBuffer[0].empty());
-
-    instQueue.switchOut();
-    ldstQueue.switchOut();
-    fuPool->switchOut();
+    bool drained(ldstQueue.isDrained());
 
     for (ThreadID tid = 0; tid < numThreads; tid++) {
-        while (!insts[tid].empty())
-            insts[tid].pop();
-        while (!skidBuffer[tid].empty())
-            skidBuffer[tid].pop();
+        if (!insts[tid].empty()) {
+            DPRINTF(Drain, "%i: Insts not empty.\n", tid);
+            drained = false;
+        }
+        if (!skidBuffer[tid].empty()) {
+            DPRINTF(Drain, "%i: Skid buffer not empty.\n", tid);
+            drained = false;
+        }
     }
+
+    return drained;
+}
+
+template <class Impl>
+void
+DefaultIEW<Impl>::drainSanityCheck() const
+{
+    assert(isDrained());
+
+    instQueue.drainSanityCheck();
+    ldstQueue.drainSanityCheck();
+    fuPool->drainSanityCheck();
 }
 
 template <class Impl>
@@ -402,13 +398,12 @@ DefaultIEW<Impl>::takeOverFrom()
     _status = Active;
     exeStatus = Running;
     wbStatus = Idle;
-    switchedOut = false;
 
     instQueue.takeOverFrom();
     ldstQueue.takeOverFrom();
-    fuPool->takeOver();
+    fuPool->takeOverFrom();
 
-    initStage();
+    startupStage();
     cpu->activityThisCycle();
 
     for (ThreadID tid = 0; tid < numThreads; tid++) {
@@ -1617,7 +1612,9 @@ DefaultIEW<Impl>::updateExeInstStats(DynInstPtr &inst)
     iewExecutedInsts++;
 
 #if TRACING_ON
-    inst->completeTick = curTick() - inst->fetchTick;
+    if (DTRACE(O3PipeView)) {
+        inst->completeTick = curTick() - inst->fetchTick;
+    }
 #endif
 
     //

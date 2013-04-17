@@ -38,11 +38,12 @@ import slicc.util as util
 from slicc.symbols import SymbolTable
 
 class SLICC(Grammar):
-    def __init__(self, filename, verbose=False, traceback=False, **kwargs):
+    def __init__(self, filename, base_dir, verbose=False, traceback=False, **kwargs):
         self.protocol = None
         self.traceback = traceback
         self.verbose = verbose
         self.symtab = SymbolTable(self)
+        self.base_dir = base_dir
 
         try:
             self.decl_list = self.parse_file(filename, **kwargs)
@@ -64,8 +65,8 @@ class SLICC(Grammar):
         self.decl_list.findMachines()
         self.decl_list.generate()
 
-    def writeCodeFiles(self, code_path):
-        self.symtab.writeCodeFiles(code_path)
+    def writeCodeFiles(self, code_path, includes):
+        self.symtab.writeCodeFiles(code_path, includes)
 
     def writeHTMLFiles(self, html_path):
         self.symtab.writeHTMLFiles(html_path)
@@ -120,8 +121,6 @@ class SLICC(Grammar):
         'is_invalid' : 'IS_INVALID',
         'else' : 'ELSE',
         'return' : 'RETURN',
-        'THIS' : 'THIS',
-        'CHIP' : 'CHIP',
         'void' : 'VOID',
         'new' : 'NEW',
         'OOD' : 'OOD',
@@ -249,7 +248,10 @@ class SLICC(Grammar):
     def p_decl__include(self, p):
         "decl : INCLUDE STRING SEMI"
         dirname = os.path.dirname(self.current_source)
-        filename = os.path.join(dirname, p[2])
+        if os.path.exists(os.path.join(dirname, p[2])):
+            filename = os.path.join(dirname, p[2])
+        else:
+            filename = os.path.join(self.base_dir, p[2])
         p[0] = self.parse_file(filename)
 
     def p_decl__machine(self, p):
@@ -313,14 +315,23 @@ class SLICC(Grammar):
         "decl : type ident pairs SEMI"
         p[0] = ast.ObjDeclAST(self, p[1], p[2], p[3])
 
+    # Function definition and declaration
     def p_decl__func_decl(self, p):
-        """decl : void ident '(' params ')' pairs SEMI
+        "decl : func_decl"
+        p[0] = p[1]
+
+    def p_func_decl__0(self, p):
+        """func_decl :  void ident '(' params ')' pairs SEMI
                 | type ident '(' params ')' pairs SEMI"""
         p[0] = ast.FuncDeclAST(self, p[1], p[2], p[4], p[6], None)
 
     def p_decl__func_def(self, p):
-        """decl : void ident '(' params ')' pairs statements
-                | type ident '(' params ')' pairs statements"""
+        "decl : func_def"
+        p[0] = p[1]
+
+    def p_func_def__0(self, p):
+        """func_def : void ident '(' params ')' pairs statements
+            | type ident '(' params ')' pairs statements"""
         p[0] = ast.FuncDeclAST(self, p[1], p[2], p[4], p[6], p[7])
 
     # Type fields
@@ -335,6 +346,10 @@ class SLICC(Grammar):
     def p_type_method__0(self, p):
         "type_member : type_or_void ident '(' types ')' pairs SEMI"
         p[0] = ast.TypeFieldMethodAST(self, p[1], p[2], p[4], p[6])
+
+    def p_type_method__1(self, p):
+        "type_member : type_or_void ident '(' params ')' pairs statements"
+        p[0] = ast.FuncDeclAST(self, p[1], p[2], p[4], p[6], p[7])
 
     def p_type_member__1(self, p):
         "type_member : type_or_void ident pairs SEMI"
@@ -615,27 +630,6 @@ class SLICC(Grammar):
         "aexpr : OOD"
         p[0] = ast.OodAST(self)
 
-    # globally access a local chip component and call a method
-    def p_expr__local_chip_method(self, p):
-        "aexpr : THIS DOT var '[' expr ']' DOT var DOT ident '(' exprs ')'"
-        p[0] = ast.LocalChipMethodAST(self, p[3], p[5], p[8], p[10], p[12])
-
-    # globally access a local chip component and access a data member
-    def p_expr__local_chip_member(self, p):
-        "aexpr : THIS DOT var '[' expr ']' DOT var DOT field"
-        p[0] = ast.LocalChipMemberAST(self, p[3], p[5], p[8], p[10])
-
-    # globally access a specified chip component and call a method
-    def p_expr__specified_chip_method(self, p):
-        "aexpr : CHIP '[' expr ']' DOT var '[' expr ']' DOT var DOT ident '(' exprs ')'"
-        p[0] = ast.SpecifiedChipMethodAST(self, p[3], p[6], p[8], p[11], p[13],
-                                          p[15])
-
-    # globally access a specified chip component and access a data member
-    def p_expr__specified_chip_member(self, p):
-        "aexpr : CHIP '[' expr ']' DOT var '[' expr ']' DOT var DOT field"
-        p[0] = ast.SpecifiedChipMemberAST(self, p[3], p[6], p[8], p[11], p[13])
-
     def p_expr__member(self, p):
         "aexpr : aexpr DOT ident"
         p[0] = ast.MemberExprAST(self, p[1], p[3])
@@ -714,7 +708,3 @@ class SLICC(Grammar):
     def p_var(self, p):
         "var : ident"
         p[0] = ast.VarExprAST(self, p[1])
-
-    def p_field(self, p):
-        "field : ident"
-        p[0] = p[1]

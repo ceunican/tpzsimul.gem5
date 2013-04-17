@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -69,14 +69,14 @@ BaseCache::BaseCache(const Params *p)
       writeBuffer("write buffer", p->write_buffers, p->mshrs+1000,
                   MSHRQueue_WriteBuffer),
       blkSize(p->block_size),
-      hitLatency(p->latency),
+      hitLatency(p->hit_latency),
+      responseLatency(p->response_latency),
       numTarget(p->tgts_per_mshr),
       forwardSnoops(p->forward_snoops),
       isTopLevel(p->is_top_level),
       blocked(0),
       noTargetMSHR(NULL),
       missCount(p->max_miss_count),
-      drainEvent(NULL),
       addrRanges(p->addr_ranges.begin(), p->addr_ranges.end()),
       system(p->system)
 {
@@ -88,6 +88,13 @@ BaseCache::CacheSlavePort::setBlocked()
     assert(!blocked);
     DPRINTF(CachePort, "Cache port %s blocking new requests\n", name());
     blocked = true;
+    // if we already scheduled a retry in this cycle, but it has not yet
+    // happened, cancel it
+    if (sendRetryEvent.scheduled()) {
+       owner.deschedule(sendRetryEvent);
+       DPRINTF(CachePort, "Cache port %s deschedule retry\n", name());
+       mustSendRetry = true;
+    }
 }
 
 void
@@ -113,8 +120,8 @@ BaseCache::init()
     cpuSidePort->sendRangeChange();
 }
 
-MasterPort &
-BaseCache::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort &
+BaseCache::getMasterPort(const std::string &if_name, PortID idx)
 {
     if (if_name == "mem_side") {
         return *memSidePort;
@@ -123,8 +130,8 @@ BaseCache::getMasterPort(const std::string &if_name, int idx)
     }
 }
 
-SlavePort &
-BaseCache::getSlavePort(const std::string &if_name, int idx)
+BaseSlavePort &
+BaseCache::getSlavePort(const std::string &if_name, PortID idx)
 {
     if (if_name == "cpu_side") {
         return *cpuSidePort;
@@ -744,19 +751,18 @@ BaseCache::regStats()
 }
 
 unsigned int
-BaseCache::drain(Event *de)
+BaseCache::drain(DrainManager *dm)
 {
-    int count = memSidePort->drain(de) + cpuSidePort->drain(de);
+    int count = memSidePort->drain(dm) + cpuSidePort->drain(dm) +
+        mshrQueue.drain(dm) + writeBuffer.drain(dm);
 
     // Set status
     if (count != 0) {
-        drainEvent = de;
-
-        changeState(SimObject::Draining);
+        setDrainState(Drainable::Draining);
         DPRINTF(Drain, "Cache not drained\n");
         return count;
     }
 
-    changeState(SimObject::Drained);
+    setDrainState(Drainable::Drained);
     return 0;
 }

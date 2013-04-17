@@ -47,22 +47,22 @@ flitBuffer_d::isEmpty()
 }
 
 bool
-flitBuffer_d::isReady()
+flitBuffer_d::isReady(Cycles curTime)
 {
     if (m_buffer.size() != 0 ) {
         flit_d *t_flit = peekTopFlit();
-        if (t_flit->get_time() <= g_system_ptr->getTime())
+        if (t_flit->get_time() <= curTime)
             return true;
     }
     return false;
 }
 
 bool
-flitBuffer_d::isReadyForNext()
+flitBuffer_d::isReadyForNext(Cycles curTime)
 {
     if (m_buffer.size() != 0 ) {
         flit_d *t_flit = peekTopFlit();
-        if (t_flit->get_time() <= (g_system_ptr->getTime() + 1))
+        if (t_flit->get_time() <= (curTime + 1))
             return true;
     }
     return false;
@@ -84,4 +84,18 @@ void
 flitBuffer_d::setMaxSize(int maximum)
 {
     max_size = maximum;
+}
+
+uint32_t
+flitBuffer_d::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_buffer.size(); ++i) {
+        if (m_buffer[i]->functionalWrite(pkt)) {
+            num_functional_writes++;
+        }
+    }
+
+    return num_functional_writes;
 }

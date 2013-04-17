@@ -223,24 +223,51 @@ class BaseCache : public MemObject
         }
     }
 
+    /**
+     * Write back dirty blocks in the cache using functional accesses.
+     */
+    virtual void memWriteback() = 0;
+    /**
+     * Invalidates all blocks in the cache.
+     *
+     * @warn Dirty cache lines will not be written back to
+     * memory. Make sure to call functionalWriteback() first if you
+     * want the to write them to memory.
+     */
+    virtual void memInvalidate() = 0;
+    /**
+     * Determine if there are any dirty blocks in the cache.
+     *
+     * \return true if at least one block is dirty, false otherwise.
+     */
+    virtual bool isDirty() const = 0;
+
     /** Block size of this cache */
     const unsigned blkSize;
 
     /**
      * The latency of a hit in this device.
      */
-    int hitLatency;
+    const Cycles hitLatency;
+
+    /**
+     * The latency of sending reponse to its upper level cache/core on a
+     * linefill. In most contemporary processors, the return path on a cache
+     * miss is much quicker that the hit latency. The responseLatency parameter
+     * tries to capture this latency.
+     */
+    const Cycles responseLatency;
 
     /** The number of targets for each MSHR. */
     const int numTarget;
 
     /** Do we forward snoops from mem side port through to cpu side port? */
-    bool forwardSnoops;
+    const bool forwardSnoops;
 
     /** Is this cache a toplevel cache (e.g. L1, I/O cache). If so we should
      * never try to forward ownership and similar optimizations to the cpu
      * side */
-    bool isTopLevel;
+    const bool isTopLevel;
 
     /**
      * Bit vector of the blocking reasons for the access path.
@@ -252,7 +279,7 @@ class BaseCache : public MemObject
     uint64_t order;
 
     /** Stores time the cache blocked for statistics. */
-    Tick blockedCycle;
+    Cycles blockedCycle;
 
     /** Pointer to the MSHR that has no targets. */
     MSHR *noTargetMSHR;
@@ -260,13 +287,10 @@ class BaseCache : public MemObject
     /** The number of misses to trigger an exit event. */
     Counter missCount;
 
-    /** The drain event. */
-    Event *drainEvent;
-
     /**
      * The address range to which the cache responds on the CPU side.
      * Normally this is all possible memory addresses. */
-    AddrRangeList addrRanges;
+    const AddrRangeList addrRanges;
 
   public:
     /** System we are currently operating in. */
@@ -422,8 +446,10 @@ class BaseCache : public MemObject
 
     virtual void init();
 
-    virtual MasterPort &getMasterPort(const std::string &if_name, int idx = -1);
-    virtual SlavePort &getSlavePort(const std::string &if_name, int idx = -1);
+    virtual BaseMasterPort &getMasterPort(const std::string &if_name,
+                                          PortID idx = InvalidPortID);
+    virtual BaseSlavePort &getSlavePort(const std::string &if_name,
+                                        PortID idx = InvalidPortID);
 
     /**
      * Query block size of a cache.
@@ -469,7 +495,7 @@ class BaseCache : public MemObject
     /**
      * Returns true if the cache is blocked for accesses.
      */
-    bool isBlocked()
+    bool isBlocked() const
     {
         return blocked != 0;
     }
@@ -484,7 +510,7 @@ class BaseCache : public MemObject
         uint8_t flag = 1 << cause;
         if (blocked == 0) {
             blocked_causes[cause]++;
-            blockedCycle = curTick();
+            blockedCycle = curCycle();
             cpuSidePort->setBlocked();
         }
         blocked |= flag;
@@ -504,7 +530,7 @@ class BaseCache : public MemObject
         blocked &= ~flag;
         DPRINTF(Cache,"Unblocking for cause %d, mask=%d\n", cause, blocked);
         if (blocked == 0) {
-            blocked_cycles[cause] += curTick() - blockedCycle;
+            blocked_cycles[cause] += curCycle() - blockedCycle;
             cpuSidePort->clearBlocked();
         }
     }
@@ -532,11 +558,11 @@ class BaseCache : public MemObject
         // interesting again.
     }
 
-    virtual unsigned int drain(Event *de);
+    virtual unsigned int drain(DrainManager *dm);
 
-    virtual bool inCache(Addr addr) = 0;
+    virtual bool inCache(Addr addr) const = 0;
 
-    virtual bool inMissQueue(Addr addr) = 0;
+    virtual bool inMissQueue(Addr addr) const = 0;
 
     void incMissCount(PacketPtr pkt)
     {

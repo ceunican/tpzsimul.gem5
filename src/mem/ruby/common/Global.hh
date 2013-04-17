@@ -29,17 +29,16 @@
 #ifndef __MEM_RUBY_COMMON_GLOBAL_HH__
 #define __MEM_RUBY_COMMON_GLOBAL_HH__
 
+#include <map>
+#include <vector>
+
 #include "base/str.hh"
 
 class RubySystem;
 extern RubySystem* g_system_ptr;
 
-// FIXME: this is required by the contructor of Directory_Entry.hh.
-// It can't go into slicc_util.hh because it opens a can of ugly worms
-extern inline int max_tokens()
-{
-  return 1024;
-}
+class AbstractController;
+extern std::vector<std::map<uint32_t, AbstractController *> > g_abs_controls;
 
 #endif // __MEM_RUBY_COMMON_GLOBAL_HH__
 

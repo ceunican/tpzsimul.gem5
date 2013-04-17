@@ -51,9 +51,10 @@
 using namespace ArmISA;
 
 TableWalker::TableWalker(const Params *p)
-    : MemObject(p), port(this, params()->sys), drainEvent(NULL),
+    : MemObject(p), port(this, params()->sys), drainManager(NULL),
       tlb(NULL), currState(NULL), pending(false),
       masterId(p->sys->getMasterId(name())),
+      numSquashable(p->num_squash_per_cycle),
       doL1DescEvent(this), doL2DescEvent(this), doProcessEvent(this)
 {
     sctlr = 0;
@@ -67,30 +68,30 @@ TableWalker::~TableWalker()
 void
 TableWalker::completeDrain()
 {
-    if (drainEvent && stateQueueL1.empty() && stateQueueL2.empty() &&
+    if (drainManager && stateQueueL1.empty() && stateQueueL2.empty() &&
         pendingQueue.empty()) {
-        changeState(Drained);
+        setDrainState(Drainable::Drained);
         DPRINTF(Drain, "TableWalker done draining, processing drain event\n");
-        drainEvent->process();
-        drainEvent = NULL;
+        drainManager->signalDrainDone();
+        drainManager = NULL;
     }
 }
 
 unsigned int
-TableWalker::drain(Event *de)
+TableWalker::drain(DrainManager *dm)
 {
-    unsigned int count = port.drain(de);
+    unsigned int count = port.drain(dm);
 
     if (stateQueueL1.empty() && stateQueueL2.empty() &&
         pendingQueue.empty()) {
-        changeState(Drained);
+        setDrainState(Drainable::Drained);
         DPRINTF(Drain, "TableWalker free, no need to drain\n");
 
         // table walker is drained, but its ports may still need to be drained
         return count;
     } else {
-        drainEvent = de;
-        changeState(Draining);
+        drainManager = dm;
+        setDrainState(Drainable::Draining);
         DPRINTF(Drain, "TableWalker not drained\n");
 
         // return port drain count plus the table walker itself needs to drain
@@ -100,17 +101,17 @@ TableWalker::drain(Event *de)
 }
 
 void
-TableWalker::resume()
+TableWalker::drainResume()
 {
-    MemObject::resume();
-    if ((params()->sys->getMemoryMode() == Enums::timing) && currState) {
+    Drainable::drainResume();
+    if (params()->sys->isTimingMode() && currState) {
         delete currState;
         currState = NULL;
     }
 }
 
-MasterPort&
-TableWalker::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort&
+TableWalker::getMasterPort(const std::string &if_name, PortID idx)
 {
     if (if_name == "port") {
         return port;
@@ -184,9 +185,62 @@ TableWalker::processWalkWrapper()
     assert(!currState);
     assert(pendingQueue.size());
     currState = pendingQueue.front();
-    pendingQueue.pop_front();
-    pending = true;
-    processWalk();
+
+    // Check if a previous walk filled this request already
+    TlbEntry* te = tlb->lookup(currState->vaddr, currState->contextId, true);
+
+    // Check if we still need to have a walk for this request. If the requesting
+    // instruction has been squashed, or a previous walk has filled the TLB with
+    // a match, we just want to get rid of the walk. The latter could happen
+    // when there are multiple outstanding misses to a single page and a
+    // previous request has been successfully translated.
+    if (!currState->transState->squashed() && !te) {
+        // We've got a valid request, lets process it
+        pending = true;
+        pendingQueue.pop_front();
+        processWalk();
+        return;
+    }
+
+
+    // If the instruction that we were translating for has been
+    // squashed we shouldn't bother.
+    unsigned num_squashed = 0;
+    ThreadContext *tc = currState->tc;
+    while ((num_squashed < numSquashable) && currState &&
+           (currState->transState->squashed() || te)) {
+        pendingQueue.pop_front();
+        num_squashed++;
+
+        DPRINTF(TLB, "Squashing table walk for address %#x\n", currState->vaddr);
+
+        if (currState->transState->squashed()) {
+            // finish the translation which will delete the translation object
+            currState->transState->finish(new UnimpFault("Squashed Inst"),
+                    currState->req, currState->tc, currState->mode);
+        } else {
+            // translate the request now that we know it will work
+            currState->fault = tlb->translateTiming(currState->req, currState->tc,
+                                      currState->transState, currState->mode);
+        }
+
+        // delete the current request
+        delete currState;
+
+        // peak at the next one
+        if (pendingQueue.size()) {
+            currState = pendingQueue.front();
+            te = tlb->lookup(currState->vaddr, currState->contextId, true);
+        } else {
+            // Terminate the loop, nothing more to do
+            currState = NULL;
+        }
+    }
+
+    // if we've still got pending translations schedule more work
+    nextWalk(tc);
+    currState = NULL;
+    completeDrain();
 }
 
 Fault
@@ -759,7 +813,7 @@ void
 TableWalker::nextWalk(ThreadContext *tc)
 {
     if (pendingQueue.size())
-        schedule(doProcessEvent, tc->getCpuPtr()->clockEdge(Cycles(1)));
+        schedule(doProcessEvent, clockEdge(Cycles(1)));
 }
 
 

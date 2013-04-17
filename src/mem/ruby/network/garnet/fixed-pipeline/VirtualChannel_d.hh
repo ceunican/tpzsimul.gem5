@@ -39,16 +39,17 @@
 class VirtualChannel_d
 {
   public:
-    VirtualChannel_d(int id);
+    VirtualChannel_d(int id, Cycles curTime);
     ~VirtualChannel_d();
 
-    bool need_stage(VC_state_type state, flit_stage stage);
-    bool need_stage_nextcycle(VC_state_type state, flit_stage stage);
+    bool need_stage(VC_state_type state, flit_stage stage, Cycles curTime);
+    bool need_stage_nextcycle(VC_state_type state, flit_stage stage,
+                              Cycles curTime);
     void set_outport(int outport);
-    void grant_vc(int out_vc);
+    void grant_vc(int out_vc, Cycles curTime);
 
-    inline Time get_enqueue_time()          { return m_enqueue_time; }
-    inline void set_enqueue_time(Time time) { m_enqueue_time = time; }
+    inline Cycles get_enqueue_time()          { return m_enqueue_time; }
+    inline void set_enqueue_time(Cycles time) { m_enqueue_time = time; }
     inline VC_state_type get_state()        { return m_vc_state.first; }
     inline int get_outvc()                  { return m_output_vc; }
     inline bool has_credits()               { return (m_credit_count > 0); }
@@ -56,7 +57,10 @@ class VirtualChannel_d
     inline void update_credit(int credit)   { m_credit_count = credit; }
     inline void increment_credit()          { m_credit_count++; }
 
-    inline bool isReady() { return m_input_buffer->isReady(); }
+    inline bool isReady(Cycles curTime)
+    {
+        return m_input_buffer->isReady(curTime);
+    }
 
     inline void
     insertFlit(flit_d *t_flit)
@@ -65,10 +69,10 @@ class VirtualChannel_d
     }
 
     inline void
-    set_state(VC_state_type m_state)
+    set_state(VC_state_type m_state, Cycles curTime)
     {
         m_vc_state.first = m_state;
-        m_vc_state.second = g_system_ptr->getTime() + 1;
+        m_vc_state.second = curTime + Cycles(1);
     }
 
     inline flit_d*
@@ -83,12 +87,14 @@ class VirtualChannel_d
         return m_input_buffer->getTopFlit();
     }
 
+    uint32_t functionalWrite(Packet *pkt);
+
   private:
     int m_id;
     flitBuffer_d *m_input_buffer;
-    std::pair<VC_state_type, Time> m_vc_state; // I/R/V/A/C
+    std::pair<VC_state_type, Cycles> m_vc_state; // I/R/V/A/C
     int route;
-    Time m_enqueue_time;
+    Cycles m_enqueue_time;
     int m_output_vc;
     int m_credit_count;
 };

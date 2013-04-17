@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -124,15 +124,12 @@ class FullO3CPU : public BaseO3CPU
     /** Overall CPU status. */
     Status _status;
 
-    /** Per-thread status in CPU, used for SMT.  */
-    Status _threadStatus[Impl::MaxThreads];
-
   private:
 
     /**
      * IcachePort class for instruction fetch.
      */
-    class IcachePort : public CpuPort
+    class IcachePort : public MasterPort
     {
       protected:
         /** Pointer to fetch. */
@@ -141,7 +138,7 @@ class FullO3CPU : public BaseO3CPU
       public:
         /** Default constructor. */
         IcachePort(DefaultFetch<Impl> *_fetch, FullO3CPU<Impl>* _cpu)
-            : CpuPort(_cpu->name() + ".icache_port", _cpu), fetch(_fetch)
+            : MasterPort(_cpu->name() + ".icache_port", _cpu), fetch(_fetch)
         { }
 
       protected:
@@ -158,7 +155,7 @@ class FullO3CPU : public BaseO3CPU
     /**
      * DcachePort class for the load/store queue.
      */
-    class DcachePort : public CpuPort
+    class DcachePort : public MasterPort
     {
       protected:
 
@@ -168,7 +165,7 @@ class FullO3CPU : public BaseO3CPU
       public:
         /** Default constructor. */
         DcachePort(LSQ<Impl> *_lsq, FullO3CPU<Impl>* _cpu)
-            : CpuPort(_cpu->name() + ".dcache_port", _cpu), lsq(_lsq)
+            : MasterPort(_cpu->name() + ".dcache_port", _cpu), lsq(_lsq)
         { }
 
       protected:
@@ -178,6 +175,11 @@ class FullO3CPU : public BaseO3CPU
          * memory. */
         virtual bool recvTimingResp(PacketPtr pkt);
         virtual void recvTimingSnoopReq(PacketPtr pkt);
+
+        virtual void recvFunctionalSnoop(PacketPtr pkt)
+        {
+            // @todo: Is there a need for potential invalidation here?
+        }
 
         /** Handles doing a retry of the previous send. */
         virtual void recvRetry();
@@ -336,6 +338,33 @@ class FullO3CPU : public BaseO3CPU
     /** The tick event used for scheduling CPU ticks. */
     DeallocateContextEvent deallocateContextEvent[Impl::MaxThreads];
 
+    /**
+     * Check if the pipeline has drained and signal the DrainManager.
+     *
+     * This method checks if a drain has been requested and if the CPU
+     * has drained successfully (i.e., there are no instructions in
+     * the pipeline). If the CPU has drained, it deschedules the tick
+     * event and signals the drain manager.
+     *
+     * @return False if a drain hasn't been requested or the CPU
+     * hasn't drained, true otherwise.
+     */
+    bool tryDrain();
+
+    /**
+     * Perform sanity checks after a drain.
+     *
+     * This method is called from drain() when it has determined that
+     * the CPU is fully drained when gem5 is compiled with the NDEBUG
+     * macro undefined. The intention of this method is to do more
+     * extensive tests than the isDrained() method to weed out any
+     * draining bugs.
+     */
+    void drainSanityCheck() const;
+
+    /** Check if a system is in a drained state. */
+    bool isDrained() const;
+
   public:
     /** Constructs a CPU with the given parameters. */
     FullO3CPU(DerivO3CPUParams *params);
@@ -368,6 +397,8 @@ class FullO3CPU : public BaseO3CPU
 
     /** Initialize the CPU */
     void init();
+
+    void startup();
 
     /** Returns the Number of Active Threads in the CPU */
     int numActiveThreads()
@@ -417,11 +448,13 @@ class FullO3CPU : public BaseO3CPU
     /** Update The Order In Which We Process Threads. */
     void updateThreadPriority();
 
-    /** Serialize state. */
-    virtual void serialize(std::ostream &os);
+    /** Is the CPU draining? */
+    bool isDraining() const { return getDrainState() == Drainable::Draining; }
 
-    /** Unserialize from a checkpoint. */
-    virtual void unserialize(Checkpoint *cp, const std::string &section);
+    void serializeThread(std::ostream &os, ThreadID tid);
+
+    void unserializeThread(Checkpoint *cp, const std::string &section,
+                           ThreadID tid);
 
   public:
     /** Executes a syscall.
@@ -431,19 +464,27 @@ class FullO3CPU : public BaseO3CPU
 
     /** Starts draining the CPU's pipeline of all instructions in
      * order to stop all memory accesses. */
-    virtual unsigned int drain(Event *drain_event);
+    unsigned int drain(DrainManager *drain_manager);
 
     /** Resumes execution after a drain. */
-    virtual void resume();
+    void drainResume();
 
-    /** Signals to this CPU that a stage has completed switching out. */
-    void signalDrained();
+    /**
+     * Commit has reached a safe point to drain a thread.
+     *
+     * Commit calls this method to inform the pipeline that it has
+     * reached a point where it is not executed microcode and is about
+     * to squash uncommitted instructions to fully drain the pipeline.
+     */
+    void commitDrained(ThreadID tid);
 
     /** Switches out this CPU. */
     virtual void switchOut();
 
     /** Takes over from another CPU. */
     virtual void takeOverFrom(BaseCPU *oldCPU);
+
+    void verifyMemoryMode() const;
 
     /** Get the current instruction sequence number, and increment it. */
     InstSeqNum getAndIncrementInstSeq()
@@ -634,7 +675,7 @@ class FullO3CPU : public BaseO3CPU
     /** Integer Register Scoreboard */
     Scoreboard scoreboard;
 
-    TheISA::ISA isa[Impl::MaxThreads];
+    std::vector<TheISA::ISA *> isa;
 
     /** Instruction port. Note that it has to appear after the fetch stage. */
     IcachePort icachePort;
@@ -730,17 +771,11 @@ class FullO3CPU : public BaseO3CPU
     /** Pointer to the system. */
     System *system;
 
-    /** Event to call process() on once draining has completed. */
-    Event *drainEvent;
-
-    /** Counter of how many stages have completed draining. */
-    int drainCount;
+    /** DrainManager to notify when draining has completed. */
+    DrainManager *drainManager;
 
     /** Pointers to all of the threads in the CPU. */
     std::vector<Thread *> thread;
-
-    /** Whether or not the CPU should defer its registration. */
-    bool deferRegistration;
 
     /** Is there a context switch pending? */
     bool contextSwitch;
@@ -777,15 +812,10 @@ class FullO3CPU : public BaseO3CPU
     }
 
     /** Used by the fetch unit to get a hold of the instruction port. */
-    virtual CpuPort &getInstPort() { return icachePort; }
+    virtual MasterPort &getInstPort() { return icachePort; }
 
     /** Get the dcache port (used to find block size for translations). */
-    virtual CpuPort &getDataPort() { return dcachePort; }
-
-    Addr lockAddr;
-
-    /** Temporary fix for the lock flag, works in the UP case. */
-    bool lockFlag;
+    virtual MasterPort &getDataPort() { return dcachePort; }
 
     /** Stat for total number of times the CPU is descheduled. */
     Stats::Scalar timesIdled;

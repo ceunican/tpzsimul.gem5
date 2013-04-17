@@ -45,6 +45,7 @@
 #include "base/time.hh"
 #include "mem/mem_object.hh"
 #include "params/CommMonitor.hh"
+#include "proto/protoio.hh"
 
 /**
  * The communication monitor is a MemObject which can monitor statistics of
@@ -75,13 +76,19 @@ class CommMonitor : public MemObject
     CommMonitor(Params* params);
 
     /** Destructor */
-    ~CommMonitor() { }
+    ~CommMonitor() {}
 
-    virtual MasterPort& getMasterPort(const std::string& if_name,
-                                      int idx = -1);
+    /**
+     * Callback to flush and close all open output streams on exit. If
+     * we were calling the destructor it could be done there.
+     */
+    void closeStreams();
 
-    virtual SlavePort& getSlavePort(const std::string& if_name,
-                                    int idx = -1);
+    virtual BaseMasterPort& getMasterPort(const std::string& if_name,
+                                          PortID idx = InvalidPortID);
+
+    virtual BaseSlavePort& getSlavePort(const std::string& if_name,
+                                        PortID idx = InvalidPortID);
 
     virtual void init();
 
@@ -100,22 +107,17 @@ class CommMonitor : public MemObject
       public:
 
         /**
-         * Construct a new sender state and remember the original one
-         * so that we can implement a stack.
+         * Construct a new sender state and store the time so we can
+         * calculate round-trip latency.
          *
-         * @param _origSenderState Sender state to remember
          * @param _transmitTime Time of packet transmission
          */
-        CommMonitorSenderState(SenderState* _origSenderState,
-                               Tick _transmitTime)
-            : origSenderState(_origSenderState), transmitTime(_transmitTime)
+        CommMonitorSenderState(Tick _transmitTime)
+            : transmitTime(_transmitTime)
         { }
 
         /** Destructor */
         ~CommMonitorSenderState() { }
-
-        /** Pointer to old sender state of packet */
-        SenderState* origSenderState;
 
         /** Tick when request is transmitted */
         Tick transmitTime;
@@ -427,6 +429,9 @@ class CommMonitor : public MemObject
 
     /** Instantiate stats */
     MonitorStats stats;
+
+    /** Output stream for a potential trace. */
+    ProtoOutputStream* traceStream;
 };
 
 #endif //__MEM_COMM_MONITOR_HH__

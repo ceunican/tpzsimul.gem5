@@ -46,9 +46,10 @@ struct SequencerRequest
 {
     PacketPtr pkt;
     RubyRequestType m_type;
-    Time issue_time;
+    Cycles issue_time;
 
-    SequencerRequest(PacketPtr _pkt, RubyRequestType _m_type, Time _issue_time)
+    SequencerRequest(PacketPtr _pkt, RubyRequestType _m_type,
+                     Cycles _issue_time)
         : pkt(_pkt), m_type(_m_type), issue_time(_issue_time)
     {}
 };
@@ -67,46 +68,43 @@ class Sequencer : public RubyPort
 
     void printProgress(std::ostream& out) const;
 
+    void clearStats();
+
     void writeCallback(const Address& address, DataBlock& data);
 
-    void writeCallback(const Address& address, 
-                       GenericMachineType mach, 
+    void writeCallback(const Address& address,
+                       GenericMachineType mach,
                        DataBlock& data);
 
-    void writeCallback(const Address& address, 
-                       GenericMachineType mach, 
+    void writeCallback(const Address& address,
+                       GenericMachineType mach,
                        DataBlock& data,
-                       Time initialRequestTime,
-                       Time forwardRequestTime,
-                       Time firstResponseTime);
+                       Cycles initialRequestTime,
+                       Cycles forwardRequestTime,
+                       Cycles firstResponseTime);
 
     void readCallback(const Address& address, DataBlock& data);
 
-    void readCallback(const Address& address, 
-                      GenericMachineType mach, 
+    void readCallback(const Address& address,
+                      GenericMachineType mach,
                       DataBlock& data);
 
-    void readCallback(const Address& address, 
-                      GenericMachineType mach, 
+    void readCallback(const Address& address,
+                      GenericMachineType mach,
                       DataBlock& data,
-                      Time initialRequestTime,
-                      Time forwardRequestTime,
-                      Time firstResponseTime);
+                      Cycles initialRequestTime,
+                      Cycles forwardRequestTime,
+                      Cycles firstResponseTime);
 
     RequestStatus makeRequest(PacketPtr pkt);
     bool empty() const;
     int outstandingCount() const { return m_outstanding_count; }
-    bool
-    isDeadlockEventScheduled() const
-    {
-        return deadlockCheckEvent.scheduled();
-    }
 
-    void
-    descheduleDeadlockEvent()
-    {
-        deschedule(deadlockCheckEvent);
-    }
+    bool isDeadlockEventScheduled() const
+    { return deadlockCheckEvent.scheduled(); }
+
+    void descheduleDeadlockEvent()
+    { deschedule(deadlockCheckEvent); }
 
     void print(std::ostream& out) const;
     void printStats(std::ostream& out) const;
@@ -115,19 +113,21 @@ class Sequencer : public RubyPort
     void markRemoved();
     void removeRequest(SequencerRequest* request);
     void evictionCallback(const Address& address);
+    void invalidateSC(const Address& address);
 
     void recordRequestType(SequencerRequestType requestType);
+    Histogram& getOutstandReqHist() { return m_outstandReqHist; }
 
   private:
     void issueRequest(PacketPtr pkt, RubyRequestType type);
 
-    void hitCallback(SequencerRequest* request, 
+    void hitCallback(SequencerRequest* request,
                      GenericMachineType mach,
                      DataBlock& data,
                      bool success,
-                     Time initialRequestTime,
-                     Time forwardRequestTime,
-                     Time firstResponseTime);
+                     Cycles initialRequestTime,
+                     Cycles forwardRequestTime,
+                     Cycles firstResponseTime);
 
     RequestStatus insertRequest(PacketPtr pkt, RubyRequestType request_type);
 
@@ -151,12 +151,15 @@ class Sequencer : public RubyPort
     int m_outstanding_count;
     bool m_deadlock_check_scheduled;
 
-    int m_store_waiting_on_load_cycles;
-    int m_store_waiting_on_store_cycles;
-    int m_load_waiting_on_store_cycles;
-    int m_load_waiting_on_load_cycles;
+    uint32_t m_store_waiting_on_load_cycles;
+    uint32_t m_store_waiting_on_store_cycles;
+    uint32_t m_load_waiting_on_store_cycles;
+    uint32_t m_load_waiting_on_load_cycles;
 
     bool m_usingNetworkTester;
+
+    //! Histogram for number of outstanding requests per cycle.
+    Histogram m_outstandReqHist;
 
     class SequencerWakeupEvent : public Event
     {

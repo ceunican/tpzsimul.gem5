@@ -36,6 +36,7 @@ using namespace std;
 using m5::stl_helpers::deletePointers;
 
 OutputUnit_d::OutputUnit_d(int id, Router_d *router)
+    : Consumer(router)
 {
     m_id = id;
     m_router = router;
@@ -65,7 +66,7 @@ OutputUnit_d::decrement_credit(int out_vc)
 void
 OutputUnit_d::wakeup()
 {
-    if (m_credit_link->isReady()) {
+    if (m_credit_link->isReady(m_router->curCycle())) {
         flit_d *t_flit = m_credit_link->consumeLink();
         int out_vc = t_flit->get_vc();
         m_outvc_state[out_vc]->increment_credit();
@@ -74,7 +75,7 @@ OutputUnit_d::wakeup()
                                   m_outvc_state[out_vc]->get_credit_count());
 
         if (t_flit->is_free_signal())
-            set_vc_state(IDLE_, out_vc);
+            set_vc_state(IDLE_, out_vc, m_router->curCycle());
 
         delete t_flit;
     }
@@ -101,9 +102,15 @@ OutputUnit_d::set_credit_link(CreditLink_d *credit_link)
 void
 OutputUnit_d::update_vc(int vc, int in_port, int in_vc)
 {
-    m_outvc_state[vc]->setState(ACTIVE_, g_system_ptr->getTime() + 1);
+    m_outvc_state[vc]->setState(ACTIVE_, m_router->curCycle() + Cycles(1));
     m_outvc_state[vc]->set_inport(in_port);
     m_outvc_state[vc]->set_invc(in_vc);
     m_router->update_incredit(in_port, in_vc,
                               m_outvc_state[vc]->get_credit_count());
+}
+
+uint32_t
+OutputUnit_d::functionalWrite(Packet *pkt)
+{
+    return m_out_buffer->functionalWrite(pkt);
 }

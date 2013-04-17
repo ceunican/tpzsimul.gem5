@@ -157,6 +157,9 @@
                         0x21: m5exit({{
                             PseudoInst::m5exit(xc->tcBase(), Rdi);
                         }}, IsNonSpeculative);
+                        0x22: m5fail({{
+                            PseudoInst::m5fail(xc->tcBase(), Rdi, Rsi);
+                        }}, IsNonSpeculative);
                         0x30: m5initparam({{
                             Rax = PseudoInst::initParam(xc->tcBase());
                         }}, IsNonSpeculative);
@@ -601,7 +604,7 @@
                         0x4: Inst::PCMPEQB(Pq,Qq);
                         0x5: Inst::PCMPEQW(Pq,Qq);
                         0x6: Inst::PCMPEQD(Pq,Qq);
-                        0x7: WarnUnimpl::emms();
+                        0x7: Inst::EMMS();
                     }
                     // repe (0xF3)
                     0x4: decode OPCODE_OP_BOTTOM3 {

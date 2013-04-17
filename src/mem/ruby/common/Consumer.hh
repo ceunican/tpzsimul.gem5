@@ -38,14 +38,13 @@
 #include <iostream>
 #include <set>
 
-#include "mem/ruby/common/TypeDefines.hh"
-#include "sim/eventq.hh"
+#include "sim/clocked_object.hh"
 
 class Consumer
 {
   public:
-    Consumer()
-        : m_last_scheduled_wakeup(0), m_last_wakeup(0)
+    Consumer(ClockedObject *_em)
+        : m_last_scheduled_wakeup(0), em(_em)
     {
     }
 
@@ -88,15 +87,15 @@ class Consumer
         m_scheduled_wakeups.erase(time);
     }
 
-    void scheduleEvent(EventManager* em, Time timeDelta);
-    void scheduleEventAbsolute(EventManager* em, Time timeAbs);
-    void scheduleEvent(Time timeDelta);
-    void scheduleEventAbsolute(Time timeAbs);
+    void scheduleEventAbsolute(Tick timeAbs);
+
+  protected:
+    void scheduleEvent(Cycles timeDelta);
 
   private:
     Tick m_last_scheduled_wakeup;
     std::set<Tick> m_scheduled_wakeups;
-    Tick m_last_wakeup;
+    ClockedObject *em;
 
     class ConsumerEvent : public Event
     {

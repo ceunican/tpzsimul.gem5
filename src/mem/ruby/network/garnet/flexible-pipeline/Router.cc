@@ -41,9 +41,8 @@ using namespace std;
 using m5::stl_helpers::deletePointers;
 
 Router::Router(const Params *p)
-    : BasicRouter(p)
+    : BasicRouter(p), FlexibleConsumer(this)
 {
-    m_id = p->router_id;
     m_virtual_networks = p->virt_nets;
     m_vc_per_vnet = p->vcs_per_vnet;
     m_round_robin_inport = 0;
@@ -72,7 +71,7 @@ Router::addInPort(NetworkLink *in_link)
     vector<InVcState *> in_vc_vector;
     for (int i = 0; i < m_num_vcs; i++) {
         in_vc_vector.push_back(new InVcState(i));
-        in_vc_vector[i]->setState(IDLE_, g_system_ptr->getTime());
+        in_vc_vector[i]->setState(IDLE_, curCycle());
     }
     m_in_vc_state.push_back(in_vc_vector);
     m_in_link.push_back(in_link);
@@ -112,7 +111,7 @@ Router::addOutPort(NetworkLink *out_link, const NetDest& routing_table_entry,
     vector<OutVcState *> out_vc_vector;
     for (int i = 0; i < m_num_vcs; i++) {
         out_vc_vector.push_back(new OutVcState(i));
-        out_vc_vector[i]->setState(IDLE_, g_system_ptr->getTime());
+        out_vc_vector[i]->setState(IDLE_, curCycle());
     }
     m_out_vc_state.push_back(out_vc_vector);
     m_link_weights.push_back(link_weight);
@@ -131,16 +130,16 @@ Router::isBufferNotFull(int vc, int inport)
 // This has to be updated and arbitration performed
 void
 Router::request_vc(int in_vc, int in_port, NetDest destination,
-                   Time request_time)
+                   Cycles request_time)
 {
     assert(m_in_vc_state[in_port][in_vc]->isInState(IDLE_, request_time));
 
     int outport = getRoute(destination);
     m_in_vc_state[in_port][in_vc]->setRoute(outport);
     m_in_vc_state[in_port][in_vc]->setState(VC_AB_, request_time);
-    assert(request_time >= g_system_ptr->getTime());
-    if (request_time > g_system_ptr->getTime())
-        m_vc_arbiter->scheduleEventAbsolute(request_time);
+    assert(request_time >= curCycle());
+    if (request_time > curCycle())
+        m_vc_arbiter->scheduleEventAbsolute(clockPeriod() * request_time);
     else
         vc_arbitrate();
 }
@@ -181,22 +180,21 @@ Router::vc_arbitrate()
 
             InVcState *in_vc_state = m_in_vc_state[inport][invc];
 
-            if (in_vc_state->isInState(VC_AB_, g_system_ptr->getTime())) {
+            if (in_vc_state->isInState(VC_AB_, curCycle())) {
                 int outport = in_vc_state->get_outport();
                 vector<int> valid_vcs = get_valid_vcs(invc);
                 for (int valid_vc_iter = 0; valid_vc_iter < valid_vcs.size();
                         valid_vc_iter++) {
                     if (m_out_vc_state[outport][valid_vcs[valid_vc_iter]]
-                            ->isInState(IDLE_, g_system_ptr->getTime())) {
+                            ->isInState(IDLE_, curCycle())) {
 
                         in_vc_state->grant_vc(valid_vcs[valid_vc_iter],
-                                g_system_ptr->getTime());
+                                curCycle());
 
-                        m_in_link[inport]->grant_vc_link(invc,
-                                g_system_ptr->getTime());
+                        m_in_link[inport]->grant_vc_link(invc, curCycle());
 
                         m_out_vc_state[outport][valid_vcs[valid_vc_iter]]
-                            ->setState(VC_AB_, g_system_ptr->getTime());
+                            ->setState(VC_AB_, curCycle());
                         break;
                     }
                 }
@@ -229,19 +227,19 @@ Router::get_valid_vcs(int invc)
 }
 
 void
-Router::grant_vc(int out_port, int vc, Time grant_time)
+Router::grant_vc(int out_port, int vc, Cycles grant_time)
 {
     assert(m_out_vc_state[out_port][vc]->isInState(VC_AB_, grant_time));
     m_out_vc_state[out_port][vc]->grant_vc(grant_time);
-    scheduleEvent(1);
+    scheduleEvent(Cycles(1));
 }
 
 void
-Router::release_vc(int out_port, int vc, Time release_time)
+Router::release_vc(int out_port, int vc, Cycles release_time)
 {
     assert(m_out_vc_state[out_port][vc]->isInState(ACTIVE_, release_time));
     m_out_vc_state[out_port][vc]->setState(IDLE_, release_time);
-    scheduleEvent(1);
+    scheduleEvent(Cycles(1));
 }
 
 // This function calculated the output port for a particular destination.
@@ -271,38 +269,33 @@ Router::routeCompute(flit *m_flit, int inport)
     assert(m_net_ptr->getNumPipeStages() >= 1);
 
     // Subtract 1 as 1 cycle will be consumed in scheduling the output link
-    m_flit->set_time(g_system_ptr->getTime() +
-                     (m_net_ptr->getNumPipeStages() - 1));
+    m_flit->set_time(curCycle() + Cycles((m_net_ptr->getNumPipeStages() - 1)));
     m_flit->set_vc(outvc);
     m_router_buffers[outport][outvc]->insert(m_flit);
 
     if (m_net_ptr->getNumPipeStages() > 1)
-        scheduleEvent(m_net_ptr->getNumPipeStages() - 1 );
+        scheduleEvent(Cycles(m_net_ptr->getNumPipeStages() - 1));
+
     if ((m_flit->get_type() == HEAD_) || (m_flit->get_type() == HEAD_TAIL_)) {
         NetworkMessage *nm =
             safe_cast<NetworkMessage*>(m_flit->get_msg_ptr().get());
         NetDest destination = nm->getInternalDestination();
 
         if (m_net_ptr->getNumPipeStages() > 1) {
-            m_out_vc_state[outport][outvc]->setState(VC_AB_,
-                g_system_ptr->getTime() + 1);
-
+            m_out_vc_state[outport][outvc]->setState(VC_AB_, curCycle() +
+                                                     Cycles(1));
             m_out_link[outport]->request_vc_link(outvc, destination,
-                g_system_ptr->getTime() + 1);
+                                                 curCycle() + Cycles(1));
         } else {
-            m_out_vc_state[outport][outvc]->setState(VC_AB_,
-                g_system_ptr->getTime());
-
+            m_out_vc_state[outport][outvc]->setState(VC_AB_, curCycle());
             m_out_link[outport]->request_vc_link(outvc, destination,
-                g_system_ptr->getTime());
+                curCycle());
         }
     }
-    if ((m_flit->get_type() == TAIL_) || (m_flit->get_type() == HEAD_TAIL_)) {
-        m_in_vc_state[inport][invc]->setState(IDLE_,
-            g_system_ptr->getTime() + 1);
 
-        m_in_link[inport]->release_vc_link(invc,
-            g_system_ptr->getTime() + 1);
+    if ((m_flit->get_type() == TAIL_) || (m_flit->get_type() == HEAD_TAIL_)) {
+        m_in_vc_state[inport][invc]->setState(IDLE_, curCycle() + Cycles(1));
+        m_in_link[inport]->release_vc_link(invc, curCycle() + Cycles(1));
     }
 }
 
@@ -326,8 +319,7 @@ Router::wakeup()
 
         // checking the incoming link
         if (m_in_link[incoming_port]->isReady()) {
-            DPRINTF(RubyNetwork, "m_id: %d, Time: %lld\n",
-                    m_id, g_system_ptr->getTime());
+            DPRINTF(RubyNetwork, "m_id: %d, Time: %lld\n", m_id, curCycle());
             t_flit = m_in_link[incoming_port]->peekLink();
             routeCompute(t_flit, incoming_port);
             m_in_link[incoming_port]->consumeLink();
@@ -361,18 +353,20 @@ Router::scheduleOutputLinks()
             if (vc_tolookat == m_num_vcs)
                 vc_tolookat = 0;
 
-            if (m_router_buffers[port][vc_tolookat]->isReady()) {
+            if (m_router_buffers[port][vc_tolookat]->isReady(curCycle())) {
 
                 // models buffer backpressure
                 if (m_out_vc_state[port][vc_tolookat]->isInState(ACTIVE_,
-                   g_system_ptr->getTime()) &&
+                   curCycle()) &&
                    m_out_link[port]->isBufferNotFull_link(vc_tolookat)) {
 
                     flit *t_flit =
                         m_router_buffers[port][vc_tolookat]->getTopFlit();
-                    t_flit->set_time(g_system_ptr->getTime() + 1 );
+                    t_flit->set_time(curCycle() + Cycles(1));
                     m_out_src_queue[port]->insert(t_flit);
-                    m_out_link[port]->scheduleEvent(1);
+
+                    m_out_link[port]->
+                        scheduleEventAbsolute(clockEdge(Cycles(1)));
                     break; // done for this port
                 }
             }
@@ -393,8 +387,8 @@ Router::checkReschedule()
 {
     for (int port = 0; port < m_out_link.size(); port++) {
         for (int vc = 0; vc < m_num_vcs; vc++) {
-            if (m_router_buffers[port][vc]->isReadyForNext()) {
-                scheduleEvent(1);
+            if (m_router_buffers[port][vc]->isReadyForNext(curCycle())) {
+                scheduleEvent(Cycles(1));
                 return;
             }
         }
@@ -406,14 +400,55 @@ Router::check_arbiter_reschedule()
 {
     for (int port = 0; port < m_in_link.size(); port++) {
         for (int vc = 0; vc < m_num_vcs; vc++) {
-            if (m_in_vc_state[port][vc]->isInState(VC_AB_,
-               g_system_ptr->getTime() + 1)) {
-
-                m_vc_arbiter->scheduleEvent(1);
+            if (m_in_vc_state[port][vc]->isInState(VC_AB_, curCycle() +
+                                                   Cycles(1))) {
+                m_vc_arbiter->scheduleEventAbsolute(clockEdge(Cycles(1)));
                 return;
             }
         }
     }
+}
+
+bool
+Router::functionalRead(Packet *pkt)
+{
+    // Access the buffers in the router for performing a functional read
+    for (unsigned int i = 0; i < m_router_buffers.size(); i++) {
+        for (unsigned int j = 0; j < m_router_buffers[i].size(); ++j) {
+            if (m_router_buffers[i][j]->functionalRead(pkt)) {
+                return true;
+            }
+        }
+    }
+
+    // Access the link queues for performing a functional read
+    for (unsigned int i = 0; i < m_out_src_queue.size(); i++) {
+        if (m_out_src_queue[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t
+Router::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    // Access the buffers in the router for performing a functional write
+    for (unsigned int i = 0; i < m_router_buffers.size(); i++) {
+        for (unsigned int j = 0; j < m_router_buffers[i].size(); ++j) {
+            num_functional_writes +=
+                m_router_buffers[i][j]->functionalWrite(pkt);
+        }
+    }
+
+    // Access the link queues for performing a functional write
+    for (unsigned int i = 0; i < m_out_src_queue.size(); i++) {
+        num_functional_writes += m_out_src_queue[i]->functionalWrite(pkt);
+    }
+
+    return num_functional_writes;
 }
 
 void

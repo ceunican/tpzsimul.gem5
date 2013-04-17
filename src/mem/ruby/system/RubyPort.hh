@@ -46,13 +46,13 @@
 #include <string>
 
 #include "mem/protocol/RequestStatus.hh"
+#include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/system/System.hh"
 #include "mem/mem_object.hh"
 #include "mem/physical.hh"
 #include "mem/tport.hh"
 #include "params/RubyPort.hh"
 
-class MessageBuffer;
 class AbstractController;
 
 class RubyPort : public MemObject
@@ -89,8 +89,6 @@ class RubyPort : public MemObject
 
       private:
         bool isPhysMemAddress(Addr addr);
-        bool doFunctionalRead(PacketPtr pkt);
-        bool doFunctionalWrite(PacketPtr pkt);
     };
 
     friend class M5Port;
@@ -100,8 +98,6 @@ class RubyPort : public MemObject
       private:
 
         MasterPacketQueue queue;
-
-        RubyPort *ruby_port;
 
       public:
         PioPort(const std::string &_name, RubyPort *_port);
@@ -115,10 +111,8 @@ class RubyPort : public MemObject
     struct SenderState : public Packet::SenderState
     {
         M5Port* port;
-        Packet::SenderState *saved;
 
-        SenderState(M5Port* _port, Packet::SenderState *sender_state = NULL)
-            : port(_port), saved(sender_state)
+        SenderState(M5Port* _port) : port(_port)
         {}
     };
 
@@ -128,8 +122,10 @@ class RubyPort : public MemObject
 
     void init();
 
-    MasterPort &getMasterPort(const std::string &if_name, int idx);
-    SlavePort &getSlavePort(const std::string &if_name, int idx);
+    BaseMasterPort &getMasterPort(const std::string &if_name,
+                                  PortID idx = InvalidPortID);
+    BaseSlavePort &getSlavePort(const std::string &if_name,
+                                PortID idx = InvalidPortID);
 
     virtual RequestStatus makeRequest(PacketPtr pkt) = 0;
     virtual int outstandingCount() const = 0;
@@ -142,7 +138,7 @@ class RubyPort : public MemObject
     //
     void setController(AbstractController* _cntrl) { m_controller = _cntrl; }
     int getId() { return m_version; }
-    unsigned int drain(Event *de);
+    unsigned int drain(DrainManager *dm);
 
   protected:
     const std::string m_name;
@@ -166,7 +162,7 @@ class RubyPort : public MemObject
         }
     }
 
-    unsigned int getDrainCount(Event *de);
+    unsigned int getChildDrainCount(DrainManager *dm);
 
     uint16_t m_port_id;
     uint64_t m_request_cnt;
@@ -176,7 +172,7 @@ class RubyPort : public MemObject
     std::vector<M5Port*> slave_ports;
     std::vector<PioPort*> master_ports;
 
-    Event *drainEvent;
+    DrainManager *drainManager;
 
     RubySystem* ruby_system;
     System* system;

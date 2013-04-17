@@ -33,13 +33,27 @@
 #include "arch/alpha/isa.hh"
 #include "base/misc.hh"
 #include "cpu/thread_context.hh"
+#include "params/AlphaISA.hh"
 #include "sim/serialize.hh"
 
 namespace AlphaISA
 {
 
+ISA::ISA(Params *p)
+    : SimObject(p)
+{
+    clear();
+    initializeIprTable();
+}
+
+const AlphaISAParams *
+ISA::params() const
+{
+    return dynamic_cast<const Params *>(_params);
+}
+
 void
-ISA::serialize(EventManager *em, std::ostream &os)
+ISA::serialize(std::ostream &os)
 {
     SERIALIZE_SCALAR(fpcr);
     SERIALIZE_SCALAR(uniq);
@@ -49,7 +63,7 @@ ISA::serialize(EventManager *em, std::ostream &os)
 }
 
 void
-ISA::unserialize(EventManager *em, Checkpoint *cp, const std::string &section)
+ISA::unserialize(Checkpoint *cp, const std::string &section)
 {
     UNSERIALIZE_SCALAR(fpcr);
     UNSERIALIZE_SCALAR(uniq);
@@ -150,4 +164,10 @@ ISA::setMiscReg(int misc_reg, const MiscReg &val, ThreadContext *tc,
     }
 }
 
+}
+
+AlphaISA::ISA *
+AlphaISAParams::create()
+{
+    return new AlphaISA::ISA(this);
 }

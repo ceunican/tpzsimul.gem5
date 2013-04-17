@@ -93,13 +93,17 @@ ElfFile('libelf_msize.c')
 
 m4env = main.Clone()
 if m4env['GCC']:
-    if compareVersions(m4env['GCC_VERSION'], '4') >= 0:
-        m4env.Append(CCFLAGS=['-Wno-pointer-sign'])
+    m4env.Append(CCFLAGS=['-Wno-pointer-sign'])
     if compareVersions(m4env['GCC_VERSION'], '4.6') >= 0:
         m4env.Append(CCFLAGS=['-Wno-unused-but-set-variable',
                               '-Wno-implicit-function-declaration'])
 if m4env['CLANG']:
     m4env.Append(CCFLAGS=['-Wno-initializer-overrides', '-Wno-pointer-sign'])
+    # clang defaults to c99 (while gcc defaults to gnu89) and there is a
+    # difference in the handling of inlining functions which causes
+    # linking problems with multiple definitions of the symbols in
+    # sysmacros.h for older versions of glibc
+    m4env.Append(CCFLAGS=['-std=gnu89'])
 m4env.Append(CCFLAGS=['-Wno-implicit'])
 del m4env['CPPPATH']
 

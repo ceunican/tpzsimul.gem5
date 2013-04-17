@@ -1327,8 +1327,6 @@ class DistStor
     Counter max_track;
     /** The number of entries in each bucket. */
     Counter bucket_size;
-    /** The number of buckets. Equal to (max-min)/bucket_size. */
-    size_type buckets;
 
     /** The smallest value sampled. */
     Counter min_val;
@@ -1416,9 +1414,8 @@ class DistStor
         data.underflow = underflow;
         data.overflow = overflow;
 
-        size_type buckets = params->buckets;
-        data.cvec.resize(buckets);
-        for (off_type i = 0; i < buckets; ++i)
+        data.cvec.resize(params->buckets);
+        for (off_type i = 0; i < params->buckets; ++i)
             data.cvec[i] = cvec[i];
 
         data.sum = sum;
@@ -2372,13 +2369,13 @@ class SumNode : public Node
         size_type size = lvec.size();
         assert(size > 0);
 
-        Result vresult = 0.0;
+        Result result = 0.0;
 
         Op op;
         for (off_type i = 0; i < size; ++i)
-            vresult = op(vresult, lvec[i]);
+            result = op(result, lvec[i]);
 
-        return vresult;
+        return result;
     }
 
     size_type size() const { return 1; }
@@ -3165,6 +3162,16 @@ void registerDumpCallback(Callback *cb);
 
 std::list<Info *> &statsList();
 
+typedef std::map<const void *, Info *> MapType;
+MapType &statsMap();
+
+typedef std::map<std::string, Info *> NameMapType;
+NameMapType &nameMap();
+
+bool validateStatName(const std::string &name);
+
 } // namespace Stats
+
+void debugDumpStats();
 
 #endif // __BASE_STATISTICS_HH__

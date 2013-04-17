@@ -1,4 +1,5 @@
 # Copyright (c) 2007 The Hewlett-Packard Development Company
+# Copyright (c) 2012-13 Mark D. Hill and David A. Wood
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -34,11 +35,29 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Authors: Gabe Black
+#          Nilay Vaish
 
 microcode = '''
-# FSIN
-# FCOS
-# FSINCOS
-# FPTAN
+def macroop FSIN {
+    sinfp st(0), st(0)
+};
+
+def macroop FCOS {
+    cosfp st(0), st(0)
+};
+
+def macroop FSINCOS {
+    sinfp ufp1, st(0)
+    cosfp ufp2, st(0)
+    movfp st(0), ufp1
+    movfp st(-1), ufp2, spm=-1
+};
+
+def macroop FPTAN {
+    tanfp st(0), st(0)
+    limm ufp1, "double(1)"
+    movfp st(-1), ufp1, spm=-1
+};
+
 # FPATAN
 '''

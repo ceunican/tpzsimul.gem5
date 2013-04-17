@@ -57,7 +57,7 @@ Bridge::BridgeSlavePort::BridgeSlavePort(const std::string& _name,
                                          Bridge& _bridge,
                                          BridgeMasterPort& _masterPort,
                                          Cycles _delay, int _resp_limit,
-                                         std::vector<Range<Addr> > _ranges)
+                                         std::vector<AddrRange> _ranges)
     : SlavePort(_name, &_bridge), bridge(_bridge), masterPort(_masterPort),
       delay(_delay), ranges(_ranges.begin(), _ranges.end()),
       outstandingResponses(0), retryReq(false),
@@ -83,8 +83,8 @@ Bridge::Bridge(Params *p)
 {
 }
 
-MasterPort&
-Bridge::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort&
+Bridge::getMasterPort(const std::string &if_name, PortID idx)
 {
     if (if_name == "master")
         return masterPort;
@@ -93,8 +93,8 @@ Bridge::getMasterPort(const std::string &if_name, int idx)
         return MemObject::getMasterPort(if_name, idx);
 }
 
-SlavePort&
-Bridge::getSlavePort(const std::string &if_name, int idx)
+BaseSlavePort&
+Bridge::getSlavePort(const std::string &if_name, PortID idx)
 {
     if (if_name == "slave")
         return slavePort;
@@ -141,6 +141,9 @@ Bridge::BridgeMasterPort::recvTimingResp(PacketPtr pkt)
 
     DPRINTF(Bridge, "Request queue size: %d\n", transmitList.size());
 
+    // @todo: We need to pay for this and not just zero it out
+    pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
+
     slavePort.schedTimingResp(pkt, bridge.clockEdge(delay));
 
     return true;
@@ -171,6 +174,10 @@ Bridge::BridgeSlavePort::recvTimingReq(PacketPtr pkt)
             assert(outstandingResponses != respQueueLimit);
             ++outstandingResponses;
             retryReq = false;
+
+            // @todo: We need to pay for this and not just zero it out
+            pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
+
             masterPort.schedTimingReq(pkt, bridge.clockEdge(delay));
         }
     }
@@ -201,8 +208,7 @@ Bridge::BridgeMasterPort::schedTimingReq(PacketPtr pkt, Tick when)
     if (!pkt->memInhibitAsserted() && pkt->needsResponse()) {
         // Update the sender state so we can deal with the response
         // appropriately
-        RequestState *req_state = new RequestState(pkt);
-        pkt->senderState = req_state;
+        pkt->pushSenderState(new RequestState(pkt->getSrc()));
     }
 
     // If we're about to put this packet at the head of the queue, we
@@ -225,11 +231,10 @@ Bridge::BridgeSlavePort::schedTimingResp(PacketPtr pkt, Tick when)
     // This is a response for a request we forwarded earlier.  The
     // corresponding request state should be stored in the packet's
     // senderState field.
-    RequestState *req_state = dynamic_cast<RequestState*>(pkt->senderState);
+    RequestState *req_state =
+        dynamic_cast<RequestState*>(pkt->popSenderState());
     assert(req_state != NULL);
-    // set up new packet dest & senderState based on values saved
-    // from original request
-    req_state->fixResponse(pkt);
+    pkt->setDest(req_state->origSrc);
     delete req_state;
 
     // the bridge assumes that at least one bus has set the

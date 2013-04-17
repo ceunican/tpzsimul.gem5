@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -63,6 +63,7 @@
  * The coherent bus can be used as a template for modelling QPI,
 * HyperTransport, ACE and coherent OCP buses, and is typically used
  * for the L1-to-L2 buses and as the main system interconnect.
+ * @sa  \ref gem5MemorySystem "gem5 Memory System"
  */
 class CoherentBus : public BaseBus
 {
@@ -139,7 +140,7 @@ class CoherentBus : public BaseBus
          * Get the maximum block size as seen by the bus.
          */
         virtual unsigned deviceBlockSize() const
-        { return bus.findBlockSize(); }
+        { return bus.deviceBlockSize(); }
 
     };
 
@@ -204,13 +205,13 @@ class CoherentBus : public BaseBus
         /** When reciving a retry from the peer port (at id),
             pass it to the bus. */
         virtual void recvRetry()
-        { bus.recvRetry(); }
+        { bus.recvRetry(id); }
 
         // Ask the bus to ask everyone on the bus what their block size is and
         // take the max of it. This might need to be changed a bit if we ever
         // support multiple block sizes.
         virtual unsigned deviceBlockSize() const
-        { return bus.findBlockSize(); }
+        { return bus.deviceBlockSize(); }
 
     };
 
@@ -222,6 +223,12 @@ class CoherentBus : public BaseBus
      * in the coherent bus when coherency responses come back.
      */
     std::set<RequestPtr> outstandingReq;
+
+    /**
+     * Keep a pointer to the system to be allow to querying memory system
+     * properties.
+     */
+    System *system;
 
     /** Function called by the port when the bus is recieving a Timing
       request packet.*/
@@ -241,7 +248,7 @@ class CoherentBus : public BaseBus
 
     /** Timing function called by port when it is once again able to process
      * requests. */
-    void recvRetry();
+    void recvRetry(PortID master_port_id);
 
     /**
      * Forward a timing packet to our snoopers, potentially excluding
@@ -298,7 +305,7 @@ class CoherentBus : public BaseBus
 
     CoherentBus(const CoherentBusParams *p);
 
-    unsigned int drain(Event *de);
+    unsigned int drain(DrainManager *dm);
 };
 
 #endif //__MEM_COHERENT_BUS_HH__

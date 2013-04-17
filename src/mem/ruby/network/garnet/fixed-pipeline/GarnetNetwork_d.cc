@@ -59,9 +59,8 @@ GarnetNetwork_d::GarnetNetwork_d(const Params *p)
     }
 
     // record the routers
-    for (vector<BasicRouter*>::const_iterator i = 
-             m_topology_ptr->params()->routers.begin();
-         i != m_topology_ptr->params()->routers.end(); ++i) {
+    for (vector<BasicRouter*>::const_iterator i =  p->routers.begin();
+         i != p->routers.end(); ++i) {
         Router_d* router = safe_cast<Router_d*>(*i);
         m_router_ptr_vector.push_back(router);
     }
@@ -115,7 +114,6 @@ GarnetNetwork_d::init()
             router->printFaultVector(cout);
         }
     }
-
 }
 
 GarnetNetwork_d::~GarnetNetwork_d()
@@ -272,7 +270,7 @@ GarnetNetwork_d::printLinkStats(ostream& out) const
     for (int i = 0; i < m_link_ptr_vector.size(); i++) {
         average_link_utilization +=
             (double(m_link_ptr_vector[i]->getLinkUtilization())) /
-            (double(g_system_ptr->getTime()-m_ruby_start));
+            (double(curCycle() - m_ruby_start));
 
         vector<int> vc_load = m_link_ptr_vector[i]->getVcLoad();
         for (int j = 0; j < vc_load.size(); j++) {
@@ -290,8 +288,8 @@ GarnetNetwork_d::printLinkStats(ostream& out) const
         if (!m_in_use[i/m_vcs_per_vnet])
             continue;
 
-        average_vc_load[i] = (double(average_vc_load[i]) /
-            (double(g_system_ptr->getTime()) - m_ruby_start));
+        average_vc_load[i] = (double(average_vc_load[i])) /
+            (double(curCycle() - m_ruby_start));
         out << "Average VC Load [" << i << "] = " << average_vc_load[i]
             << " flits/cycle " << endl;
     }
@@ -345,4 +343,24 @@ GarnetNetwork_d *
 GarnetNetwork_dParams::create()
 {
     return new GarnetNetwork_d(this);
+}
+
+uint32_t
+GarnetNetwork_d::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_router_ptr_vector.size(); i++) {
+        num_functional_writes += m_router_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_ni_ptr_vector.size(); ++i) {
+        num_functional_writes += m_ni_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_link_ptr_vector.size(); ++i) {
+        num_functional_writes += m_link_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    return num_functional_writes;
 }

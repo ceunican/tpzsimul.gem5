@@ -37,7 +37,8 @@ machine(L1Cache, "Directory protocol")
    CacheMemory * L1IcacheMemory,
    CacheMemory * L1DcacheMemory,
    int l2_select_num_bits,
-   int request_latency = 2,
+   Cycles request_latency = 2,
+   Cycles use_timeout_latency = 50,
    bool send_evictions
 {
 
@@ -142,7 +143,7 @@ machine(L1Cache, "Directory protocol")
 
   MessageBuffer mandatoryQueue, ordered="false", abstract_chip_ptr="true";
 
-  TBETable TBEs, template_hack="<L1Cache_TBE>";
+  TBETable TBEs, template="<L1Cache_TBE>", constructor="m_number_of_TBEs";
   TimerTable useTimerTable;
   int l2_select_low_bit, default="RubySystem::getBlockSizeBits()";
 
@@ -219,7 +220,17 @@ machine(L1Cache, "Directory protocol")
   }
 
   DataBlock getDataBlock(Address addr), return_by_ref="yes" {
-    return getCacheEntry(addr).DataBlk;
+    Entry cache_entry := getCacheEntry(addr);
+    if(is_valid(cache_entry)) {
+        return cache_entry.DataBlk;
+    }
+
+    TBE tbe := TBEs[addr];
+    if(is_valid(tbe)) {
+      return tbe.DataBlk;
+    }
+
+    error("Data block missing!");
   }
 
   Event mandatory_request_type_to_event(RubyRequestType type) {
@@ -686,7 +697,7 @@ machine(L1Cache, "Directory protocol")
   }
 
   action(o_scheduleUseTimeout, "oo", desc="Schedule a use timeout.") {
-    useTimerTable.set(address, 50);
+    useTimerTable.set(address, use_timeout_latency);
   }
 
   action(ub_dmaUnblockL2Cache, "ub", desc="Send dma ack to l2 cache") {

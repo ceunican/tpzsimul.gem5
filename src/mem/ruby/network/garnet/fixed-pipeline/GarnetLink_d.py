@@ -30,13 +30,14 @@
 
 from m5.params import *
 from m5.proxy import *
-from m5.SimObject import SimObject
+from ClockedObject import ClockedObject
 from BasicLink import BasicIntLink, BasicExtLink
 
-class NetworkLink_d(SimObject):
+class NetworkLink_d(ClockedObject):
     type = 'NetworkLink_d'
+    cxx_header = "mem/ruby/network/garnet/fixed-pipeline/NetworkLink_d.hh"
     link_id = Param.Int(Parent.link_id, "link id")
-    link_latency = Param.Int(Parent.latency, "link latency")
+    link_latency = Param.Cycles(Parent.latency, "link latency")
     vcs_per_vnet = Param.Int(Parent.vcs_per_vnet,
                               "virtual channels per virtual network")
     virt_nets = Param.Int(Parent.number_of_virtual_networks,
@@ -46,10 +47,12 @@ class NetworkLink_d(SimObject):
 
 class CreditLink_d(NetworkLink_d):
     type = 'CreditLink_d'
+    cxx_header = "mem/ruby/network/garnet/fixed-pipeline/CreditLink_d.hh"
 
 # Interior fixed pipeline links between routers
 class GarnetIntLink_d(BasicIntLink):
     type = 'GarnetIntLink_d'
+    cxx_header = "mem/ruby/network/garnet/fixed-pipeline/GarnetLink_d.hh"
     # The detailed fixed pipeline bi-directional link include two main
     # forward links and two backward flow-control links, one per direction
     nls = []
@@ -69,6 +72,7 @@ class GarnetIntLink_d(BasicIntLink):
 # Exterior fixed pipeline links between a router and a controller
 class GarnetExtLink_d(BasicExtLink):
     type = 'GarnetExtLink_d'
+    cxx_header = "mem/ruby/network/garnet/fixed-pipeline/GarnetLink_d.hh"
     # The detailed fixed pipeline bi-directional link include two main
     # forward links and two backward flow-control links, one per direction
     nls = []

@@ -116,7 +116,7 @@ extra_python_paths = [
     Dir('src/python').srcnode().abspath, # gem5 includes
     Dir('ext/ply').srcnode().abspath, # ply is used by several files
     ]
-    
+
 sys.path[1:1] = extra_python_paths
 
 from m5.util import compareVersions, readCommand
@@ -165,6 +165,8 @@ AddLocalOption('--default', dest='default', type='string', action='store',
                help='Override which build_opts file to use for defaults')
 AddLocalOption('--ignore-style', dest='ignore_style', action='store_true',
                help='Disable style checking hooks')
+AddLocalOption('--no-lto', dest='no_lto', action='store_true',
+               help='Disable Link-Time Optimization for fast')
 AddLocalOption('--update-ref', dest='update_ref', action='store_true',
                help='Update test reference outputs')
 AddLocalOption('--verbose', dest='verbose', action='store_true',
@@ -178,17 +180,38 @@ termcap = get_termcap(GetOption('use_colors'))
 #
 ########################################################################
 use_vars = set([ 'AS', 'AR', 'CC', 'CXX', 'HOME', 'LD_LIBRARY_PATH',
-                 'LIBRARY_PATH', 'PATH', 'PYTHONPATH', 'RANLIB', 'SWIG' ])
+                 'LIBRARY_PATH', 'PATH', 'PKG_CONFIG_PATH', 'PYTHONPATH',
+                 'RANLIB', 'SWIG' ])
+
+use_prefixes = [
+    "M5",           # M5 configuration (e.g., path to kernels)
+    "DISTCC_",      # distcc (distributed compiler wrapper) configuration
+    "CCACHE_",      # ccache (caching compiler wrapper) configuration
+    "CCC_",         # clang static analyzer configuration
+    ]
 
 use_env = {}
 for key,val in os.environ.iteritems():
-    if key in use_vars or key.startswith("M5"):
+    if key in use_vars or \
+            any([key.startswith(prefix) for prefix in use_prefixes]):
         use_env[key] = val
 
 main = Environment(ENV=use_env)
 main.Decider('MD5-timestamp')
 main.root = Dir(".")         # The current directory (where this file lives).
 main.srcdir = Dir("src")     # The source directory
+
+main_dict_keys = main.Dictionary().keys()
+
+# Check that we have a C/C++ compiler
+if not ('CC' in main_dict_keys and 'CXX' in main_dict_keys):
+    print "No C++ compiler installed (package g++ on Ubuntu and RedHat)"
+    Exit(1)
+
+# Check that swig is present
+if not 'SWIG' in main_dict_keys:
+    print "swig is not installed (package swig on Ubuntu and RedHat)"
+    Exit(1)
 
 # add useful python code PYTHONPATH so it can be used by subprocesses
 # as well
@@ -349,6 +372,7 @@ global_vars.AddVariables(
     ('CC', 'C compiler', environ.get('CC', main['CC'])),
     ('CXX', 'C++ compiler', environ.get('CXX', main['CXX'])),
     ('SWIG', 'SWIG tool', environ.get('SWIG', main['SWIG'])),
+    ('PROTOC', 'protoc tool', environ.get('PROTOC', 'protoc')),
     ('BATCH', 'Use batch pool for build and tests', False),
     ('BATCH_CMD', 'Batch pool submission command name', 'qdo'),
     ('M5_BUILD_CACHE', 'Cache built objects in this directory', False),
@@ -477,43 +501,99 @@ else:
     main['SHCXXCOMSTR']     = Transform("SHCXX")
 Export('MakeAction')
 
+# Initialize the Link-Time Optimization (LTO) flags
+main['LTO_CCFLAGS'] = []
+main['LTO_LDFLAGS'] = []
+
+# According to the readme, tcmalloc works best if the compiler doesn't
+# assume that we're using the builtin malloc and friends. These flags
+# are compiler-specific, so we need to set them after we detect which
+# compiler we're using.
+main['TCMALLOC_CCFLAGS'] = []
+
 CXX_version = readCommand([main['CXX'],'--version'], exception=False)
 CXX_V = readCommand([main['CXX'],'-V'], exception=False)
 
 main['GCC'] = CXX_version and CXX_version.find('g++') >= 0
-main['SUNCC'] = CXX_V and CXX_V.find('Sun C++') >= 0
-main['ICC'] = CXX_V and CXX_V.find('Intel') >= 0
 main['CLANG'] = CXX_version and CXX_version.find('clang') >= 0
-if main['GCC'] + main['SUNCC'] + main['ICC'] + main['CLANG'] > 1:
+if main['GCC'] + main['CLANG'] > 1:
     print 'Error: How can we have two at the same time?'
     Exit(1)
 
 # Set up default C++ compiler flags
-if main['GCC']:
+if main['GCC'] or main['CLANG']:
+    # As gcc and clang share many flags, do the common parts here
     main.Append(CCFLAGS=['-pipe'])
     main.Append(CCFLAGS=['-fno-strict-aliasing'])
+    # Enable -Wall and then disable the few warnings that we
+    # consistently violate
     main.Append(CCFLAGS=['-Wall', '-Wno-sign-compare', '-Wundef'])
-    # Read the GCC version to check for versions with bugs
-    # Note CCVERSION doesn't work here because it is run with the CC
-    # before we override it from the command line
+    # We always compile using C++11, but only gcc >= 4.7 and clang 3.1
+    # actually use that name, so we stick with c++0x
+    main.Append(CXXFLAGS=['-std=c++0x'])
+    # Add selected sanity checks from -Wextra
+    main.Append(CXXFLAGS=['-Wmissing-field-initializers',
+                          '-Woverloaded-virtual'])
+else:
+    print termcap.Yellow + termcap.Bold + 'Error' + termcap.Normal,
+    print "Don't know what compiler options to use for your compiler."
+    print termcap.Yellow + '       compiler:' + termcap.Normal, main['CXX']
+    print termcap.Yellow + '       version:' + termcap.Normal,
+    if not CXX_version:
+        print termcap.Yellow + termcap.Bold + "COMMAND NOT FOUND!" +\
+               termcap.Normal
+    else:
+        print CXX_version.replace('\n', '<nl>')
+    print "       If you're trying to use a compiler other than GCC"
+    print "       or clang, there appears to be something wrong with your"
+    print "       environment."
+    print "       "
+    print "       If you are trying to use a compiler other than those listed"
+    print "       above you will need to ease fix SConstruct and "
+    print "       src/SConscript to support that compiler."
+    Exit(1)
+
+if main['GCC']:
+    # Check for a supported version of gcc, >= 4.4 is needed for c++0x
+    # support. See http://gcc.gnu.org/projects/cxx0x.html for details
     gcc_version = readCommand([main['CXX'], '-dumpversion'], exception=False)
+    if compareVersions(gcc_version, "4.4") < 0:
+        print 'Error: gcc version 4.4 or newer required.'
+        print '       Installed version:', gcc_version
+        Exit(1)
+
     main['GCC_VERSION'] = gcc_version
+
+    # Check for versions with bugs
     if not compareVersions(gcc_version, '4.4.1') or \
        not compareVersions(gcc_version, '4.4.2'):
         print 'Info: Tree vectorizer in GCC 4.4.1 & 4.4.2 is buggy, disabling.'
         main.Append(CCFLAGS=['-fno-tree-vectorize'])
+
+    # LTO support is only really working properly from 4.6 and beyond
     if compareVersions(gcc_version, '4.6') >= 0:
-        main.Append(CXXFLAGS=['-std=c++0x'])
-elif main['ICC']:
-    pass #Fix me... add warning flags once we clean up icc warnings
-elif main['SUNCC']:
-    main.Append(CCFLAGS=['-Qoption ccfe'])
-    main.Append(CCFLAGS=['-features=gcc'])
-    main.Append(CCFLAGS=['-features=extensions'])
-    main.Append(CCFLAGS=['-library=stlport4'])
-    main.Append(CCFLAGS=['-xar'])
-    #main.Append(CCFLAGS=['-instances=semiexplicit'])
+        # Add the appropriate Link-Time Optimization (LTO) flags
+        # unless LTO is explicitly turned off. Note that these flags
+        # are only used by the fast target.
+        if not GetOption('no_lto'):
+            # Pass the LTO flag when compiling to produce GIMPLE
+            # output, we merely create the flags here and only append
+            # them later/
+            main['LTO_CCFLAGS'] = ['-flto=%d' % GetOption('num_jobs')]
+
+            # Use the same amount of jobs for LTO as we are running
+            # scons with, we hardcode the use of the linker plugin
+            # which requires either gold or GNU ld >= 2.21
+            main['LTO_LDFLAGS'] = ['-flto=%d' % GetOption('num_jobs'),
+                                   '-fuse-linker-plugin']
+
+    main.Append(TCMALLOC_CCFLAGS=['-fno-builtin-malloc', '-fno-builtin-calloc',
+                                  '-fno-builtin-realloc', '-fno-builtin-free'])
+
 elif main['CLANG']:
+    # Check for a supported version of clang, >= 2.9 is needed to
+    # support similar features as gcc 4.4. See
+    # http://clang.llvm.org/cxx_status.html for details
     clang_version_re = re.compile(".* version (\d+\.\d+)")
     clang_version_match = clang_version_re.match(CXX_version)
     if (clang_version_match):
@@ -526,17 +606,29 @@ elif main['CLANG']:
         print 'Error: Unable to determine clang version.'
         Exit(1)
 
-    main.Append(CCFLAGS=['-pipe'])
-    main.Append(CCFLAGS=['-fno-strict-aliasing'])
-    main.Append(CCFLAGS=['-Wall', '-Wno-sign-compare', '-Wundef'])
-    main.Append(CCFLAGS=['-Wno-tautological-compare'])
-    main.Append(CCFLAGS=['-Wno-self-assign'])
-    # Ruby makes frequent use of extraneous parantheses in the printing
-    # of if-statements
-    main.Append(CCFLAGS=['-Wno-parentheses'])
+    # clang has a few additional warnings that we disable,
+    # tautological comparisons are allowed due to unsigned integers
+    # being compared to constants that happen to be 0, and extraneous
+    # parantheses are allowed due to Ruby's printing of the AST,
+    # finally self assignments are allowed as the generated CPU code
+    # is relying on this
+    main.Append(CCFLAGS=['-Wno-tautological-compare',
+                         '-Wno-parentheses',
+                         '-Wno-self-assign'])
 
-    if compareVersions(clang_version, "3") >= 0:
-        main.Append(CXXFLAGS=['-std=c++0x'])
+    main.Append(TCMALLOC_CCFLAGS=['-fno-builtin'])
+
+    # On Mac OS X/Darwin we need to also use libc++ (part of XCode) as
+    # opposed to libstdc++ to make the transition from TR1 to
+    # C++11. See http://libcxx.llvm.org. However, clang has chosen a
+    # strict implementation of the C++11 standard, and does not allow
+    # incomplete types in template arguments (besides unique_ptr and
+    # shared_ptr), and the libc++ STL containers create problems in
+    # combination with the current gem5 code. For now, we stick with
+    # libstdc++ and use the TR1 namespace.
+    # if sys.platform == "darwin":
+    #     main.Append(CXXFLAGS=['-stdlib=libc++'])
+
 else:
     print termcap.Yellow + termcap.Bold + 'Error' + termcap.Normal,
     print "Don't know what compiler options to use for your compiler."
@@ -547,7 +639,7 @@ else:
                termcap.Normal
     else:
         print CXX_version.replace('\n', '<nl>')
-    print "       If you're trying to use a compiler other than GCC, ICC, SunCC,"
+    print "       If you're trying to use a compiler other than GCC"
     print "       or clang, there appears to be something wrong with your"
     print "       environment."
     print "       "
@@ -573,6 +665,45 @@ if sys.platform == 'cygwin':
     # cygwin has some header file issues...
     main.Append(CCFLAGS=["-Wno-uninitialized"])
 
+# Check for the protobuf compiler
+protoc_version = readCommand([main['PROTOC'], '--version'],
+                             exception='').split()
+
+# First two words should be "libprotoc x.y.z"
+if len(protoc_version) < 2 or protoc_version[0] != 'libprotoc':
+    print termcap.Yellow + termcap.Bold + \
+        'Warning: Protocol buffer compiler (protoc) not found.\n' + \
+        '         Please install protobuf-compiler for tracing support.' + \
+        termcap.Normal
+    main['PROTOC'] = False
+else:
+    # Based on the availability of the compress stream wrappers,
+    # require 2.1.0
+    min_protoc_version = '2.1.0'
+    if compareVersions(protoc_version[1], min_protoc_version) < 0:
+        print termcap.Yellow + termcap.Bold + \
+            'Warning: protoc version', min_protoc_version, \
+            'or newer required.\n' + \
+            '         Installed version:', protoc_version[1], \
+            termcap.Normal
+        main['PROTOC'] = False
+    else:
+        # Attempt to determine the appropriate include path and
+        # library path using pkg-config, that means we also need to
+        # check for pkg-config. Note that it is possible to use
+        # protobuf without the involvement of pkg-config. Later on we
+        # check go a library config check and at that point the test
+        # will fail if libprotobuf cannot be found.
+        if readCommand(['pkg-config', '--version'], exception=''):
+            try:
+                # Attempt to establish what linking flags to add for protobuf
+                # using pkg-config
+                main.ParseConfig('pkg-config --cflags --libs-only-L protobuf')
+            except:
+                print termcap.Yellow + termcap.Bold + \
+                    'Warning: pkg-config could not get protobuf flags.' + \
+                    termcap.Normal
+
 # Check for SWIG
 if not main.has_key('SWIG'):
     print 'Error: SWIG utility not found.'
@@ -592,6 +723,15 @@ if compareVersions(swig_version[2], min_swig_version) < 0:
     print 'Error: SWIG version', min_swig_version, 'or newer required.'
     print '       Installed version:', swig_version[2]
     Exit(1)
+
+if swig_version[2] == "2.0.9":
+    print '\n' + termcap.Yellow + termcap.Bold + \
+        'Warning: SWIG version 2.0.9 sometimes generates broken code.\n' + \
+        termcap.Normal + \
+        'This problem only affects some platforms and some Python\n' + \
+        'versions. See the following SWIG bug report for details:\n' + \
+        'http://sourceforge.net/p/swig/bugs/1297/\n'
+
 
 # Set up SWIG flags & scanner
 swig_flags=Split('-c++ -python -modern -templatereduce $_CPPINCFLAGS')
@@ -710,6 +850,11 @@ py_lib_path = [ py_getvar('LIBDIR') ]
 # shared library in prefix/lib/.
 if not py_getvar('Py_ENABLE_SHARED'):
     py_lib_path.append(py_getvar('LIBPL'))
+    # Python requires the flags in LINKFORSHARED to be added the
+    # linker flags when linking with a statically with Python. Failing
+    # to do so can lead to errors from the Python's dynamic module
+    # loader at start up.
+    main.Append(LINKFLAGS=[py_getvar('LINKFORSHARED').split()])
 
 py_libs = []
 for lib in py_getvar('LIBS').split() + py_getvar('SYSLIBS').split():
@@ -735,6 +880,7 @@ if main['M5_BUILD_CACHE']:
 # verify that this stuff works
 if not conf.CheckHeader('Python.h', '<>'):
     print "Error: can't find Python.h header in", py_includes
+    print "Install Python headers (package python-dev on Ubuntu and RedHat)"
     Exit(1)
 
 for lib in py_libs:
@@ -756,6 +902,22 @@ if not conf.CheckLibWithHeader('z', 'zlib.h', 'C++','zlibVersion();'):
     print '       Please install zlib and try again.'
     Exit(1)
 
+# If we have the protobuf compiler, also make sure we have the
+# development libraries. If the check passes, libprotobuf will be
+# automatically added to the LIBS environment variable. After
+# this, we can use the HAVE_PROTOBUF flag to determine if we have
+# got both protoc and libprotobuf available.
+main['HAVE_PROTOBUF'] = main['PROTOC'] and \
+    conf.CheckLibWithHeader('protobuf', 'google/protobuf/message.h',
+                            'C++', 'GOOGLE_PROTOBUF_VERIFY_VERSION;')
+
+# If we have the compiler but not the library, print another warning.
+if main['PROTOC'] and not main['HAVE_PROTOBUF']:
+    print termcap.Yellow + termcap.Bold + \
+        'Warning: did not find protocol buffer library and/or headers.\n' + \
+    '       Please install libprotobuf-dev for tracing support.' + \
+    termcap.Normal
+
 # Check for librt.
 have_posix_clock = \
     conf.CheckLibWithHeader(None, 'time.h', 'C',
@@ -763,10 +925,11 @@ have_posix_clock = \
     conf.CheckLibWithHeader('rt', 'time.h', 'C',
                             'clock_nanosleep(0,0,NULL,NULL);')
 
-if conf.CheckLib('tcmalloc_minimal'):
-    have_tcmalloc = True
+if conf.CheckLib('tcmalloc'):
+    main.Append(CCFLAGS=main['TCMALLOC_CCFLAGS'])
+elif conf.CheckLib('tcmalloc_minimal'):
+    main.Append(CCFLAGS=main['TCMALLOC_CCFLAGS'])
 else:
-    have_tcmalloc = False
     print termcap.Yellow + termcap.Bold + \
           "You can get a 12% performance improvement by installing tcmalloc "\
           "(libgoogle-perftools-dev package on Ubuntu or RedHat)." + \
@@ -835,6 +998,14 @@ Export('sticky_vars')
 export_vars = []
 Export('export_vars')
 
+# For Ruby
+all_protocols = []
+Export('all_protocols')
+protocol_dirs = []
+Export('protocol_dirs')
+slicc_includes = []
+Export('slicc_includes')
+
 # Walk the tree and execute all SConsopts scripts that wil add to the
 # above variables
 if not GetOption('verbose'):
@@ -867,11 +1038,13 @@ sticky_vars.AddVariables(
     BoolVariable('USE_POSIX_CLOCK', 'Use POSIX Clocks', have_posix_clock),
     BoolVariable('USE_FENV', 'Use <fenv.h> IEEE mode control', have_fenv),
     BoolVariable('CP_ANNOTATE', 'Enable critical path annotation capability', False),
+    EnumVariable('PROTOCOL', 'Coherence protocol for Ruby', 'None',
+                  all_protocols),
     )
 
 # These variables get exported to #defines in config/*.hh (see src/SConscript).
-export_vars += ['USE_FENV', 'SS_COMPATIBLE_FP',
-                'TARGET_ISA', 'CP_ANNOTATE', 'USE_POSIX_CLOCK' ]
+export_vars += ['USE_FENV', 'SS_COMPATIBLE_FP', 'TARGET_ISA', 'CP_ANNOTATE',
+                'USE_POSIX_CLOCK', 'PROTOCOL', 'HAVE_PROTOBUF']
 
 ###################################################
 #
@@ -921,6 +1094,9 @@ main.SConscript('ext/libelf/SConscript',
 # gzstream build is shared across all configs in the build root.
 main.SConscript('ext/gzstream/SConscript',
                 variant_dir = joinpath(build_root, 'gzstream'))
+# libfdt build is shared across all configs in the build root.
+main.SConscript('ext/libfdt/SConscript',
+                variant_dir = joinpath(build_root, 'libfdt'))
 
 # topaz build is shared across all configs in the build root.
 main.SConscript('ext/TOPAZ/SConscript',
@@ -1037,9 +1213,6 @@ for variant_path in variant_paths:
 
     if env['USE_SSE2']:
         env.Append(CCFLAGS=['-msse2'])
-
-    if have_tcmalloc:
-        env.Append(LIBS=['tcmalloc_minimal'])
 
     # The src/SConscript file sets up the build rules in 'env' according
     # to the configured variables.  It returns a list of environments,

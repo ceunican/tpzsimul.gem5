@@ -47,25 +47,28 @@
 #include "mem/protocol/LinkDirection.hh"
 #include "mem/protocol/MessageSizeType.hh"
 #include "mem/ruby/common/TypeDefines.hh"
+#include "mem/ruby/network/Topology.hh"
+#include "mem/packet.hh"
 #include "params/RubyNetwork.hh"
-#include "sim/sim_object.hh"
+#include "sim/clocked_object.hh"
 
 class NetDest;
 class MessageBuffer;
 class Throttle;
-class Topology;
 
-class Network : public SimObject
+class Network : public ClockedObject
 {
   public:
     typedef RubyNetworkParams Params;
     Network(const Params *p);
     virtual ~Network() {}
+    const Params * params() const
+    { return dynamic_cast<const Params *>(_params);}
 
     virtual void init();
 
-    int getNumberOfVirtualNetworks() { return m_virtual_networks; }
-    int MessageSizeType_to_int(MessageSizeType size_type);
+    static uint32_t getNumberOfVirtualNetworks() { return m_virtual_networks; }
+    static uint32_t MessageSizeType_to_int(MessageSizeType size_type);
 
     // returns the queue requested for the given component
     virtual MessageBuffer* getToNetQueue(NodeID id, bool ordered,
@@ -81,7 +84,7 @@ class Network : public SimObject
                              bool isReconfiguration) = 0;
     virtual void makeInLink(NodeID src, SwitchID dest, BasicLink* link,
                             LinkDirection direction,
-                            const NetDest& routing_table_entry, 
+                            const NetDest& routing_table_entry,
                             bool isReconfiguration) = 0;
     virtual void makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
                                   LinkDirection direction,
@@ -97,6 +100,16 @@ class Network : public SimObject
     //Required to let Topaz be aware of ruby node mapping
     virtual void setTopazMapping (SwitchID node0, SwitchID node1) {};
 
+    /*
+     * Virtual functions for functionally reading and writing packets in
+     * the network. Each network needs to implement these for functional
+     * accesses to work correctly.
+     */
+    virtual bool functionalRead(Packet *pkt)
+    { fatal("Functional read not implemented.\n"); }
+    virtual uint32_t functionalWrite(Packet *pkt)
+    { fatal("Functional write not implemented.\n"); }
+
   protected:
     // Private copy constructor and assignment operator
     Network(const Network& obj);
@@ -105,10 +118,10 @@ class Network : public SimObject
   protected:
     const std::string m_name;
     int m_nodes;
-    int m_virtual_networks;
+    static uint32_t m_virtual_networks;
     Topology* m_topology_ptr;
-    int m_control_msg_size;
-    int m_data_msg_size;
+    static uint32_t m_control_msg_size;
+    static uint32_t m_data_msg_size;
 };
 
 inline std::ostream&

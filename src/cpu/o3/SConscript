@@ -43,10 +43,9 @@ if 'O3CPU' in env['CPU_MODELS']:
     SimObject('O3CPU.py')
 
     Source('base_dyn_inst.cc')
-    Source('bpred_unit.cc')
     Source('commit.cc')
     Source('cpu.cc')
-    Source('cpu_builder.cc')
+    Source('deriv.cc')
     Source('decode.cc')
     Source('dyn_inst.cc')
     Source('fetch.cc')
@@ -79,4 +78,4 @@ if 'O3CPU' in env['CPU_MODELS']:
         'DynInst', 'O3CPU', 'Activity', 'Scoreboard', 'Writeback' ])
 
     SimObject('O3Checker.py')
-    Source('checker_builder.cc')
+    Source('checker.cc')

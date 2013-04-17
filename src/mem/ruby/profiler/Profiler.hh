@@ -79,7 +79,7 @@ class Profiler : public SimObject
     void wakeup();
 
     void setPeriodicStatsFile(const std::string& filename);
-    void setPeriodicStatsInterval(integer_t period);
+    void setPeriodicStatsInterval(int64_t period);
 
     void printStats(std::ostream& out, bool short_stats=false);
     void printShortStats(std::ostream& out) { printStats(out, true); }
@@ -104,18 +104,6 @@ class Profiler : public SimObject
     void profileConflictingRequests(const Address& addr);
 
     void
-    profileOutstandingRequest(int outstanding)
-    {
-        m_outstanding_requests.add(outstanding);
-    }
-
-    void
-    profileOutstandingPersistentRequest(int outstanding)
-    {
-        m_outstanding_persistent_requests.add(outstanding);
-    }
-
-    void
     profileAverageLatencyEstimate(int latency)
     {
         m_average_latency_estimate.add(latency);
@@ -125,34 +113,24 @@ class Profiler : public SimObject
 
     void startTransaction(int cpu);
     void endTransaction(int cpu);
-    void profilePFWait(Time waitTime);
+    void profilePFWait(Cycles waitTime);
 
     void controllerBusy(MachineID machID);
     void bankBusy();
 
-    void missLatency(Time t, 
-                     RubyRequestType type,
+    void missLatency(Cycles t, RubyRequestType type,
                      const GenericMachineType respondingMach);
 
-    void missLatencyWcc(Time issuedTime,
-                        Time initialRequestTime,
-                        Time forwardRequestTime,
-                        Time firstResponseTime,
-                        Time completionTime);
+    void missLatencyWcc(Cycles issuedTime, Cycles initialRequestTime,
+                        Cycles forwardRequestTime, Cycles firstResponseTime,
+                        Cycles completionTime);
     
-    void missLatencyDir(Time issuedTime,
-                        Time initialRequestTime,
-                        Time forwardRequestTime,
-                        Time firstResponseTime,
-                        Time completionTime);
+    void missLatencyDir(Cycles issuedTime, Cycles initialRequestTime,
+                        Cycles forwardRequestTime, Cycles firstResponseTime,
+                        Cycles completionTime);
     
-    void swPrefetchLatency(Time t, 
-                           RubyRequestType type,
+    void swPrefetchLatency(Cycles t, RubyRequestType type,
                            const GenericMachineType respondingMach);
-
-    void sequencerRequests(int num) { m_sequencer_requests.add(num); }
-
-    void profileMsgDelay(int virtualNetwork, int delayCycles);
 
     void print(std::ostream& out) const;
 
@@ -160,15 +138,16 @@ class Profiler : public SimObject
     bool watchAddress(Address addr);
 
     // return Ruby's start time
-    Time
-    getRubyStartTime()
-    {
-        return m_ruby_start;
-    }
+    Cycles getRubyStartTime() { return m_ruby_start; }
 
     // added by SS
     bool getHotLines() { return m_hot_lines; }
     bool getAllInstructions() { return m_all_instructions; }
+
+  private:
+    void printRequestProfile(std::ostream &out) const;
+    void printDelayProfile(std::ostream &out) const;
+    void printOutstandingReqProfile(std::ostream &out) const;
 
   private:
     // Private copy constructor and assignment operator
@@ -182,19 +161,17 @@ class Profiler : public SimObject
     std::vector<int64> m_cycles_executed_at_start;
 
     std::ostream* m_periodic_output_file_ptr;
-    integer_t m_stats_period;
+    int64_t m_stats_period;
 
-    Time m_ruby_start;
+    Cycles m_ruby_start;
     time_t m_real_time_start_time;
 
-    std::vector<std::vector<integer_t> > m_busyControllerCount;
-    integer_t m_busyBankCount;
+    int64_t m_busyBankCount;
     Histogram m_multicast_retry_histogram;
 
     Histogram m_filter_action_histogram;
     Histogram m_tbeProfile;
 
-    Histogram m_sequencer_requests;
     Histogram m_read_sharing_histogram;
     Histogram m_write_sharing_histogram;
     Histogram m_all_sharing_histogram;
@@ -224,19 +201,8 @@ class Profiler : public SimObject
     std::vector<Histogram> m_SWPrefetchLatencyHistograms;
     std::vector<Histogram> m_SWPrefetchMachLatencyHistograms;
 
-    Histogram m_delayedCyclesHistogram;
-    Histogram m_delayedCyclesNonPFHistogram;
-    std::vector<Histogram> m_delayedCyclesVCHistograms;
-
-    Histogram m_outstanding_requests;
-    Histogram m_outstanding_persistent_requests;
-
     Histogram m_average_latency_estimate;
-
     m5::hash_set<Address> m_watch_address_set;
-    // counts all initiated cache request including PUTs
-    int m_requests;
-    std::map<std::string, int> m_requestProfileMap;
 
     //added by SS
     bool m_hot_lines;

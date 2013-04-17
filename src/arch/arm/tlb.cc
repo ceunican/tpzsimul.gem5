@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -107,7 +107,7 @@ TLB::lookup(Addr va, uint8_t cid, bool functional)
         if (table[x].match(va, cid)) {
 
             // We only move the hit entry ahead when the position is higher than rangeMRU
-            if (x > rangeMRU) {
+            if (x > rangeMRU && !functional) {
                 TlbEntry tmp_entry = table[x];
                 for(int i = x; i > 0; i--)
                     table[i] = table[i-1];
@@ -253,6 +253,14 @@ TLB::flushMva(Addr mva)
 }
 
 void
+TLB::drainResume()
+{
+    // We might have unserialized something or switched CPUs, so make
+    // sure to re-read the misc regs.
+    miscRegValid = false;
+}
+
+void
 TLB::serialize(ostream &os)
 {
     DPRINTF(Checkpoint, "Serializing Arm TLB\n");
@@ -278,7 +286,6 @@ TLB::unserialize(Checkpoint *cp, const string &section)
     for(int i = 0; i < min(size, num_entries); i++){
         table[i].unserialize(cp, csprintf("%s.TlbEntry%d", section, i));
     }
-    miscRegValid = false;
 }
 
 void
@@ -722,7 +729,7 @@ TLB::translateTiming(RequestPtr req, ThreadContext *tc,
     return fault;
 }
 
-MasterPort*
+BaseMasterPort*
 TLB::getMasterPort()
 {
     return &tableWalker->getMasterPort("port");

@@ -61,18 +61,19 @@ using namespace std;
 // constructor
 SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
                            Process *_process, TheISA::TLB *_itb,
-                           TheISA::TLB *_dtb)
-    : ThreadState(_cpu, _thread_num, _process), system(_sys), itb(_itb),
-      dtb(_dtb), decoder(NULL)
+                           TheISA::TLB *_dtb, TheISA::ISA *_isa)
+    : ThreadState(_cpu, _thread_num, _process), isa(_isa), system(_sys),
+      itb(_itb), dtb(_dtb)
 {
     clearArchRegs();
     tc = new ProxyThreadContext<SimpleThread>(this);
 }
+
 SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
                            TheISA::TLB *_itb, TheISA::TLB *_dtb,
-                           bool use_kernel_stats)
-    : ThreadState(_cpu, _thread_num, NULL), system(_sys), itb(_itb), dtb(_dtb),
-      decoder(NULL)
+                           TheISA::ISA *_isa, bool use_kernel_stats)
+    : ThreadState(_cpu, _thread_num, NULL), isa(_isa), system(_sys), itb(_itb),
+      dtb(_dtb)
 {
     tc = new ProxyThreadContext<SimpleThread>(this);
 
@@ -98,12 +99,6 @@ SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
         kernelStats = new TheISA::Kernel::Statistics(system);
 }
 
-SimpleThread::SimpleThread()
-    : ThreadState(NULL, -1, NULL), decoder(NULL)
-{
-    tc = new ProxyThreadContext<SimpleThread>(this);
-}
-
 SimpleThread::~SimpleThread()
 {
     delete tc;
@@ -112,49 +107,12 @@ SimpleThread::~SimpleThread()
 void
 SimpleThread::takeOverFrom(ThreadContext *oldContext)
 {
-    // some things should already be set up
-    if (FullSystem)
-        assert(system == oldContext->getSystemPtr());
-    assert(process == oldContext->getProcessPtr());
+    ::takeOverFrom(*tc, *oldContext);
+    decoder.takeOverFrom(oldContext->getDecoderPtr());
 
-    copyState(oldContext);
-    if (FullSystem) {
-        EndQuiesceEvent *quiesce = oldContext->getQuiesceEvent();
-        if (quiesce) {
-            // Point the quiesce event's TC at this TC so that it wakes up
-            // the proper CPU.
-            quiesce->tc = tc;
-        }
-        if (quiesceEvent) {
-            quiesceEvent->tc = tc;
-        }
-
-        TheISA::Kernel::Statistics *stats = oldContext->getKernelStats();
-        if (stats) {
-            kernelStats = stats;
-        }
-    }
-
+    kernelStats = oldContext->getKernelStats();
+    funcExeInst = oldContext->readFuncExeInst();
     storeCondFailures = 0;
-
-    oldContext->setStatus(ThreadContext::Halted);
-}
-
-void
-SimpleThread::copyTC(ThreadContext *context)
-{
-    copyState(context);
-
-    if (FullSystem) {
-        EndQuiesceEvent *quiesce = context->getQuiesceEvent();
-        if (quiesce) {
-            quiesceEvent = quiesce;
-        }
-        TheISA::Kernel::Statistics *stats = context->getKernelStats();
-        if (stats) {
-            kernelStats = stats;
-        }
-    }
 }
 
 void
@@ -174,15 +132,7 @@ void
 SimpleThread::serialize(ostream &os)
 {
     ThreadState::serialize(os);
-    SERIALIZE_ARRAY(floatRegs.i, TheISA::NumFloatRegs);
-    SERIALIZE_ARRAY(intRegs, TheISA::NumIntRegs);
-    _pcState.serialize(os);
-    // thread_num and cpu_id are deterministic from the config
-
-    // 
-    // Now must serialize all the ISA dependent state
-    //
-    isa.serialize(baseCpu, os);
+    ::serialize(*tc, os);
 }
 
 
@@ -190,15 +140,13 @@ void
 SimpleThread::unserialize(Checkpoint *cp, const std::string &section)
 {
     ThreadState::unserialize(cp, section);
-    UNSERIALIZE_ARRAY(floatRegs.i, TheISA::NumFloatRegs);
-    UNSERIALIZE_ARRAY(intRegs, TheISA::NumIntRegs);
-    _pcState.unserialize(cp, section);
-    // thread_num and cpu_id are deterministic from the config
+    ::unserialize(*tc, cp, section);
+}
 
-    // 
-    // Now must unserialize all the ISA dependent state
-    //
-    isa.unserialize(baseCpu, cp, section);
+void
+SimpleThread::startup()
+{
+    isa->startup(tc);
 }
 
 void

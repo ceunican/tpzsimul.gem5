@@ -69,24 +69,25 @@ class OutputUnit_d : public Consumer
     }
 
     inline void
-    set_vc_state(VC_state_type state, int vc)
+    set_vc_state(VC_state_type state, int vc, Cycles curTime)
     {
-        m_outvc_state[vc]->setState(state, g_system_ptr->getTime() + 1);
+        m_outvc_state[vc]->setState(state, curTime + Cycles(1));
     }
 
     inline bool
-    is_vc_idle(int vc)
+    is_vc_idle(int vc, Cycles curTime)
     {
-        return (m_outvc_state[vc]->isInState(IDLE_,
-                                             g_system_ptr->getTime()));
+        return (m_outvc_state[vc]->isInState(IDLE_, curTime));
     }
 
     inline void
     insert_flit(flit_d *t_flit)
     {
         m_out_buffer->insert(t_flit);
-        m_out_link->scheduleEvent(1);
+        m_out_link->scheduleEventAbsolute(m_router->clockEdge(Cycles(1)));
     }
+
+    uint32_t functionalWrite(Packet *pkt);
 
   private:
     int m_id;

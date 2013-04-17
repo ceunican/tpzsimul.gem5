@@ -27,9 +27,152 @@
  */
 
 #include "mem/ruby/slicc_interface/AbstractController.hh"
+#include "mem/ruby/system/Sequencer.hh"
 #include "mem/ruby/system/System.hh"
 
-AbstractController::AbstractController(const Params *p) : SimObject(p)
+AbstractController::AbstractController(const Params *p)
+    : ClockedObject(p), Consumer(this), m_fully_busy_cycles(0),
+    m_request_count(0)
 {
-  p->ruby_system->registerAbstractController(this);
+    m_version = p->version;
+    m_transitions_per_cycle = p->transitions_per_cycle;
+    m_buffer_size = p->buffer_size;
+    m_recycle_latency = p->recycle_latency;
+    m_number_of_TBEs = p->number_of_TBEs;
+    m_is_blocking = false;
+}
+
+void
+AbstractController::init()
+{
+    params()->ruby_system->registerAbstractController(this);
+}
+
+void
+AbstractController::clearStats()
+{
+    m_requestProfileMap.clear();
+    m_request_count = 0;
+
+    m_delayHistogram.clear();
+
+    uint32_t size = Network::getNumberOfVirtualNetworks();
+    m_delayVCHistogram.resize(size);
+    for (uint32_t i = 0; i < size; i++) {
+        m_delayVCHistogram[i].clear();
+    }
+
+    Sequencer *seq = getSequencer();
+    if (seq != NULL) {
+        seq->clearStats();
+    }
+}
+
+void
+AbstractController::profileRequest(const std::string &request)
+{
+    m_request_count++;
+
+    // if it doesn't exist, conveniently, it will be created with the
+    // default value which is 0
+    m_requestProfileMap[request]++;
+}
+
+void
+AbstractController::profileMsgDelay(uint32_t virtualNetwork, Cycles delay)
+{
+    assert(virtualNetwork < m_delayVCHistogram.size());
+    m_delayHistogram.add(delay);
+    m_delayVCHistogram[virtualNetwork].add(delay);
+}
+
+void
+AbstractController::connectWithPeer(AbstractController *c)
+{
+    getQueuesFromPeer(c);
+    c->getQueuesFromPeer(this);
+}
+
+void
+AbstractController::stallBuffer(MessageBuffer* buf, Address addr)
+{
+    if (m_waiting_buffers.count(addr) == 0) {
+        MsgVecType* msgVec = new MsgVecType;
+        msgVec->resize(m_max_in_port_rank, NULL);
+        m_waiting_buffers[addr] = msgVec;
+    }
+    (*(m_waiting_buffers[addr]))[m_cur_in_port_rank] = buf;
+}
+
+void
+AbstractController::wakeUpBuffers(Address addr)
+{
+    if (m_waiting_buffers.count(addr) > 0) {
+        //
+        // Wake up all possible lower rank (i.e. lower priority) buffers that could
+        // be waiting on this message.
+        //
+        for (int in_port_rank = m_cur_in_port_rank - 1;
+             in_port_rank >= 0;
+             in_port_rank--) {
+            if ((*(m_waiting_buffers[addr]))[in_port_rank] != NULL) {
+                (*(m_waiting_buffers[addr]))[in_port_rank]->reanalyzeMessages(addr);
+            }
+        }
+        delete m_waiting_buffers[addr];
+        m_waiting_buffers.erase(addr);
+    }
+}
+
+void
+AbstractController::wakeUpAllBuffers(Address addr)
+{
+    if (m_waiting_buffers.count(addr) > 0) {
+        //
+        // Wake up all possible lower rank (i.e. lower priority) buffers that could
+        // be waiting on this message.
+        //
+        for (int in_port_rank = m_max_in_port_rank - 1;
+             in_port_rank >= 0;
+             in_port_rank--) {
+            if ((*(m_waiting_buffers[addr]))[in_port_rank] != NULL) {
+                (*(m_waiting_buffers[addr]))[in_port_rank]->reanalyzeMessages(addr);
+            }
+        }
+        delete m_waiting_buffers[addr];
+        m_waiting_buffers.erase(addr);
+    }
+}
+
+void
+AbstractController::wakeUpAllBuffers()
+{
+    //
+    // Wake up all possible buffers that could be waiting on any message.
+    //
+
+    std::vector<MsgVecType*> wokeUpMsgVecs;
+
+    if(m_waiting_buffers.size() > 0) {
+        for (WaitingBufType::iterator buf_iter = m_waiting_buffers.begin();
+             buf_iter != m_waiting_buffers.end();
+             ++buf_iter) {
+             for (MsgVecType::iterator vec_iter = buf_iter->second->begin();
+                  vec_iter != buf_iter->second->end();
+                  ++vec_iter) {
+                  if (*vec_iter != NULL) {
+                      (*vec_iter)->reanalyzeAllMessages();
+                  }
+             }
+             wokeUpMsgVecs.push_back(buf_iter->second);
+        }
+
+        for (std::vector<MsgVecType*>::iterator wb_iter = wokeUpMsgVecs.begin();
+             wb_iter != wokeUpMsgVecs.end();
+             ++wb_iter) {
+             delete (*wb_iter);
+        }
+
+        m_waiting_buffers.clear();
+    }
 }

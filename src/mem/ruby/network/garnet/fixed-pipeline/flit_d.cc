@@ -30,12 +30,13 @@
 
 #include "mem/ruby/network/garnet/fixed-pipeline/flit_d.hh"
 
-flit_d::flit_d(int id, int  vc, int vnet, int size, MsgPtr msg_ptr)
+flit_d::flit_d(int id, int  vc, int vnet, int size, MsgPtr msg_ptr,
+    Cycles curTime)
 {
     m_size = size;
     m_msg_ptr = msg_ptr;
-    m_enqueue_time = g_system_ptr->getTime();
-    m_time = g_system_ptr->getTime();
+    m_enqueue_time = curTime;
+    m_time = curTime;
     m_id = id;
     m_vnet = vnet;
     m_vc = vc;
@@ -54,12 +55,12 @@ flit_d::flit_d(int id, int  vc, int vnet, int size, MsgPtr msg_ptr)
         m_type = BODY_;
 }
 
-flit_d::flit_d(int vc, bool is_free_signal)
+flit_d::flit_d(int vc, bool is_free_signal, Cycles curTime)
 {
     m_id = 0;
     m_vc = vc;
     m_is_free_signal = is_free_signal;
-    m_time = g_system_ptr->getTime();
+    m_time = curTime;
 }
 
 void
@@ -72,4 +73,11 @@ flit_d::print(std::ostream& out) const
     out << "VC=" << m_vc << " ";
     out << "Enqueue Time=" << m_enqueue_time << " ";
     out << "]";
+}
+
+bool
+flit_d::functionalWrite(Packet *pkt)
+{
+    Message *msg = m_msg_ptr.get();
+    return msg->functionalWrite(pkt);
 }

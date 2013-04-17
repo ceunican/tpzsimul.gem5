@@ -40,7 +40,6 @@
 #include "mem/ruby/common/Global.hh"
 #include "mem/ruby/profiler/MemCntrlProfiler.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
-#include "mem/ruby/system/AbstractMemOrCache.hh"
 #include "mem/ruby/system/MemoryControl.hh"
 #include "mem/ruby/system/MemoryNode.hh"
 #include "mem/ruby/system/System.hh"
@@ -63,7 +62,7 @@ class RubyMemoryControl : public MemoryControl
 
     ~RubyMemoryControl();
 
-    unsigned int drain(Event *de);
+    unsigned int drain(DrainManager *dm);
 
     void wakeup();
 
@@ -73,7 +72,7 @@ class RubyMemoryControl : public MemoryControl
     std::string getDescription() { return m_description; };
 
     // Called from the directory:
-    void enqueue(const MsgPtr& message, int latency );
+    void enqueue(const MsgPtr& message, Cycles latency);
     void enqueueMemRef(MemoryNode& memRef);
     void dequeue();
     const Message* peek();
@@ -97,9 +96,11 @@ class RubyMemoryControl : public MemoryControl
     int getRanksPerDimm() { return m_ranks_per_dimm; };
     int getDimmsPerChannel() { return m_dimms_per_channel; }
 
+    bool functionalReadBuffers(Packet *pkt);
+    uint32_t functionalWriteBuffers(Packet *pkt);
 
   private:
-    void enqueueToDirectory(MemoryNode req, int latency);
+    void enqueueToDirectory(MemoryNode req, Cycles latency);
     const int getRank(int bank) const;
     bool queueReady(int bank);
     void issueRequest(int bank);
@@ -127,11 +128,11 @@ class RubyMemoryControl : public MemoryControl
     int m_rank_rank_delay;
     int m_read_write_delay;
     int m_basic_bus_busy_time;
-    int m_mem_ctl_latency;
+    Cycles m_mem_ctl_latency;
     int m_refresh_period;
     int m_mem_random_arbitrate;
     int m_tFaw;
-    int m_mem_fixed_delay;
+    Cycles m_mem_fixed_delay;
 
     int m_total_banks;
     int m_total_ranks;
@@ -166,5 +167,7 @@ class RubyMemoryControl : public MemoryControl
 
     MemCntrlProfiler* m_profiler_ptr;
 };
+
+std::ostream& operator<<(std::ostream& out, const RubyMemoryControl& obj);
 
 #endif // __MEM_RUBY_SYSTEM_MEMORY_CONTROL_HH__

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -64,7 +64,7 @@ class BasePrefetcher;
 /**
  * A template-policy based cache. The behavior of the cache can be altered by
  * supplying different template policies. TagStore handles all tag and data
- * storage @sa TagStore.
+ * storage @sa TagStore, \ref gem5MemorySystem "gem5 Memory System"
  */
 template <class TagStore>
 class Cache : public BaseCache
@@ -76,6 +76,7 @@ class Cache : public BaseCache
     typedef typename TagStore::BlkList BlkList;
 
   protected:
+    typedef CacheBlkVisitorWrapper<Cache<TagStore>, BlkType> WrappedBlkVisitor;
 
     /**
      * The CPU-side port extends the base cache slave port with access
@@ -206,7 +207,7 @@ class Cache : public BaseCache
      * @return Boolean indicating whether the request was satisfied.
      */
     bool access(PacketPtr pkt, BlkType *&blk,
-                int &lat, PacketList &writebacks);
+                Cycles &lat, PacketList &writebacks);
 
     /**
      *Handle doing the Compare and Swap function for SPARC.
@@ -233,6 +234,54 @@ class Cache : public BaseCache
     BlkType *handleFill(PacketPtr pkt, BlkType *blk,
                         PacketList &writebacks);
 
+
+    /**
+     * Performs the access specified by the request.
+     * @param pkt The request to perform.
+     * @return The result of the access.
+     */
+    bool recvTimingReq(PacketPtr pkt);
+
+    /**
+     * Handles a response (cache line fill/write ack) from the bus.
+     * @param pkt The response packet
+     */
+    void recvTimingResp(PacketPtr pkt);
+
+    /**
+     * Snoops bus transactions to maintain coherence.
+     * @param pkt The current bus transaction.
+     */
+    void recvTimingSnoopReq(PacketPtr pkt);
+
+    /**
+     * Handle a snoop response.
+     * @param pkt Snoop response packet
+     */
+    void recvTimingSnoopResp(PacketPtr pkt);
+
+    /**
+     * Performs the access specified by the request.
+     * @param pkt The request to perform.
+     * @return The number of cycles required for the access.
+     */
+    Cycles recvAtomic(PacketPtr pkt);
+
+    /**
+     * Snoop for the provided request in the cache and return the estimated
+     * time of completion.
+     * @param pkt The memory request to snoop
+     * @return The number of cycles required for the snoop.
+     */
+    Cycles recvAtomicSnoop(PacketPtr pkt);
+
+    /**
+     * Performs the access specified by the request.
+     * @param pkt The request to perform.
+     * @param fromCpuSide from the CPU side port or the memory side port
+     */
+    void functionalAccess(PacketPtr pkt, bool fromCpuSide);
+
     void satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
                                bool deferred_response = false,
                                bool pending_downgrade = false);
@@ -256,52 +305,38 @@ class Cache : public BaseCache
      */
     PacketPtr writebackBlk(BlkType *blk);
 
-  public:
-    /** Instantiates a basic cache object. */
-    Cache(const Params *p, TagStore *tags);
 
-    void regStats();
-
-    /**
-     * Performs the access specified by the request.
-     * @param pkt The request to perform.
-     * @return The result of the access.
-     */
-    bool timingAccess(PacketPtr pkt);
+    void memWriteback();
+    void memInvalidate();
+    bool isDirty() const;
 
     /**
-     * Performs the access specified by the request.
-     * @param pkt The request to perform.
-     * @return The result of the access.
+     * Cache block visitor that writes back dirty cache blocks using
+     * functional writes.
+     *
+     * \return Always returns true.
      */
-    Tick atomicAccess(PacketPtr pkt);
+    bool writebackVisitor(BlkType &blk);
+    /**
+     * Cache block visitor that invalidates all blocks in the cache.
+     *
+     * @warn Dirty cache lines will not be written back to memory.
+     *
+     * \return Always returns true.
+     */
+    bool invalidateVisitor(BlkType &blk);
 
     /**
-     * Performs the access specified by the request.
-     * @param pkt The request to perform.
-     * @param fromCpuSide from the CPU side port or the memory side port
+     * Flush a cache line due to an uncacheable memory access to the
+     * line.
+     *
+     * @note This shouldn't normally happen, but we need to handle it
+     * since some architecture models don't implement cache
+     * maintenance operations. We won't even try to get a decent
+     * timing here since the line should have been flushed earlier by
+     * a cache maintenance operation.
      */
-    void functionalAccess(PacketPtr pkt, bool fromCpuSide);
-
-    /**
-     * Handles a response (cache line fill/write ack) from the bus.
-     * @param pkt The request being responded to.
-     */
-    void handleResponse(PacketPtr pkt);
-
-    /**
-     * Snoops bus transactions to maintain coherence.
-     * @param pkt The current bus transaction.
-     */
-    void snoopTiming(PacketPtr pkt);
-
-    /**
-     * Snoop for the provided request in the cache and return the estimated
-     * time of completion.
-     * @param pkt The memory request to snoop
-     * @return The estimated completion time.
-     */
-    Tick snoopAtomic(PacketPtr pkt);
+    void uncacheableFlush(PacketPtr pkt);
 
     /**
      * Squash all requests associated with specified thread.
@@ -322,7 +357,7 @@ class Cache : public BaseCache
      * current request in cpu_pkt should just be forwarded on.
      */
     PacketPtr getBusPacket(PacketPtr cpu_pkt, BlkType *blk,
-                           bool needsExclusive);
+                           bool needsExclusive) const;
 
     /**
      * Return the next MSHR to service, either a pending miss from the
@@ -355,22 +390,28 @@ class Cache : public BaseCache
         return mshrQueue.allocated != 0;
     }
 
-    CacheBlk *findBlock(Addr addr) {
+    CacheBlk *findBlock(Addr addr) const {
         return tags->findBlock(addr);
     }
 
-    bool inCache(Addr addr) {
+    bool inCache(Addr addr) const {
         return (tags->findBlock(addr) != 0);
     }
 
-    bool inMissQueue(Addr addr) {
+    bool inMissQueue(Addr addr) const {
         return (mshrQueue.findMatch(addr) != 0);
     }
 
     /**
      * Find next request ready time from among possible sources.
      */
-    Tick nextMSHRReadyTime();
+    Tick nextMSHRReadyTime() const;
+
+  public:
+    /** Instantiates a basic cache object. */
+    Cache(const Params *p, TagStore *tags);
+
+    void regStats();
 
     /** serialize the state of the caches
      * We currently don't support checkpointing cache state, so this panics.

@@ -41,7 +41,7 @@
 #ifndef __DEV_ARM_LOCALTIMER_HH__
 #define __DEV_ARM_LOCALTIMER_HH__
 
-#include "base/range.hh"
+#include "base/bitunion.hh"
 #include "dev/io_device.hh"
 #include "params/CpuLocalTimer.hh"
 
@@ -50,7 +50,7 @@
  * Technical Reference Manual rev r2p2 (ARM DDI 0407F)
  */
 
-class Gic;
+class BaseGic;
 
 class CpuLocalTimer : public BasicPioDevice
 {
@@ -103,9 +103,6 @@ class CpuLocalTimer : public BasicPioDevice
         /** Cpu this timer is attached to */
         uint32_t cpuNum;
 
-        /** Number of ticks in a clock input */
-        Tick clock;
-
         /** Control register as specified above */
         TimerCtrl timerControl;
         WatchdogCtrl watchdogControl;
@@ -157,7 +154,7 @@ class CpuLocalTimer : public BasicPioDevice
     static const int CPU_MAX = 8;
 
     /** Pointer to the GIC for causing an interrupt */
-    Gic *gic;
+    BaseGic *gic;
 
     /** Timers that do the actual work */
     Timer localTimer[CPU_MAX];

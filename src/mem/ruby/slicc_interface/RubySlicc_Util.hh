@@ -35,10 +35,10 @@
 
 #include <cassert>
 
+#include "debug/RubySlicc.hh"
 #include "mem/ruby/common/Address.hh"
-#include "mem/ruby/common/Global.hh"
 #include "mem/ruby/slicc_interface/RubySlicc_ComponentMapping.hh"
-#include "mem/ruby/system/System.hh"
+#include "mem/packet.hh"
 
 inline int
 random(int n)
@@ -46,17 +46,8 @@ random(int n)
   return random() % n;
 }
 
-inline Time
-get_time()
-{
-    return g_system_ptr->getTime();
-}
-
-inline Time
-zero_time()
-{
-    return 0;
-}
+inline Cycles zero_time() { return Cycles(0); }
+inline Cycles TimeToCycles(Time t) { return Cycles(t); }
 
 inline NodeID
 intToID(int nodenum)
@@ -70,33 +61,6 @@ IDToInt(NodeID id)
 {
     int nodenum = id;
     return nodenum;
-}
-
-inline Time
-getTimeModInt(Time time, int modulus)
-{
-    return time % modulus;
-}
-
-inline Time
-getTimePlusInt(Time addend1, int addend2)
-{
-    return (Time) addend1 + addend2;
-}
-
-inline Time
-getTimeMinusTime(Time t1, Time t2)
-{
-    assert(t1 >= t2);
-    return t1 - t2;
-}
-
-// Return type for time_to_int is "Time" and not "int" so we get a
-// 64-bit integer
-inline Time
-time_to_int(Time time)
-{
-    return time;
 }
 
 // Appends an offset to an address
@@ -127,6 +91,67 @@ inline int
 mod(int val, int mod)
 {
     return val % mod;
+}
+
+inline int max_tokens()
+{
+  return 1024;
+}
+
+/**
+ * This function accepts an address, a data block and a packet. If the address
+ * range for the data block contains the address which the packet needs to
+ * read, then the data from the data block is written to the packet. True is
+ * returned if the data block was read, otherwise false is returned.
+ */
+inline bool
+testAndRead(Address addr, DataBlock& blk, Packet *pkt)
+{
+    Address pktLineAddr(pkt->getAddr());
+    pktLineAddr.makeLineAddress();
+
+    Address lineAddr = addr;
+    lineAddr.makeLineAddress();
+
+    if (pktLineAddr == lineAddr) {
+        uint8_t *data = pkt->getPtr<uint8_t>(true);
+        unsigned int size_in_bytes = pkt->getSize();
+        unsigned startByte = pkt->getAddr() - lineAddr.getAddress();
+
+        for (unsigned i = 0; i < size_in_bytes; ++i) {
+            data[i] = blk.getByte(i + startByte);
+        }
+        return true;
+    }
+    return false;
+}
+
+/**
+ * This function accepts an address, a data block and a packet. If the address
+ * range for the data block contains the address which the packet needs to
+ * write, then the data from the packet is written to the data block. True is
+ * returned if the data block was written, otherwise false is returned.
+ */
+inline bool
+testAndWrite(Address addr, DataBlock& blk, Packet *pkt)
+{
+    Address pktLineAddr(pkt->getAddr());
+    pktLineAddr.makeLineAddress();
+
+    Address lineAddr = addr;
+    lineAddr.makeLineAddress();
+
+    if (pktLineAddr == lineAddr) {
+        uint8_t *data = pkt->getPtr<uint8_t>(true);
+        unsigned int size_in_bytes = pkt->getSize();
+        unsigned startByte = pkt->getAddr() - lineAddr.getAddress();
+
+        for (unsigned i = 0; i < size_in_bytes; ++i) {
+            blk.setByte(i + startByte, data[i]);
+        }
+        return true;
+    }
+    return false;
 }
 
 #endif // __MEM_RUBY_SLICC_INTERFACE_RUBYSLICCUTIL_HH__

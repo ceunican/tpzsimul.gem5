@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2011 ARM Limited
+ * Copyright (c) 2010-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -51,6 +51,7 @@
 #include "debug/Activity.hh"
 #include "debug/IEW.hh"
 #include "debug/LSQUnit.hh"
+#include "debug/O3PipeView.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
 
@@ -66,9 +67,9 @@ template<class Impl>
 void
 LSQUnit<Impl>::WritebackEvent::process()
 {
-    if (!lsqPtr->isSwitchedOut()) {
-        lsqPtr->writeback(inst, pkt);
-    }
+    assert(!lsqPtr->cpu->switchedOut());
+
+    lsqPtr->writeback(inst, pkt);
 
     if (pkt->senderState)
         delete pkt->senderState;
@@ -102,7 +103,8 @@ LSQUnit<Impl>::completeDataAccess(PacketPtr pkt)
         return;
     }
 
-    if (isSwitchedOut() || inst->isSquashed()) {
+    assert(!cpu->switchedOut());
+    if (inst->isSquashed()) {
         iewStage->decrWb(inst->seqNum);
     } else {
         if (!state->noWB) {
@@ -147,10 +149,6 @@ LSQUnit<Impl>::init(O3CPU *cpu_ptr, IEW *iew_ptr, DerivO3CPUParams *params,
 
     DPRINTF(LSQUnit, "Creating LSQUnit%i object.\n",id);
 
-    switchedOut = false;
-
-    cacheBlockMask = 0;
-
     lsq = lsq_ptr;
 
     lsqID = id;
@@ -164,19 +162,35 @@ LSQUnit<Impl>::init(O3CPU *cpu_ptr, IEW *iew_ptr, DerivO3CPUParams *params,
 
     depCheckShift = params->LSQDepCheckShift;
     checkLoads = params->LSQCheckLoads;
+    cachePorts = params->cachePorts;
+    needsTSO = params->needsTSO;
+
+    resetState();
+}
+
+
+template<class Impl>
+void
+LSQUnit<Impl>::resetState()
+{
+    loads = stores = storesToWB = 0;
 
     loadHead = loadTail = 0;
 
     storeHead = storeWBIdx = storeTail = 0;
 
     usedPorts = 0;
-    cachePorts = params->cachePorts;
 
     retryPkt = NULL;
     memDepViolator = NULL;
 
     blockedLoadSeqNum = 0;
-    needsTSO = params->needsTSO;
+
+    stalled = false;
+    isLoadBlocked = false;
+    loadBlockedHandled = false;
+
+    cacheBlockMask = 0;
 }
 
 template<class Impl>
@@ -258,40 +272,20 @@ LSQUnit<Impl>::clearSQ()
 
 template<class Impl>
 void
-LSQUnit<Impl>::switchOut()
+LSQUnit<Impl>::drainSanityCheck() const
 {
-    switchedOut = true;
-    for (int i = 0; i < loadQueue.size(); ++i) {
+    for (int i = 0; i < loadQueue.size(); ++i)
         assert(!loadQueue[i]);
-        loadQueue[i] = NULL;
-    }
 
     assert(storesToWB == 0);
+    assert(!retryPkt);
 }
 
 template<class Impl>
 void
 LSQUnit<Impl>::takeOverFrom()
 {
-    switchedOut = false;
-    loads = stores = storesToWB = 0;
-
-    loadHead = loadTail = 0;
-
-    storeHead = storeWBIdx = storeTail = 0;
-
-    usedPorts = 0;
-
-    memDepViolator = NULL;
-
-    blockedLoadSeqNum = 0;
-
-    stalled = false;
-    isLoadBlocked = false;
-    loadBlockedHandled = false;
-
-    // Just incase the memory system changed out from under us
-    cacheBlockMask = 0;
+    resetState();
 }
 
 template<class Impl>
@@ -420,24 +414,6 @@ LSQUnit<Impl>::numFreeEntries()
 }
 
 template <class Impl>
-int
-LSQUnit<Impl>::numLoadsReady()
-{
-    int load_idx = loadHead;
-    int retval = 0;
-
-    while (load_idx != loadTail) {
-        assert(loadQueue[load_idx]);
-
-        if (loadQueue[load_idx]->readyToIssue()) {
-            ++retval;
-        }
-    }
-
-    return retval;
-}
-
-template <class Impl>
 void
 LSQUnit<Impl>::checkSnoop(PacketPtr pkt)
 {
@@ -451,6 +427,18 @@ LSQUnit<Impl>::checkSnoop(PacketPtr pkt)
         assert(bs != 0);
 
         cacheBlockMask = ~(bs - 1);
+    }
+
+    // Unlock the cpu-local monitor when the CPU sees a snoop to a locked
+    // address. The CPU can speculatively execute a LL operation after a pending
+    // SC operation in the pipeline and that can make the cache monitor the CPU
+    // is connected to valid while it really shouldn't be.
+    for (int x = 0; x < cpu->numActiveThreads(); x++) {
+        ThreadContext *tc = cpu->getContext(x);
+        bool no_squash = cpu->thread[x]->noSquashFromTC;
+        cpu->thread[x]->noSquashFromTC = true;
+        TheISA::handleLockedSnoop(tc, pkt, cacheBlockMask);
+        cpu->thread[x]->noSquashFromTC = no_squash;
     }
 
     // If this is the only load in the LSQ we don't care
@@ -1150,6 +1138,13 @@ LSQUnit<Impl>::completeStore(int store_idx)
             "idx:%i\n",
             storeQueue[store_idx].inst->seqNum, store_idx, storeHead);
 
+#if TRACING_ON
+    if (DTRACE(O3PipeView)) {
+        storeQueue[store_idx].inst->storeTick =
+            curTick() - storeQueue[store_idx].inst->fetchTick;
+    }
+#endif
+
     if (isStalled() &&
         storeQueue[store_idx].inst->seqNum == stallingStoreIsn) {
         DPRINTF(LSQUnit, "Unstalling, stalling store [sn:%lli] "
@@ -1234,7 +1229,7 @@ LSQUnit<Impl>::recvRetry()
 
 template <class Impl>
 inline void
-LSQUnit<Impl>::incrStIdx(int &store_idx)
+LSQUnit<Impl>::incrStIdx(int &store_idx) const
 {
     if (++store_idx >= SQEntries)
         store_idx = 0;
@@ -1242,7 +1237,7 @@ LSQUnit<Impl>::incrStIdx(int &store_idx)
 
 template <class Impl>
 inline void
-LSQUnit<Impl>::decrStIdx(int &store_idx)
+LSQUnit<Impl>::decrStIdx(int &store_idx) const
 {
     if (--store_idx < 0)
         store_idx += SQEntries;
@@ -1250,7 +1245,7 @@ LSQUnit<Impl>::decrStIdx(int &store_idx)
 
 template <class Impl>
 inline void
-LSQUnit<Impl>::incrLdIdx(int &load_idx)
+LSQUnit<Impl>::incrLdIdx(int &load_idx) const
 {
     if (++load_idx >= LQEntries)
         load_idx = 0;
@@ -1258,7 +1253,7 @@ LSQUnit<Impl>::incrLdIdx(int &load_idx)
 
 template <class Impl>
 inline void
-LSQUnit<Impl>::decrLdIdx(int &load_idx)
+LSQUnit<Impl>::decrLdIdx(int &load_idx) const
 {
     if (--load_idx < 0)
         load_idx += LQEntries;
@@ -1266,7 +1261,7 @@ LSQUnit<Impl>::decrLdIdx(int &load_idx)
 
 template <class Impl>
 void
-LSQUnit<Impl>::dumpInsts()
+LSQUnit<Impl>::dumpInsts() const
 {
     cprintf("Load store queue: Dumping instructions.\n");
     cprintf("Load queue size: %i\n", loads);
@@ -1275,10 +1270,12 @@ LSQUnit<Impl>::dumpInsts()
     int load_idx = loadHead;
 
     while (load_idx != loadTail && loadQueue[load_idx]) {
-        cprintf("%s ", loadQueue[load_idx]->pcState());
+        const DynInstPtr &inst(loadQueue[load_idx]);
+        cprintf("%s.[sn:%i] ", inst->pcState(), inst->seqNum);
 
         incrLdIdx(load_idx);
     }
+    cprintf("\n");
 
     cprintf("Store queue size: %i\n", stores);
     cprintf("Store queue: ");
@@ -1286,7 +1283,8 @@ LSQUnit<Impl>::dumpInsts()
     int store_idx = storeHead;
 
     while (store_idx != storeTail && storeQueue[store_idx].inst) {
-        cprintf("%s ", storeQueue[store_idx].inst->pcState());
+        const DynInstPtr &inst(storeQueue[store_idx].inst);
+        cprintf("%s.[sn:%i] ", inst->pcState(), inst->seqNum);
 
         incrStIdx(store_idx);
     }

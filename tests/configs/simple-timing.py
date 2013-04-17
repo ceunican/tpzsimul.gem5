@@ -28,24 +28,17 @@
 
 import m5
 from m5.objects import *
-
-class MyCache(BaseCache):
-    assoc = 2
-    block_size = 64
-    latency = '1ns'
-    mshrs = 10
-    tgts_per_mshr = 5
-
-class MyL1Cache(MyCache):
-    is_top_level = True
+m5.util.addToPath('../configs/common')
+from Caches import *
 
 cpu = TimingSimpleCPU(cpu_id=0)
-cpu.addTwoLevelCacheHierarchy(MyL1Cache(size = '128kB'),
-                              MyL1Cache(size = '256kB'),
-                              MyCache(size = '2MB', latency='10ns'))
+cpu.addTwoLevelCacheHierarchy(L1Cache(size = '128kB'),
+                              L1Cache(size = '256kB'),
+                              L2Cache(size = '2MB'))
 system = System(cpu = cpu,
                 physmem = SimpleMemory(),
-                membus = CoherentBus())
+                membus = CoherentBus(),
+                mem_mode = "timing")
 system.system_port = system.membus.slave
 system.physmem.port = system.membus.master
 # create the interrupt controller

@@ -48,23 +48,27 @@ const int PRIORITY_SWITCH_LIMIT = 128;
 
 static int network_message_to_size(NetworkMessage* net_msg_ptr);
 
-Throttle::Throttle(int sID, NodeID node, int link_latency,
-                   int link_bandwidth_multiplier, int endpoint_bandwidth)
+Throttle::Throttle(int sID, NodeID node, Cycles link_latency,
+                   int link_bandwidth_multiplier, int endpoint_bandwidth,
+                   ClockedObject *em)
+    : Consumer(em)
 {
     init(node, link_latency, link_bandwidth_multiplier, endpoint_bandwidth);
     m_sID = sID;
 }
 
-Throttle::Throttle(NodeID node, int link_latency,
-                   int link_bandwidth_multiplier, int endpoint_bandwidth)
+Throttle::Throttle(NodeID node, Cycles link_latency,
+                   int link_bandwidth_multiplier, int endpoint_bandwidth,
+                   ClockedObject *em)
+    : Consumer(em)
 {
     init(node, link_latency, link_bandwidth_multiplier, endpoint_bandwidth);
     m_sID = 0;
 }
 
 void
-Throttle::init(NodeID node, int link_latency, int link_bandwidth_multiplier, 
-               int endpoint_bandwidth)
+Throttle::init(NodeID node, Cycles link_latency,
+               int link_bandwidth_multiplier, int endpoint_bandwidth)
 {
     m_node = node;
     m_vnets = 0;
@@ -114,6 +118,7 @@ Throttle::addVirtualNetwork(MessageBuffer* in_ptr, MessageBuffer* out_ptr)
 
     // Set consumer and description
     m_in[m_vnets]->setConsumer(this);
+
     string desc = "[Queue to Throttle " + to_string(m_sID) + " " +
         to_string(m_node) + "]";
     m_in[m_vnets]->setDescription(desc);
@@ -167,7 +172,7 @@ Throttle::wakeup()
                 DPRINTF(RubyNetwork, "throttle: %d my bw %d bw spent "
                         "enqueueing net msg %d time: %lld.\n",
                         m_node, getLinkBandwidth(), m_units_remaining[vnet],
-                        g_system_ptr->getTime());
+                        g_system_ptr->curCycle());
 
                 // Move the message
                 m_out[vnet]->enqueue(m_in[vnet]->peekMsgPtr(), m_link_latency);
@@ -215,7 +220,7 @@ Throttle::wakeup()
 
         // We are out of bandwidth for this cycle, so wakeup next
         // cycle and continue
-        scheduleEvent(1);
+        scheduleEvent(Cycles(1));
     }
 }
 
@@ -228,7 +233,7 @@ Throttle::printStats(ostream& out) const
 void
 Throttle::clearStats()
 {
-    m_ruby_start = g_system_ptr->getTime();
+    m_ruby_start = g_system_ptr->curCycle();
     m_links_utilized = 0.0;
 
     for (int i = 0; i < m_message_counters.size(); i++) {
@@ -242,7 +247,7 @@ double
 Throttle::getUtilization() const
 {
     return 100.0 * double(m_links_utilized) /
-        double(g_system_ptr->getTime()-m_ruby_start);
+        double(g_system_ptr->curCycle()-m_ruby_start);
 }
 
 void
@@ -256,8 +261,7 @@ network_message_to_size(NetworkMessage* net_msg_ptr)
 {
     assert(net_msg_ptr != NULL);
 
-    int size = RubySystem::getNetwork()->
-        MessageSizeType_to_int(net_msg_ptr->getMessageSize());
+    int size = Network::MessageSizeType_to_int(net_msg_ptr->getMessageSize());
     size *=  MESSAGE_SIZE_MULTIPLIER;
 
     // Artificially increase the size of broadcast messages

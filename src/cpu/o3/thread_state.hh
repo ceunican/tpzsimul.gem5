@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -61,10 +73,15 @@ struct O3ThreadState : public ThreadState {
     /** Pointer to the CPU. */
     O3CPU *cpu;
   public:
-    /** Whether or not the thread is currently in syscall mode, and
-     * thus able to be externally updated without squashing.
+    /* This variable controls if writes to a thread context should cause a all
+     * dynamic/speculative state to be thrown away. Nominally this is the
+     * desired behavior because the external thread context write has updated
+     * some state that could be used by an inflight instruction, however there
+     * are some cases like in a fault/trap handler where this behavior would
+     * lead to successive restarts and forward progress couldn't be made. This
+     * variable controls if the squashing will occur.
      */
-    bool inSyscall;
+    bool noSquashFromTC;
 
     /** Whether or not the thread is currently waiting on a trap, and
      * thus able to be externally updated without squashing.
@@ -73,7 +90,7 @@ struct O3ThreadState : public ThreadState {
 
     O3ThreadState(O3CPU *_cpu, int _thread_num, Process *_process)
         : ThreadState(_cpu, _thread_num, _process),
-          cpu(_cpu), inSyscall(0), trapPending(0)
+          cpu(_cpu), noSquashFromTC(false), trapPending(false)
     {
         if (!FullSystem)
             return;
@@ -92,6 +109,27 @@ struct O3ThreadState : public ThreadState {
         static ProfileNode dummyNode;
         profileNode = &dummyNode;
         profilePC = 3;
+    }
+
+    void serialize(std::ostream &os)
+    {
+        ThreadState::serialize(os);
+        // Use the ThreadContext serialization helper to serialize the
+        // TC.
+        ::serialize(*tc, os);
+    }
+
+    void unserialize(Checkpoint *cp, const std::string &section)
+    {
+        // Prevent squashing - we don't have any instructions in
+        // flight that we need to squash since we just instantiated a
+        // clean system.
+        noSquashFromTC = true;
+        ThreadState::unserialize(cp, section);
+        // Use the ThreadContext serialization helper to unserialize
+        // the TC.
+        ::unserialize(*tc, cp, section);
+        noSquashFromTC = false;
     }
 
     /** Pointer to the ThreadContext of this thread. */

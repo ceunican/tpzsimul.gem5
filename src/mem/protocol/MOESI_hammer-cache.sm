@@ -38,9 +38,9 @@ machine(L1Cache, "AMD Hammer-like protocol")
   CacheMemory * L1IcacheMemory,
   CacheMemory * L1DcacheMemory,
   CacheMemory * L2cacheMemory,
-  int cache_response_latency = 10,
-  int issue_latency = 2,
-  int l2_cache_hit_latency = 10,
+  Cycles cache_response_latency = 10,
+  Cycles issue_latency = 2,
+  Cycles l2_cache_hit_latency = 10,
   bool no_mig_atomic = true,
   bool send_evictions
 {
@@ -161,9 +161,13 @@ machine(L1Cache, "AMD Hammer-like protocol")
     bool AppliedSilentAcks, default="false", desc="for full-bit dir, does the pending msg count reflect the silent acks";
     MachineID LastResponder, desc="last machine to send a response for this request";
     MachineID CurOwner,      desc="current owner of the block, used for UnblockS responses";
-    Time InitialRequestTime, default="0", desc="time the initial requests was sent from the L1Cache";
-    Time ForwardRequestTime, default="0", desc="time the dir forwarded the request";
-    Time FirstResponseTime, default="0", desc="the time the first response was received";
+
+    Cycles InitialRequestTime, default="Cycles(0)",
+            desc="time the initial requests was sent from the L1Cache";
+    Cycles ForwardRequestTime, default="Cycles(0)",
+            desc="time the dir forwarded the request";
+    Cycles FirstResponseTime, default="Cycles(0)",
+            desc="the time the first response was received";
   }
 
   structure(TBETable, external="yes") {
@@ -173,7 +177,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
     bool isPresent(Address);
   }
 
-  TBETable TBEs, template_hack="<L1Cache_TBE>";
+  TBETable TBEs, template="<L1Cache_TBE>", constructor="m_number_of_TBEs";
 
   void set_cache_entry(AbstractCacheEntry b);
   void unset_cache_entry();
@@ -181,6 +185,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
   void unset_tbe();
   void wakeUpAllBuffers();
   void wakeUpBuffers(Address a);
+  Cycles curCycle();
 
   Entry getCacheEntry(Address address), return_by_pointer="yes" {
     Entry L2cache_entry := static_cast(Entry, "pointer", L2cacheMemory.lookup(address));
@@ -198,7 +203,17 @@ machine(L1Cache, "AMD Hammer-like protocol")
   }
 
   DataBlock getDataBlock(Address addr), return_by_ref="yes" {
-    return getCacheEntry(addr).DataBlk;
+    Entry cache_entry := getCacheEntry(addr);
+    if(is_valid(cache_entry)) {
+        return cache_entry.DataBlk;
+    }
+
+    TBE tbe := TBEs[addr];
+    if(is_valid(tbe)) {
+      return tbe.DataBlk;
+    }
+
+    error("Missing data block");
   }
 
   Entry getL2CacheEntry(Address address), return_by_pointer="yes" {
@@ -535,7 +550,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
       out_msg.Requestor := machineID;
       out_msg.Destination.add(map_Address_to_Directory(address));
       out_msg.MessageSize := MessageSizeType:Request_Control;
-      out_msg.InitialRequestTime := get_time();
+      out_msg.InitialRequestTime := curCycle();
       tbe.NumPendingMsgs := machineCount(MachineType:L1Cache); // One from each other cache (n-1) plus the memory (+1)
     }
   }
@@ -548,7 +563,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
       out_msg.Requestor := machineID;
       out_msg.Destination.add(map_Address_to_Directory(address));
       out_msg.MessageSize := MessageSizeType:Request_Control;
-      out_msg.InitialRequestTime := get_time();
+      out_msg.InitialRequestTime := curCycle();
       tbe.NumPendingMsgs := machineCount(MachineType:L1Cache); // One from each other cache (n-1) plus the memory (+1)
     }
   }
@@ -562,7 +577,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
         out_msg.Requestor := machineID;
         out_msg.Destination.add(map_Address_to_Directory(address));
         out_msg.MessageSize := MessageSizeType:Request_Control;
-        out_msg.InitialRequestTime := get_time();
+        out_msg.InitialRequestTime := curCycle();
       }
     }
     tbe.NumPendingMsgs := machineCount(MachineType:L1Cache); // One from each other cache (n-1) plus the memory (+1)
@@ -576,7 +591,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
       out_msg.Requestor := machineID;
       out_msg.Destination.add(map_Address_to_Directory(address));
       out_msg.MessageSize := MessageSizeType:Request_Control;
-      out_msg.InitialRequestTime := get_time();
+      out_msg.InitialRequestTime := curCycle();
       tbe.NumPendingMsgs := machineCount(MachineType:L1Cache); // One from each other cache (n-1) plus the memory (+1)
     }
   }
@@ -879,6 +894,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
                               tbe.ForwardRequestTime,
                               tbe.FirstResponseTime);
     }
+    DPRINTF(RubySlicc, "%s\n", cache_entry.DataBlk);
     cache_entry.Dirty := true;
   }
 
@@ -971,7 +987,7 @@ machine(L1Cache, "AMD Hammer-like protocol")
         tbe.ForwardRequestTime := in_msg.ForwardRequestTime;
       }
       if (tbe.FirstResponseTime == zero_time()) {
-        tbe.FirstResponseTime := get_time();
+        tbe.FirstResponseTime := curCycle();
       }
     }
   }

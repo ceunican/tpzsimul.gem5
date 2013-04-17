@@ -32,7 +32,7 @@
 
 #include "base/callback.hh"
 #include "base/hostinfo.hh"
-#include "sim/eventq.hh"
+#include "sim/eventq_impl.hh"
 #include "sim/sim_events.hh"
 #include "sim/sim_exit.hh"
 #include "sim/stats.hh"
@@ -56,7 +56,7 @@ SimLoopExitEvent::process()
     // queue.
     if (!isFlagSet(IsMainQueue)) {
         exitSimLoop(cause, code);
-        delete this;
+        setFlags(AutoDelete);
     }
 
     // otherwise do nothing... the IsExitEvent flag takes care of
@@ -81,17 +81,6 @@ exitSimLoop(const std::string &message, int exit_code, Tick when, Tick repeat)
 {
     Event *event = new SimLoopExitEvent(message, exit_code, repeat);
     mainEventQueue.schedule(event, when);
-}
-
-CountedDrainEvent::CountedDrainEvent()
-    : count(0)
-{ }
-
-void
-CountedDrainEvent::process()
-{
-    if (--count == 0)
-        exitSimLoop("Finished drain", 0);
 }
 
 //

@@ -103,6 +103,7 @@ for (i, cpu) in enumerate(system.cpu):
     #
     # Tie the cpu ports to the correct ruby system ports
     #
+    cpu.createThreads()
     cpu.createInterruptController()
     cpu.icache_port = system.ruby._cpu_ruby_ports[i].slave
     cpu.dcache_port = system.ruby._cpu_ruby_ports[i].slave
@@ -112,6 +113,8 @@ for (i, cpu) in enumerate(system.cpu):
         cpu.interrupts.pio = system.piobus.master
         cpu.interrupts.int_master = system.piobus.slave
         cpu.interrupts.int_slave = system.piobus.master
+
+    system.ruby._cpu_ruby_ports[i].access_phys_mem = True
 
 root = Root(full_system = True, system = system)
 Simulation.run(options, root, system, FutureClass)

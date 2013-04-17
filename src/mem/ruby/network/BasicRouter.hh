@@ -34,9 +34,9 @@
 #include <vector>
 
 #include "params/BasicRouter.hh"
-#include "sim/sim_object.hh"
+#include "sim/clocked_object.hh"
 
-class BasicRouter : public SimObject
+class BasicRouter : public ClockedObject
 {
   public:
     typedef BasicRouterParams Params;
@@ -53,7 +53,7 @@ class BasicRouter : public SimObject
     //
     // ID in relation to other routers in the system
     //
-    int m_id;
+    uint32_t m_id;
 };
 
 inline std::ostream&

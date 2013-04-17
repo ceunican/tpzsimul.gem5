@@ -95,7 +95,7 @@ using namespace TheISA;
 // NSGigE PCI Device
 //
 NSGigE::NSGigE(Params *p)
-    : EtherDevice(p), ioEnable(false),
+    : EtherDevBase(p), ioEnable(false),
       txFifo(p->tx_fifo_size), rxFifo(p->rx_fifo_size),
       txPacket(0), rxPacket(0), txPacketBufPtr(NULL), rxPacketBufPtr(NULL),
       txXferLen(0), rxXferLen(0), rxDmaFree(false), txDmaFree(false),
@@ -1069,7 +1069,7 @@ NSGigE::doRxDmaRead()
     assert(rxDmaState == dmaIdle || rxDmaState == dmaReadWaiting);
     rxDmaState = dmaReading;
 
-    if (dmaPending() || getState() != Running)
+    if (dmaPending() || getDrainState() != Drainable::Running)
         rxDmaState = dmaReadWaiting;
     else
         dmaRead(rxDmaAddr, rxDmaLen, &rxDmaReadEvent, (uint8_t*)rxDmaData);
@@ -1100,7 +1100,7 @@ NSGigE::doRxDmaWrite()
     assert(rxDmaState == dmaIdle || rxDmaState == dmaWriteWaiting);
     rxDmaState = dmaWriting;
 
-    if (dmaPending() || getState() != Running)
+    if (dmaPending() || getDrainState() != Running)
         rxDmaState = dmaWriteWaiting;
     else
         dmaWrite(rxDmaAddr, rxDmaLen, &rxDmaWriteEvent, (uint8_t*)rxDmaData);
@@ -1138,17 +1138,15 @@ NSGigE::rxKick()
     uint32_t &extsts = is64bit ? rxDesc64.extsts : rxDesc32.extsts;
 
   next:
-    if (clock) {
-        if (rxKickTick > curTick()) {
-            DPRINTF(EthernetSM, "receive kick exiting, can't run till %d\n",
-                    rxKickTick);
+    if (rxKickTick > curTick()) {
+        DPRINTF(EthernetSM, "receive kick exiting, can't run till %d\n",
+                rxKickTick);
 
-            goto exit;
-        }
-
-        // Go to the next state machine clock tick.
-        rxKickTick = curTick() + clockPeriod();
+        goto exit;
     }
+
+    // Go to the next state machine clock tick.
+    rxKickTick = clockEdge(Cycles(1));
 
     switch(rxDmaState) {
       case dmaReadWaiting:
@@ -1457,7 +1455,7 @@ NSGigE::rxKick()
     DPRINTF(EthernetSM, "rx state machine exited rxState=%s\n",
             NsRxStateStrings[rxState]);
 
-    if (clock && !rxKickEvent.scheduled())
+    if (!rxKickEvent.scheduled())
         schedule(rxKickEvent, rxKickTick);
 }
 
@@ -1518,7 +1516,7 @@ NSGigE::doTxDmaRead()
     assert(txDmaState == dmaIdle || txDmaState == dmaReadWaiting);
     txDmaState = dmaReading;
 
-    if (dmaPending() || getState() != Running)
+    if (dmaPending() || getDrainState() != Running)
         txDmaState = dmaReadWaiting;
     else
         dmaRead(txDmaAddr, txDmaLen, &txDmaReadEvent, (uint8_t*)txDmaData);
@@ -1549,7 +1547,7 @@ NSGigE::doTxDmaWrite()
     assert(txDmaState == dmaIdle || txDmaState == dmaWriteWaiting);
     txDmaState = dmaWriting;
 
-    if (dmaPending() || getState() != Running)
+    if (dmaPending() || getDrainState() != Running)
         txDmaState = dmaWriteWaiting;
     else
         dmaWrite(txDmaAddr, txDmaLen, &txDmaWriteEvent, (uint8_t*)txDmaData);
@@ -1586,16 +1584,14 @@ NSGigE::txKick()
     uint32_t &extsts = is64bit ? txDesc64.extsts : txDesc32.extsts;
 
   next:
-    if (clock) {
-        if (txKickTick > curTick()) {
-            DPRINTF(EthernetSM, "transmit kick exiting, can't run till %d\n",
-                    txKickTick);
-            goto exit;
-        }
-
-        // Go to the next state machine clock tick.
-        txKickTick = curTick() + clockPeriod();
+    if (txKickTick > curTick()) {
+        DPRINTF(EthernetSM, "transmit kick exiting, can't run till %d\n",
+                txKickTick);
+        goto exit;
     }
+
+    // Go to the next state machine clock tick.
+    txKickTick = clockEdge(Cycles(1));
 
     switch(txDmaState) {
       case dmaReadWaiting:
@@ -1900,7 +1896,7 @@ NSGigE::txKick()
     DPRINTF(EthernetSM, "tx state machine exited txState=%s\n",
             NsTxStateStrings[txState]);
 
-    if (clock && !txKickEvent.scheduled())
+    if (!txKickEvent.scheduled())
         schedule(txKickEvent, txKickTick);
 }
 
@@ -2015,7 +2011,7 @@ NSGigE::transferDone()
 
     DPRINTF(Ethernet, "transfer complete: data in txFifo...schedule xmit\n");
 
-    reschedule(txEvent, curTick() + clockPeriod(), true);
+    reschedule(txEvent, clockEdge(Cycles(1)), true);
 }
 
 bool
@@ -2112,9 +2108,9 @@ NSGigE::recvPacket(EthPacketPtr packet)
 
 
 void
-NSGigE::resume()
+NSGigE::drainResume()
 {
-    SimObject::resume();
+    Drainable::drainResume();
 
     // During drain we could have left the state machines in a waiting state and
     // they wouldn't get out until some other event occured to kick them.

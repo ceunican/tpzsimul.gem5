@@ -58,6 +58,7 @@
 #include "debug/Loader.hh"
 #include "debug/WorkItems.hh"
 #include "kern/kernel_stats.hh"
+#include "mem/abstract_mem.hh"
 #include "mem/physical.hh"
 #include "params/System.hh"
 #include "sim/byteswap.hh"
@@ -81,7 +82,7 @@ System::System(Params *p)
       virtProxy(_systemPort),
       loadAddrMask(p->load_addr_mask),
       nextPID(0),
-      physmem(p->memories),
+      physmem(name() + ".physmem", p->memories),
       memoryMode(p->mem_mode),
       workItemsBegin(0),
       workItemsEnd(0),
@@ -170,8 +171,8 @@ System::init()
         panic("System port on %s is not connected.\n", name());
 }
 
-MasterPort&
-System::getMasterPort(const std::string &if_name, int idx)
+BaseMasterPort&
+System::getMasterPort(const std::string &if_name, PortID idx)
 {
     // no need to distinguish at the moment (besides checking)
     return _systemPort;
@@ -180,7 +181,7 @@ System::getMasterPort(const std::string &if_name, int idx)
 void
 System::setMemoryMode(Enums::MemoryMode mode)
 {
-    assert(getState() == Drained);
+    assert(getDrainState() == Drainable::Drained);
     memoryMode = mode;
 }
 
@@ -327,10 +328,17 @@ System::isMemAddr(Addr addr) const
     return physmem.isMemAddr(addr);
 }
 
-void
-System::resume()
+unsigned int
+System::drain(DrainManager *dm)
 {
-    SimObject::resume();
+    setDrainState(Drainable::Drained);
+    return 0;
+}
+
+void
+System::drainResume()
+{
+    Drainable::drainResume();
     totalNumInsts = 0;
 }
 
@@ -341,6 +349,11 @@ System::serialize(ostream &os)
         kernelSymtab->serialize("kernel_symtab", os);
     SERIALIZE_SCALAR(pagePtr);
     SERIALIZE_SCALAR(nextPID);
+    serializeSymtab(os);
+
+    // also serialize the memories in the system
+    nameOut(os, csprintf("%s.physmem", name()));
+    physmem.serialize(os);
 }
 
 
@@ -351,6 +364,10 @@ System::unserialize(Checkpoint *cp, const string &section)
         kernelSymtab->unserialize("kernel_symtab", cp, section);
     UNSERIALIZE_SCALAR(pagePtr);
     UNSERIALIZE_SCALAR(nextPID);
+    unserializeSymtab(cp, section);
+
+    // also unserialize the memories in the system
+    physmem.unserialize(cp, csprintf("%s.physmem", name()));
 }
 
 void
@@ -437,8 +454,8 @@ System::getMasterName(MasterID master_id)
     return masterIds[master_id];
 }
 
-const char *System::MemoryModeStrings[3] = {"invalid", "atomic",
-    "timing"};
+const char *System::MemoryModeStrings[4] = {"invalid", "atomic", "timing",
+                                            "atomic_noncaching"};
 
 System *
 SystemParams::create()

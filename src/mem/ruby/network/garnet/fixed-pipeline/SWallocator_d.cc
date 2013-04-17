@@ -35,6 +35,7 @@
 #include "mem/ruby/network/garnet/fixed-pipeline/SWallocator_d.hh"
 
 SWallocator_d::SWallocator_d(Router_d *router)
+    : Consumer(router)
 {
     m_router = router;
     m_num_vcs = m_router->get_num_vcs();
@@ -112,8 +113,10 @@ SWallocator_d::arbitrate_inports()
                 get_vnet(invc))))
                 continue;
 
-            if (m_input_unit[inport]->need_stage(invc, ACTIVE_, SA_) &&
-               m_input_unit[inport]->has_credits(invc)) {
+            if (m_input_unit[inport]->need_stage(invc, ACTIVE_, SA_,
+                                                 m_router->curCycle()) &&
+                m_input_unit[inport]->has_credits(invc)) {
+
                 if (is_candidate_inport(inport, invc)) {
                     int outport = m_input_unit[inport]->get_route(invc);
                     m_local_arbiter_activity++;
@@ -136,7 +139,8 @@ SWallocator_d::is_candidate_inport(int inport, int invc)
     if ((m_router->get_net_ptr())->isVNetOrdered(t_vnet)) {
         for (int vc_offset = 0; vc_offset < m_vc_per_vnet; vc_offset++) {
             int temp_vc = vc_base + vc_offset;
-            if (m_input_unit[inport]->need_stage(temp_vc, ACTIVE_, SA_) &&
+            if (m_input_unit[inport]->need_stage(temp_vc, ACTIVE_, SA_,
+                                                 m_router->curCycle()) &&
                (m_input_unit[inport]->get_route(temp_vc) == outport) &&
                (m_input_unit[inport]->get_enqueue_time(temp_vc) <
                     t_enqueue_time)) {
@@ -174,28 +178,36 @@ SWallocator_d::arbitrate_outports()
 
                 // remove flit from Input Unit
                 flit_d *t_flit = m_input_unit[inport]->getTopFlit(invc);
-                t_flit->advance_stage(ST_);
+                t_flit->advance_stage(ST_, m_router->curCycle());
                 t_flit->set_vc(outvc);
                 t_flit->set_outport(outport);
-                t_flit->set_time(g_system_ptr->getTime() + 1);
+                t_flit->set_time(m_router->curCycle() + Cycles(1));
+
                 m_output_unit[outport]->decrement_credit(outvc);
                 m_router->update_sw_winner(inport, t_flit);
                 m_global_arbiter_activity++;
 
                 if ((t_flit->get_type() == TAIL_) ||
                     t_flit->get_type() == HEAD_TAIL_) {
+
                     // Send a credit back
                     // along with the information that this VC is now idle
-                    m_input_unit[inport]->increment_credit(invc, true);
-                    // This Input VC should now be empty
-                    assert(m_input_unit[inport]->isReady(invc) == false);
+                    m_input_unit[inport]->increment_credit(invc, true,
+                        m_router->curCycle());
 
-                    m_input_unit[inport]->set_vc_state(IDLE_, invc);
-                    m_input_unit[inport]->set_enqueue_time(invc, INFINITE_);
+                    // This Input VC should now be empty
+                    assert(m_input_unit[inport]->isReady(invc,
+                        m_router->curCycle()) == false);
+
+                    m_input_unit[inport]->set_vc_state(IDLE_, invc,
+                        m_router->curCycle());
+                    m_input_unit[inport]->set_enqueue_time(invc,
+                        Cycles(INFINITE_));
                 } else {
                     // Send a credit back
                     // but do not indicate that the VC is idle
-                    m_input_unit[inport]->increment_credit(invc, false);
+                    m_input_unit[inport]->increment_credit(invc, false,
+                        m_router->curCycle());
                 }
                 break; // got a in request for this outport
             }
@@ -208,8 +220,9 @@ SWallocator_d::check_for_wakeup()
 {
     for (int i = 0; i < m_num_inports; i++) {
         for (int j = 0; j < m_num_vcs; j++) {
-            if (m_input_unit[i]->need_stage_nextcycle(j, ACTIVE_, SA_)) {
-                scheduleEvent(1);
+            if (m_input_unit[i]->need_stage_nextcycle(j, ACTIVE_, SA_,
+                                                      m_router->curCycle())) {
+                scheduleEvent(Cycles(1));
                 return;
             }
         }

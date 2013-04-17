@@ -38,10 +38,11 @@ test_sys.cpu = AtomicSimpleCPU(cpu_id=0)
 # create the interrupt controller
 test_sys.cpu.createInterruptController()
 test_sys.cpu.connectAllPorts(test_sys.membus)
+test_sys.cpu.clock = '2GHz'
 # In contrast to the other (one-system) Tsunami configurations we do
 # not have an IO cache but instead rely on an IO bridge for accesses
 # from masters on the IO bus to the memory bus
-test_sys.iobridge = Bridge(delay='50ns', ranges = [AddrRange(0, '8GB')])
+test_sys.iobridge = Bridge(delay='50ns', ranges = test_sys.mem_ranges)
 test_sys.iobridge.slave = test_sys.iobus.master
 test_sys.iobridge.master = test_sys.membus.slave
 
@@ -51,7 +52,8 @@ drive_sys.cpu = AtomicSimpleCPU(cpu_id=0)
 # create the interrupt controller
 drive_sys.cpu.createInterruptController()
 drive_sys.cpu.connectAllPorts(drive_sys.membus)
-drive_sys.iobridge = Bridge(delay='50ns', ranges = [AddrRange(0, '8GB')])
+drive_sys.cpu.clock = '4GHz'
+drive_sys.iobridge = Bridge(delay='50ns', ranges = drive_sys.mem_ranges)
 drive_sys.iobridge.slave = drive_sys.iobus.master
 drive_sys.iobridge.master = drive_sys.membus.slave
 

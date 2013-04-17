@@ -39,11 +39,11 @@
 #include "mem/ruby/network/garnet/flexible-pipeline/flitBuffer.hh"
 #include "mem/ruby/network/garnet/NetworkHeader.hh"
 #include "params/NetworkLink.hh"
-#include "sim/sim_object.hh"
+#include "sim/clocked_object.hh"
 
 class GarnetNetwork;
 
-class NetworkLink : public SimObject, public FlexibleConsumer
+class NetworkLink : public ClockedObject, public FlexibleConsumer
 {
   public:
     typedef NetworkLinkParams Params;
@@ -64,9 +64,9 @@ class NetworkLink : public SimObject, public FlexibleConsumer
     void setOutPort(int port);
     void wakeup();
     bool isReady();
-    void grant_vc_link(int vc, Time grant_time);
-    void release_vc_link(int vc, Time release_time);
-    void request_vc_link(int vc, NetDest destination, Time request_time);
+    void grant_vc_link(int vc, Cycles grant_time);
+    void release_vc_link(int vc, Cycles release_time);
+    void request_vc_link(int vc, NetDest destination, Cycles request_time);
     bool isBufferNotFull_link(int vc);
     void setSource(FlexibleConsumer *source);
     double getLinkUtilization();
@@ -77,8 +77,12 @@ class NetworkLink : public SimObject, public FlexibleConsumer
         m_net_ptr = net_ptr; 
     }
 
+    bool functionalRead(Packet *);
+    uint32_t functionalWrite(Packet *);
+
   protected:
-    int m_id, m_latency;
+    int m_id;
+    Cycles m_latency;
     int m_in_port, m_out_port;
     int m_link_utilized;
     std::vector<int> m_vc_load;

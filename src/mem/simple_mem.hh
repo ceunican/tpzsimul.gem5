@@ -55,17 +55,23 @@
 
 /**
  * The simple memory is a basic single-ported memory controller with
- * an infinite throughput and a fixed latency, potentially with a
- * variance added to it. It uses a SimpleTimingPort to implement the
- * timing accesses.
+ * an configurable throughput and latency, potentially with a variance
+ * added to the latter. It uses a QueueSlavePort to avoid dealing with
+ * the flow control of sending responses.
+ * @sa  \ref gem5MemorySystem "gem5 Memory System"
  */
 class SimpleMemory : public AbstractMemory
 {
 
   private:
 
-    class MemoryPort : public SimpleTimingPort
+    class MemoryPort : public QueuedSlavePort
     {
+
+      private:
+
+        /// Queue holding the response packets
+        SlavePacketQueue queueImpl;
         SimpleMemory& memory;
 
       public:
@@ -74,11 +80,13 @@ class SimpleMemory : public AbstractMemory
 
       protected:
 
-        virtual Tick recvAtomic(PacketPtr pkt);
+        Tick recvAtomic(PacketPtr pkt);
 
-        virtual void recvFunctional(PacketPtr pkt);
+        void recvFunctional(PacketPtr pkt);
 
-        virtual AddrRangeList getAddrRanges() const;
+        bool recvTimingReq(PacketPtr pkt);
+
+        AddrRangeList getAddrRanges() const;
 
     };
 
@@ -87,28 +95,52 @@ class SimpleMemory : public AbstractMemory
     Tick lat;
     Tick lat_var;
 
+    /// Bandwidth in ticks per byte
+    const double bandwidth;
+
+    /**
+     * Track the state of the memory as either idle or busy, no need
+     * for an enum with only two states.
+     */
+    bool isBusy;
+
+    /**
+     * Remember if we have to retry an outstanding request that
+     * arrived while we were busy.
+     */
+    bool retryReq;
+
+    /**
+     * Release the memory after being busy and send a retry if a
+     * request was rejected in the meanwhile.
+     */
+    void release();
+
+    EventWrapper<SimpleMemory, &SimpleMemory::release> releaseEvent;
+
+    /** @todo this is a temporary workaround until the 4-phase code is
+     * committed. upstream caches needs this packet until true is returned, so
+     * hold onto it for deletion until a subsequent call
+     */
+    std::vector<PacketPtr> pendingDelete;
+
   public:
 
-    typedef SimpleMemoryParams Params;
-    SimpleMemory(const Params *p);
+    SimpleMemory(const SimpleMemoryParams *p);
     virtual ~SimpleMemory() { }
 
-    unsigned int drain(Event* de);
+    unsigned int drain(DrainManager *dm);
 
-    virtual SlavePort& getSlavePort(const std::string& if_name, int idx = -1);
+    virtual BaseSlavePort& getSlavePort(const std::string& if_name,
+                                        PortID idx = InvalidPortID);
     virtual void init();
-
-    const Params *
-    params() const
-    {
-        return dynamic_cast<const Params *>(_params);
-    }
 
   protected:
 
     Tick doAtomicAccess(PacketPtr pkt);
     void doFunctionalAccess(PacketPtr pkt);
-    virtual Tick calculateLatency(PacketPtr pkt);
+    bool recvTimingReq(PacketPtr pkt);
+    Tick calculateLatency(PacketPtr pkt);
 
 };
 

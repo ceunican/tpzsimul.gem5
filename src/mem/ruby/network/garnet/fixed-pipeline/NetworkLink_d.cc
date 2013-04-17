@@ -32,7 +32,7 @@
 #include "mem/ruby/network/garnet/fixed-pipeline/NetworkLink_d.hh"
 
 NetworkLink_d::NetworkLink_d(const Params *p)
-    : SimObject(p)
+    : ClockedObject(p), Consumer(this)
 {
     m_latency = p->link_latency;
     channel_width = p->channel_width;
@@ -66,11 +66,11 @@ NetworkLink_d::setSourceQueue(flitBuffer_d *srcQueue)
 void
 NetworkLink_d::wakeup()
 {
-    if (link_srcQueue->isReady()) {
+    if (link_srcQueue->isReady(curCycle())) {
         flit_d *t_flit = link_srcQueue->getTopFlit();
-        t_flit->set_time(g_system_ptr->getTime() + m_latency);
+        t_flit->set_time(curCycle() + m_latency);
         linkBuffer->insert(t_flit);
-        link_consumer->scheduleEvent(m_latency);
+        link_consumer->scheduleEventAbsolute(clockEdge(m_latency));
         m_link_utilized++;
         m_vc_load[t_flit->get_vc()]++;
     }
@@ -98,4 +98,10 @@ CreditLink_d *
 CreditLink_dParams::create()
 {
     return new CreditLink_d(this);
+}
+
+uint32_t
+NetworkLink_d::functionalWrite(Packet *pkt)
+{
+    return linkBuffer->functionalWrite(pkt);
 }

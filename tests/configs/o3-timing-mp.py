@@ -29,38 +29,20 @@
 import m5
 from m5.objects import *
 m5.util.addToPath('../configs/common')
-
-# --------------------
-# Base L1 Cache
-# ====================
-
-class L1(BaseCache):
-    latency = '1ns'
-    block_size = 64
-    mshrs = 4
-    tgts_per_mshr = 20
-    is_top_level = True
-
-# ----------------------
-# Base L2 Cache
-# ----------------------
-
-class L2(BaseCache):
-    block_size = 64
-    latency = '10ns'
-    mshrs = 92
-    tgts_per_mshr = 16
-    write_buffers = 8
+from Caches import *
 
 nb_cores = 4
 cpus = [ DerivO3CPU(cpu_id=i) for i in xrange(nb_cores) ]
 
 # system simulated
-system = System(cpu = cpus, physmem = SimpleMemory(), membus = CoherentBus())
+system = System(cpu = cpus,
+                physmem = SimpleDDR3(),
+                membus = CoherentBus(),
+                mem_mode = "timing")
 
 # l2cache & bus
-system.toL2Bus = CoherentBus()
-system.l2c = L2(size='4MB', assoc=8)
+system.toL2Bus = CoherentBus(clock = '2GHz')
+system.l2c = L2Cache(clock = '2GHz', size='4MB', assoc=8)
 system.l2c.cpu_side = system.toL2Bus.master
 
 # connect l2c to membus
@@ -68,8 +50,8 @@ system.l2c.mem_side = system.membus.slave
 
 # add L1 caches
 for cpu in cpus:
-    cpu.addPrivateSplitL1Caches(L1(size = '32kB', assoc = 1),
-                                L1(size = '32kB', assoc = 4))
+    cpu.addPrivateSplitL1Caches(L1Cache(size = '32kB', assoc = 1),
+                                L1Cache(size = '32kB', assoc = 4))
     # create the interrupt controller
     cpu.createInterruptController()
     # connect cpu level-1 caches to shared level-2 cache

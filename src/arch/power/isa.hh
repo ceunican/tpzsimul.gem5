@@ -36,7 +36,9 @@
 #include "arch/power/registers.hh"
 #include "arch/power/types.hh"
 #include "base/misc.hh"
+#include "sim/sim_object.hh"
 
+struct PowerISAParams;
 class ThreadContext;
 class Checkpoint;
 class EventManager;
@@ -44,13 +46,15 @@ class EventManager;
 namespace PowerISA
 {
 
-class ISA
+class ISA : public SimObject
 {
   protected:
     MiscReg dummy;
     MiscReg miscRegs[NumMiscRegs];
 
   public:
+    typedef PowerISAParams Params;
+
     void
     clear()
     {
@@ -94,20 +98,14 @@ class ISA
         return reg;
     }
 
-    void
-    serialize(EventManager *em, std::ostream &os)
-    {
-    }
+    void startup(ThreadContext *tc) {}
 
-    void
-    unserialize(EventManager *em, Checkpoint *cp, const std::string &section)
-    {
-    }
+    /// Explicitly import the otherwise hidden startup
+    using SimObject::startup;
 
-    ISA()
-    {
-        clear();
-    }
+    const Params *params() const;
+
+    ISA(Params *p);
 };
 
 } // namespace PowerISA

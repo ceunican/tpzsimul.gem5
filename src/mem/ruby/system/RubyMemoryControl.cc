@@ -276,10 +276,9 @@ RubyMemoryControl::~RubyMemoryControl()
 
 // enqueue new request from directory
 void
-RubyMemoryControl::enqueue(const MsgPtr& message, int latency)
+RubyMemoryControl::enqueue(const MsgPtr& message, Cycles latency)
 {
-    Time current_time = g_system_ptr->getTime();
-    Time arrival_time = current_time + latency;
+    Cycles arrival_time = curCycle() + latency;
     const MemoryMsg* memMess = safe_cast<const MemoryMsg*>(message.get());
     physical_address_t addr = memMess->getAddress().getAddress();
     MemoryRequestType type = memMess->getType();
@@ -301,7 +300,7 @@ RubyMemoryControl::enqueueMemRef(MemoryNode& memRef)
     DPRINTF(RubyMemory,
             "New memory request%7d: %#08x %c arrived at %10d bank = %3x sched %c\n",
             m_msg_counter, addr, memRef.m_is_mem_read ? 'R':'W',
-            memRef.m_time * g_system_ptr->getClock(),
+            memRef.m_time * g_system_ptr->clockPeriod(),
             bank, m_event.scheduled() ? 'Y':'N');
 
     m_profiler_ptr->profileMemReq(bank);
@@ -346,7 +345,7 @@ bool
 RubyMemoryControl::isReady()
 {
     return ((!m_response_queue.empty()) &&
-            (m_response_queue.front().m_time <= g_system_ptr->getTime()));
+            (m_response_queue.front().m_time <= g_system_ptr->curCycle()));
 }
 
 void
@@ -374,19 +373,18 @@ RubyMemoryControl::printStats(ostream& out) const
 
 // Queue up a completed request to send back to directory
 void
-RubyMemoryControl::enqueueToDirectory(MemoryNode req, int latency)
+RubyMemoryControl::enqueueToDirectory(MemoryNode req, Cycles latency)
 {
-    Time arrival_time = curTick() + (latency * clock);
-    Time ruby_arrival_time = arrival_time / g_system_ptr->getClock();
+    Tick arrival_time = clockEdge(latency);
+    Cycles ruby_arrival_time = g_system_ptr->ticksToCycles(arrival_time);
     req.m_time = ruby_arrival_time;
     m_response_queue.push_back(req);
 
     DPRINTF(RubyMemory, "Enqueueing msg %#08x %c back to directory at %15d\n",
-            req.m_addr, req.m_is_mem_read ? 'R':'W',
-            arrival_time);
+            req.m_addr, req.m_is_mem_read ? 'R':'W', arrival_time);
 
     // schedule the wake up
-    m_consumer_ptr->scheduleEventAbsolute(ruby_arrival_time);
+    m_consumer_ptr->scheduleEventAbsolute(arrival_time);
 }
 
 // getBank returns an integer that is unique for each
@@ -559,7 +557,7 @@ RubyMemoryControl::issueRequest(int bank)
             bank, m_event.scheduled() ? 'Y':'N');
 
     if (req.m_msgptr) {  // don't enqueue L3 writebacks
-        enqueueToDirectory(req, m_mem_ctl_latency + m_mem_fixed_delay);
+        enqueueToDirectory(req, Cycles(m_mem_ctl_latency + m_mem_fixed_delay));
     }
     m_oldRequest[bank] = 0;
     markTfaw(rank);
@@ -684,7 +682,7 @@ RubyMemoryControl::executeCycle()
 }
 
 unsigned int
-RubyMemoryControl::drain(Event *de)
+RubyMemoryControl::drain(DrainManager *dm)
 {
     DPRINTF(RubyMemory, "MemoryController drain\n");
     if(m_event.scheduled()) {
@@ -704,7 +702,95 @@ RubyMemoryControl::wakeup()
     m_idleCount--;
     if (m_idleCount > 0) {
         assert(!m_event.scheduled());
-        schedule(m_event, curTick() + clock);
+        schedule(m_event, clockEdge(Cycles(1)));
     }
 }
 
+/**
+ * This function reads the different buffers that exist in the Ruby Memory
+ * Controller, and figures out if any of the buffers hold a message that
+ * contains the data for the address provided in the packet. True is returned
+ * if any of the messages was read, otherwise false is returned.
+ *
+ * I think we should move these buffers to being message buffers, instead of
+ * being lists.
+ */
+bool
+RubyMemoryControl::functionalReadBuffers(Packet *pkt)
+{
+    for (std::list<MemoryNode>::iterator it = m_input_queue.begin();
+         it != m_input_queue.end(); ++it) {
+        Message* msg_ptr = (*it).m_msgptr.get();
+        if (msg_ptr->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (std::list<MemoryNode>::iterator it = m_response_queue.begin();
+         it != m_response_queue.end(); ++it) {
+        Message* msg_ptr = (*it).m_msgptr.get();
+        if (msg_ptr->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (uint32_t bank = 0; bank < m_total_banks; ++bank) {
+        for (std::list<MemoryNode>::iterator it = m_bankQueues[bank].begin();
+             it != m_bankQueues[bank].end(); ++it) {
+            Message* msg_ptr = (*it).m_msgptr.get();
+            if (msg_ptr->functionalRead(pkt)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * This function reads the different buffers that exist in the Ruby Memory
+ * Controller, and figures out if any of the buffers hold a message that
+ * needs to functionally written with the data in the packet.
+ *
+ * The number of messages written is returned at the end. This is required
+ * for debugging purposes.
+ */
+uint32_t
+RubyMemoryControl::functionalWriteBuffers(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (std::list<MemoryNode>::iterator it = m_input_queue.begin();
+         it != m_input_queue.end(); ++it) {
+        Message* msg_ptr = (*it).m_msgptr.get();
+        if (msg_ptr->functionalWrite(pkt)) {
+            num_functional_writes++;
+        }
+    }
+
+    for (std::list<MemoryNode>::iterator it = m_response_queue.begin();
+         it != m_response_queue.end(); ++it) {
+        Message* msg_ptr = (*it).m_msgptr.get();
+        if (msg_ptr->functionalWrite(pkt)) {
+            num_functional_writes++;
+        }
+    }
+
+    for (uint32_t bank = 0; bank < m_total_banks; ++bank) {
+        for (std::list<MemoryNode>::iterator it = m_bankQueues[bank].begin();
+             it != m_bankQueues[bank].end(); ++it) {
+            Message* msg_ptr = (*it).m_msgptr.get();
+            if (msg_ptr->functionalWrite(pkt)) {
+                num_functional_writes++;
+            }
+        }
+    }
+
+    return num_functional_writes;
+}
+
+RubyMemoryControl *
+RubyMemoryControlParams::create()
+{
+    return new RubyMemoryControl(this);
+}

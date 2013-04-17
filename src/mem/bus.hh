@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -51,11 +51,10 @@
 #ifndef __MEM_BUS_HH__
 #define __MEM_BUS_HH__
 
-#include <list>
+#include <deque>
 #include <set>
 
-#include "base/range.hh"
-#include "base/range_map.hh"
+#include "base/addr_range_map.hh"
 #include "base/types.hh"
 #include "mem/mem_object.hh"
 #include "params/BaseBus.hh"
@@ -95,7 +94,7 @@ class BaseBus : public MemObject
      * whereas a response layer holds master ports.
      */
     template <typename PortClass>
-    class Layer
+    class Layer : public Drainable
     {
 
       public:
@@ -106,9 +105,9 @@ class BaseBus : public MemObject
          *
          * @param _bus the bus this layer belongs to
          * @param _name the layer's name
-         * @param _clock clock period in ticks
+         * @param num_dest_ports number of destination ports
          */
-        Layer(BaseBus& _bus, const std::string& _name, Tick _clock);
+        Layer(BaseBus& _bus, const std::string& _name, uint16_t num_dest_ports);
 
         /**
          * Drain according to the normal semantics, so that the bus
@@ -119,7 +118,7 @@ class BaseBus : public MemObject
          *
          * @return 1 if busy or waiting to retry, or 0 if idle
          */
-        unsigned int drain(Event *de);
+        unsigned int drain(DrainManager *dm);
 
         /**
          * Get the bus layer's name
@@ -130,14 +129,16 @@ class BaseBus : public MemObject
         /**
          * Determine if the bus layer accepts a packet from a specific
          * port. If not, the port in question is also added to the
-         * retry list. In either case the state of the layer is updated
-         * accordingly.
+         * retry list. In either case the state of the layer is
+         * updated accordingly. To ignore checking the destination
+         * port (used by snoops), pass InvalidPortID.
          *
-         * @param port Source port resenting the packet
+         * @param port Source port presenting the packet
+         * @param dest_port_id Destination port id
          *
          * @return True if the bus layer accepts the packet
          */
-        bool tryTiming(PortClass* port);
+        bool tryTiming(PortClass* port, PortID dest_port_id);
 
         /**
          * Deal with a destination port accepting a packet by potentially
@@ -154,26 +155,30 @@ class BaseBus : public MemObject
          * not already at the front) and occupying the bus layer
          * accordingly.
          *
+         * @param src_port Source port
+         * @param dest_port_id Destination port id
          * @param busy_time Time to spend as a result of a failed send
          */
-        void failedTiming(PortClass* port, Tick busy_time);
+        void failedTiming(PortClass* src_port, PortID dest_port_id,
+                          Tick busy_time);
 
         /** Occupy the bus layer until until */
         void occupyLayer(Tick until);
 
         /**
-         * Send a retry to the port at the head of the retryList. The
+         * Send a retry to the port at the head of waitingForLayer. The
          * caller must ensure that the list is not empty.
          */
         void retryWaiting();
 
         /**
-         * Handler a retry from a neighbouring module. Eventually this
-         * should be all encapsulated in the bus. This wraps
+         * Handle a retry from a neighbouring module. This wraps
          * retryWaiting by verifying that there are ports waiting
          * before calling retryWaiting.
+         *
+         * @param port_id Id of the port that received the retry
          */
-        void recvRetry();
+        void recvRetry(PortID port_id);
 
       private:
 
@@ -192,7 +197,7 @@ class BaseBus : public MemObject
          * spent. Once the bus layer leaves the busy state, it can
          * either go back to idle, if no packets have arrived while it
          * was busy, or the bus layer goes on to retry the first port
-         * on the retryList. A similar transition takes place from
+         * in waitingForLayer. A similar transition takes place from
          * idle to retry if the bus layer receives a retry from one of
          * its connected ports. The retry state lasts until the port
          * in questions calls sendTiming and returns control to the
@@ -204,17 +209,33 @@ class BaseBus : public MemObject
         /** track the state of the bus layer */
         State state;
 
-        /** the clock speed for the bus layer */
-        Tick clock;
-
-        /** event for signalling when drained */
-        Event * drainEvent;
+        /** manager to signal when drained */
+        DrainManager *drainManager;
 
         /**
-         * An array of ports that retry should be called
-         * on because the original send failed for whatever reason.
+         * A deque of ports that retry should be called on because
+         * the original send was delayed due to a busy layer.
          */
-        std::list<PortClass*> retryList;
+        std::deque<PortClass*> waitingForLayer;
+
+        /**
+         * Port that we are currently in the process of telling to
+         * retry a previously failed attempt to perform a timing
+         * transaction. This is a valid port when in the retry state,
+         * and NULL when in busy or idle.
+         */
+        PortClass* retryingPort;
+
+        /**
+         * A vector that tracks who is waiting for the retry when
+         * receiving it from a peer. The vector indices are port ids
+         * of the outgoing ports for the specific layer. The values
+         * are the incoming ports that tried to forward something to
+         * the outgoing port, but was told to wait and is now waiting
+         * for a retry. If no port is waiting NULL is stored on the
+         * location in question.
+         */
+        std::vector<PortClass*> waitingForPeer;
 
         /**
          * Release the bus layer after being occupied and return to an
@@ -229,15 +250,18 @@ class BaseBus : public MemObject
     };
 
     /** cycles of overhead per transaction */
-    int headerCycles;
+    const Cycles headerCycles;
     /** the width of the bus in bytes */
-    int width;
+    const uint32_t width;
 
-    typedef range_map<Addr, PortID>::iterator PortMapIter;
-    typedef range_map<Addr, PortID>::const_iterator PortMapConstIter;
-    range_map<Addr, PortID> portMap;
+    typedef AddrRangeMap<PortID>::iterator PortMapIter;
+    typedef AddrRangeMap<PortID>::const_iterator PortMapConstIter;
+    AddrRangeMap<PortID> portMap;
 
-    AddrRangeList defaultRange;
+    /** all contigous ranges seen by this bus */
+    AddrRangeList busRanges;
+
+    AddrRange defaultRange;
 
     /**
      * Function called by the port when the bus is recieving a range change.
@@ -257,25 +281,21 @@ class BaseBus : public MemObject
     struct PortCache {
         bool valid;
         PortID id;
-        Addr start;
-        Addr end;
+        AddrRange range;
     };
 
     PortCache portCache[3];
 
     // Checks the cache and returns the id of the port that has the requested
     // address within its range
-    inline PortID checkPortCache(Addr addr) {
-        if (portCache[0].valid && addr >= portCache[0].start &&
-            addr < portCache[0].end) {
+    inline PortID checkPortCache(Addr addr) const {
+        if (portCache[0].valid && portCache[0].range.contains(addr)) {
             return portCache[0].id;
         }
-        if (portCache[1].valid && addr >= portCache[1].start &&
-                   addr < portCache[1].end) {
+        if (portCache[1].valid && portCache[1].range.contains(addr)) {
             return portCache[1].id;
         }
-        if (portCache[2].valid && addr >= portCache[2].start &&
-            addr < portCache[2].end) {
+        if (portCache[2].valid && portCache[2].range.contains(addr)) {
             return portCache[2].id;
         }
 
@@ -283,21 +303,18 @@ class BaseBus : public MemObject
     }
 
     // Clears the earliest entry of the cache and inserts a new port entry
-    inline void updatePortCache(short id, Addr start, Addr end) {
+    inline void updatePortCache(short id, const AddrRange& range) {
         portCache[2].valid = portCache[1].valid;
         portCache[2].id    = portCache[1].id;
-        portCache[2].start = portCache[1].start;
-        portCache[2].end   = portCache[1].end;
+        portCache[2].range = portCache[1].range;
 
         portCache[1].valid = portCache[0].valid;
         portCache[1].id    = portCache[0].id;
-        portCache[1].start = portCache[0].start;
-        portCache[1].end   = portCache[0].end;
+        portCache[1].range = portCache[0].range;
 
         portCache[0].valid = true;
         portCache[0].id    = id;
-        portCache[0].start = start;
-        portCache[0].end   = end;
+        portCache[0].range = range;
     }
 
     // Clears the cache. Needs to be called in constructor.
@@ -314,21 +331,31 @@ class BaseBus : public MemObject
      */
     AddrRangeList getAddrRanges() const;
 
-    /** Calculate the timing parameters for the packet.  Updates the
-     * firstWordTime and finishTime fields of the packet object.
-     * Returns the tick at which the packet header is completed (which
-     * will be all that is sent if the target rejects the packet).
+    /**
+     * Calculate the timing parameters for the packet. Updates the
+     * busFirstWordDelay and busLastWordDelay fields of the packet
+     * object with the relative number of ticks required to transmit
+     * the header and the first word, and the last word, respectively.
      */
-    Tick calcPacketTiming(PacketPtr pkt);
+    void calcPacketTiming(PacketPtr pkt);
 
     /**
-     * Ask everyone on the bus what their size is
+     * Ask everyone on the bus what their size is and determine the
+     * bus size as either the maximum, or if no device specifies a
+     * block size return the default.
      *
-     * @return the max of all the sizes
+     * @return the max of all the sizes or the default if none is set
      */
-    unsigned findBlockSize();
+    unsigned deviceBlockSize() const;
 
-    std::set<PortID> inRecvRangeChange;
+    /**
+     * Remember for each of the master ports of the bus if we got an
+     * address range from the connected slave. For convenience, also
+     * keep track of if we got ranges from all the slave modules or
+     * not.
+     */
+    std::vector<bool> gotAddrRanges;
+    bool gotAllAddrRanges;
 
     /** The master and slave ports of the bus */
     std::vector<SlavePort*> slavePorts;
@@ -347,11 +374,9 @@ class BaseBus : public MemObject
        address not handled by another port and not in default device's
        range will cause a fatal error.  If false, just send all
        addresses not handled by another port to default device. */
-    bool useDefaultRange;
+    const bool useDefaultRange;
 
-    unsigned defaultBlockSize;
-    unsigned cachedBlockSize;
-    bool cachedBlockSizeValid;
+    uint32_t blockSize;
 
     BaseBus(const BaseBusParams *p);
 
@@ -359,11 +384,15 @@ class BaseBus : public MemObject
 
   public:
 
-    /** A function used to return the port associated with this bus object. */
-    virtual MasterPort& getMasterPort(const std::string& if_name, int idx = -1);
-    virtual SlavePort& getSlavePort(const std::string& if_name, int idx = -1);
+    virtual void init();
 
-    virtual unsigned int drain(Event *de) = 0;
+    /** A function used to return the port associated with this bus object. */
+    BaseMasterPort& getMasterPort(const std::string& if_name,
+                                  PortID idx = InvalidPortID);
+    BaseSlavePort& getSlavePort(const std::string& if_name,
+                                PortID idx = InvalidPortID);
+
+    virtual unsigned int drain(DrainManager *dm) = 0;
 
 };
 

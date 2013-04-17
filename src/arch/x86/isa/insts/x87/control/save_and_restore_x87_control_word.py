@@ -36,7 +36,27 @@
 # Authors: Gabe Black
 
 microcode = '''
-# FLDCW
+
+def macroop FLDCW_M {
+    ld t1, seg, sib, disp, dataSize=2
+    wrval fcw, t1
+};
+
+def macroop FLDCW_P {
+    ld t1, seg, sib, disp, dataSize=2
+    wrval fcw, t1
+};
+
 # FSTCW
-# FNSTCW
+
+def macroop FNSTCW_M {
+    rdval t1, fcw
+    st t1, seg, sib, disp, dataSize=2
+};
+
+def macroop FNSTCW_P {
+    rdip t7
+    rdval t1, fcw
+    st t1, seg, sib, disp, dataSize=2
+};
 '''

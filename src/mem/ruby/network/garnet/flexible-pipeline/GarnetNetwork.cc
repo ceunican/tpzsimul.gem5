@@ -53,9 +53,8 @@ GarnetNetwork::GarnetNetwork(const Params *p)
     m_number_of_pipe_stages = p->number_of_pipe_stages;
 
     // record the routers
-    for (vector<BasicRouter*>::const_iterator i = 
-             m_topology_ptr->params()->routers.begin();
-         i != m_topology_ptr->params()->routers.end(); ++i) {
+    for (vector<BasicRouter*>::const_iterator i = p->routers.begin();
+         i != p->routers.end(); ++i) {
         Router* router = safe_cast<Router*>(*i);
         m_router_ptr_vector.push_back(router);
     }
@@ -192,6 +191,54 @@ GarnetNetwork::checkNetworkAllocation(NodeID id, bool ordered,
     m_in_use[network_num] = true;
 }
 
+/*
+ * Go through all the routers, network interfaces and the interconnecting
+ * links for reading/writing all the messages.
+ */
+bool
+GarnetNetwork::functionalRead(Packet *pkt)
+{
+    for (unsigned int i = 0; i < m_router_ptr_vector.size(); i++) {
+        if (m_router_ptr_vector[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (unsigned int i = 0; i < m_ni_ptr_vector.size(); ++i) {
+        if (m_ni_ptr_vector[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    for (unsigned int i = 0; i < m_link_ptr_vector.size(); ++i) {
+        if (m_link_ptr_vector[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32_t
+GarnetNetwork::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+
+    for (unsigned int i = 0; i < m_router_ptr_vector.size(); i++) {
+        num_functional_writes += m_router_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_ni_ptr_vector.size(); ++i) {
+        num_functional_writes += m_ni_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    for (unsigned int i = 0; i < m_link_ptr_vector.size(); ++i) {
+        num_functional_writes += m_link_ptr_vector[i]->functionalWrite(pkt);
+    }
+
+    return num_functional_writes;
+}
+
 void
 GarnetNetwork::printLinkStats(ostream& out) const
 {
@@ -207,7 +254,7 @@ GarnetNetwork::printLinkStats(ostream& out) const
     for (int i = 0; i < m_link_ptr_vector.size(); i++) {
         average_link_utilization +=
             (double(m_link_ptr_vector[i]->getLinkUtilization())) /
-            (double(g_system_ptr->getTime()-m_ruby_start));
+            (double(curCycle() - m_ruby_start));
 
         vector<int> vc_load = m_link_ptr_vector[i]->getVcLoad();
         for (int j = 0; j < vc_load.size(); j++) {
@@ -225,8 +272,8 @@ GarnetNetwork::printLinkStats(ostream& out) const
         if (!m_in_use[i/m_vcs_per_vnet])
             continue;
 
-        average_vc_load[i] = (double(average_vc_load[i]) /
-            (double(g_system_ptr->getTime()) - m_ruby_start));
+        average_vc_load[i] = double(average_vc_load[i]) /
+            (double(curCycle() - m_ruby_start));
         out << "Average VC Load [" << i << "] = " << average_vc_load[i]
             << " flits/cycle " << endl;
     }

@@ -32,6 +32,10 @@
 #ifndef __M5OP_H__
 #define __M5OP_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 void arm(uint64_t address);
@@ -43,6 +47,7 @@ uint64_t rpns();
 void wakeCPU(uint64_t cpuid);
 
 void m5_exit(uint64_t ns_delay);
+void m5_fail(uint64_t ns_delay, uint64_t code);
 uint64_t m5_initparam(void);
 void m5_checkpoint(uint64_t ns_delay, uint64_t ns_period);
 void m5_reset_stats(uint64_t ns_delay, uint64_t ns_period);
@@ -79,4 +84,7 @@ uint64_t m5a_getid(void);
 #define M5_AN_FL_LINK   0x10
 #define M5_AN_FL_RESET  0x20
 
+#ifdef __cplusplus
+}
+#endif
 #endif // __M5OP_H__

@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2006-2007 The Regents of The University of Michigan
 # All rights reserved.
 #
@@ -34,6 +46,62 @@ import string
 from os.path import join as joinpath
 
 import m5
+
+def skip_test(reason=""):
+    """Signal that a test should be skipped and optionally print why.
+
+    Keyword arguments:
+      reason -- Reason why the test failed. Output is omitted if empty.
+    """
+
+    if reason:
+        print "Skipping test: %s" % reason
+    sys.exit(2)
+
+def has_sim_object(name):
+    """Test if a SimObject exists in the simulator.
+
+    Arguments:
+      name -- Name of SimObject (string)
+
+    Returns: True if the object exists, False otherwise.
+    """
+
+    try:
+        cls = getattr(m5.objects, name)
+        return issubclass(cls, m5.objects.SimObject)
+    except AttributeError:
+        return False
+
+def require_sim_object(name, fatal=False):
+    """Test if a SimObject exists and abort/skip test if not.
+
+    Arguments:
+      name -- Name of SimObject (string)
+
+    Keyword arguments:
+      fatal -- Set to True to indicate that the test should fail
+               instead of being skipped.
+    """
+
+    if has_sim_object(name):
+        return
+    else:
+        msg = "Test requires the '%s' SimObject." % name
+        if fatal:
+            m5.fatal(msg)
+        else:
+            skip_test(msg)
+
+def run_test(root):
+    """Default run_test implementations. Scripts can override it."""
+
+    # instantiate configuration
+    m5.instantiate()
+
+    # simulate until program terminates
+    exit_event = m5.simulate(maxtick)
+    print 'Exiting @ tick', m5.curTick(), 'because', exit_event.getCause()
 
 # Since we're in batch mode, dont allow tcp socket connections
 m5.disableAllListeners()
@@ -77,10 +145,29 @@ maxtick = m5.MaxTick
 sys.path.append(joinpath(tests_root, category, mode, name))
 execfile(joinpath(tests_root, category, mode, name, 'test.py'))
 
-# instantiate configuration
-m5.instantiate()
+# Initialize all CPUs in a system
+def initCPUs(sys):
+    def initCPU(cpu):
+        # We might actually have a MemTest object or something similar
+        # here that just pretends to be a CPU.
+        if isinstance(cpu, BaseCPU):
+            cpu.createThreads()
 
-# simulate until program terminates
-exit_event = m5.simulate(maxtick)
+    # The CPU attribute doesn't exist in some cases, e.g. the Ruby
+    # testers.
+    if not hasattr(sys, "cpu"):
+        return
 
-print 'Exiting @ tick', m5.curTick(), 'because', exit_event.getCause()
+    # The CPU can either be a list of CPUs or a single object.
+    if isinstance(sys.cpu, list):
+        [ initCPU(cpu) for cpu in sys.cpu ]
+    else:
+        initCPU(sys.cpu)
+
+# We might be creating a single system or a dual system. Try
+# initializing the CPUs in all known system attributes.
+for sysattr in [ "system", "testsys", "drivesys" ]:
+    if hasattr(root, sysattr):
+        initCPUs(getattr(root, sysattr))
+
+run_test(root)

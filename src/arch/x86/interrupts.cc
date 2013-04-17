@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -371,9 +371,9 @@ AddrRangeList
 X86ISA::Interrupts::getAddrRanges() const
 {
     AddrRangeList ranges;
-    Range<Addr> range = RangeEx(x86LocalAPICAddress(initialApicId, 0),
-                                x86LocalAPICAddress(initialApicId, 0) + 
-                                PageBytes);
+    AddrRange range = RangeEx(x86LocalAPICAddress(initialApicId, 0),
+                              x86LocalAPICAddress(initialApicId, 0) +
+                              PageBytes);
     ranges.push_back(range);
     return ranges;
 }
@@ -410,9 +410,8 @@ X86ISA::Interrupts::readReg(ApicRegIndex reg)
       case APIC_CURRENT_COUNT:
         {
             if (apicTimerEvent.scheduled()) {
-                assert(clock);
                 // Compute how many m5 ticks happen per count.
-                uint64_t ticksPerCount = clock *
+                uint64_t ticksPerCount = clockPeriod() *
                     divideFromConf(regs[APIC_DIVIDE_CONFIGURATION]);
                 // Compute how many m5 ticks are left.
                 uint64_t val = apicTimerEvent.when() - curTick();
@@ -510,7 +509,7 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
             message.destMode = low.destMode;
             message.level = low.level;
             message.trigger = low.trigger;
-            bool timing = sys->getMemoryMode() == Enums::timing;
+            bool timing(sys->isTimingMode());
             // Be careful no updates of the delivery status bit get lost.
             regs[APIC_INTERRUPT_COMMAND_LOW] = low;
             ApicList apics;
@@ -587,19 +586,21 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
         break;
       case APIC_INITIAL_COUNT:
         {
-            assert(clock);
             newVal = bits(val, 31, 0);
             // Compute how many timer ticks we're being programmed for.
             uint64_t newCount = newVal *
                 (divideFromConf(regs[APIC_DIVIDE_CONFIGURATION]));
             // Schedule on the edge of the next tick plus the new count.
-            Tick offset = curTick() % clock;
+            Tick offset = curTick() % clockPeriod();
             if (offset) {
                 reschedule(apicTimerEvent,
-                        curTick() + (newCount + 1) * clock - offset, true);
+                           curTick() + (newCount + 1) *
+                           clockPeriod() - offset, true);
             } else {
-                reschedule(apicTimerEvent,
-                        curTick() + newCount * clock, true);
+                if (newCount)
+                    reschedule(apicTimerEvent,
+                               curTick() + newCount *
+                               clockPeriod(), true);
             }
         }
         break;
@@ -627,10 +628,8 @@ X86ISA::Interrupts::Interrupts(Params * p) :
     pendingStartup(false), startupVector(0),
     startedUp(false), pendingUnmaskableInt(false),
     pendingIPIs(0), cpu(NULL),
-    intSlavePort(name() + ".int_slave", this, this, latency)
+    intSlavePort(name() + ".int_slave", this, this)
 {
-    // Override the default clock
-    clock = 0;
     pioSize = PageBytes;
     memset(regs, 0, sizeof(regs));
     //Set the local apic DFR to the flat model.
@@ -735,7 +734,6 @@ void
 X86ISA::Interrupts::serialize(std::ostream &os)
 {
     SERIALIZE_ARRAY(regs, NUM_APIC_REGS);
-    SERIALIZE_SCALAR(clock);
     SERIALIZE_SCALAR(pendingSmi);
     SERIALIZE_SCALAR(smiVector);
     SERIALIZE_SCALAR(pendingNmi);
@@ -761,7 +759,6 @@ void
 X86ISA::Interrupts::unserialize(Checkpoint *cp, const std::string &section)
 {
     UNSERIALIZE_ARRAY(regs, NUM_APIC_REGS);
-    UNSERIALIZE_SCALAR(clock);
     UNSERIALIZE_SCALAR(pendingSmi);
     UNSERIALIZE_SCALAR(smiVector);
     UNSERIALIZE_SCALAR(pendingNmi);

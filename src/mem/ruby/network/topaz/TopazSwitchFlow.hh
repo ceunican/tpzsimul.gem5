@@ -46,6 +46,7 @@
 class MessageBuffer;
 class NetDest;
 class TopazNetwork;
+class TopazSwitch;
 
 struct LinkOrder
 {
@@ -53,15 +54,18 @@ struct LinkOrder
     int m_value;
 };
 
+bool operator<(const LinkOrder& l1, const LinkOrder& l2);
+
 class TopazSwitchFlow : public Consumer
 {
   public:
-    TopazSwitchFlow(SwitchID sid, TopazNetwork* network_ptr);
+    TopazSwitchFlow(SwitchID sid, TopazSwitch *, uint32_t);
     ~TopazSwitchFlow();
 
     std::string name()
     { return csprintf("TopazSwitch-%i", m_switch_id); }
 
+    void init(TopazNetwork *);
     void addInPort(const std::vector<MessageBuffer*>& in);
     void addOutPort(const std::vector<MessageBuffer*>& out,
         const NetDest& routing_table_entry);
@@ -99,7 +103,7 @@ class TopazSwitchFlow : public Consumer
     std::vector<std::vector<MessageBuffer*> > m_out;
     std::vector<NetDest> m_routing_table;
     std::vector<LinkOrder> m_link_order;
-    int m_virtual_networks;
+    uint32_t m_virtual_networks;
     int m_round_robin_start;
     int m_wakeups_wo_switch;
     TopazNetwork* m_network_ptr;

@@ -1,3 +1,15 @@
+# Copyright (c) 2012 ARM Limited
+# All rights reserved
+# 
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2006-2008 The Regents of The University of Michigan
 # Copyright (c) 2010 Advanced Micro Devices, Inc.
 # All rights reserved.
@@ -27,31 +39,23 @@
 #
 # Authors: Lisa Hsu
 
+import sys
 from os import getcwd
 from os.path import join as joinpath
+
+import CpuConfig
 
 import m5
 from m5.defines import buildEnv
 from m5.objects import *
 from m5.util import *
-from O3_ARM_v7a import *
 
 addToPath('../common')
 
 def getCPUClass(cpu_type):
-    """Returns the required cpu class and the mode of operation.
-    """
-
-    if cpu_type == "timing":
-        return TimingSimpleCPU, 'timing'
-    elif cpu_type == "detailed":
-        return DerivO3CPU, 'timing'
-    elif cpu_type == "arm_detailed":
-        return O3_ARM_v7a_3, 'timing'
-    elif cpu_type == "inorder":
-        return InOrderCPU, 'timing'
-    else:
-        return AtomicSimpleCPU, 'atomic'
+    """Returns the required cpu class and the mode of operation."""
+    cls = CpuConfig.get(cpu_type)
+    return cls, cls.memory_mode()
 
 def setCPUClass(options):
     """Returns two cpu classes and the initial mode of operation.
@@ -63,14 +67,11 @@ def setCPUClass(options):
        depending on the options provided.
     """
 
-    if options.cpu_type == "detailed" or \
-       options.cpu_type == "arm_detailed" or \
-       options.cpu_type == "inorder" :
-        if not options.caches and not options.ruby:
-            fatal("O3/Inorder CPU must be used with caches")
-
     TmpClass, test_mem_mode = getCPUClass(options.cpu_type)
     CPUClass = None
+    if TmpClass.require_caches() and \
+            not options.caches and not options.ruby:
+        fatal("%s must be used with caches" % options.cpu_type)
 
     if options.checkpoint_restore != None:
         if options.restore_with_cpu != options.cpu_type:
@@ -153,7 +154,7 @@ def findCptDir(options, maxtick, cptdir, testsys):
 
     return maxtick, checkpoint_dir
 
-def scriptCheckpoints(options, cptdir):
+def scriptCheckpoints(options, maxtick, cptdir):
     if options.at_instruction or options.simpoint:
         checkpoint_inst = int(options.take_checkpoints)
 
@@ -182,7 +183,7 @@ def scriptCheckpoints(options, cptdir):
         period = int(period)
         num_checkpoints = 0
 
-        exit_event = m5.simulate(when)
+        exit_event = m5.simulate(when - m5.curTick())
         exit_cause = exit_event.getCause()
         while exit_cause == "checkpoint":
             exit_event = m5.simulate(when - m5.curTick())
@@ -211,10 +212,10 @@ def scriptCheckpoints(options, cptdir):
                     m5.checkpoint(joinpath(cptdir, "cpt.%d"))
                     num_checkpoints += 1
 
-    return exit_cause
+    return exit_event
 
 def benchCheckpoints(options, maxtick, cptdir):
-    exit_event = m5.simulate(maxtick)
+    exit_event = m5.simulate(maxtick - m5.curTick())
     exit_cause = exit_event.getCause()
 
     num_checkpoints = 0
@@ -230,7 +231,7 @@ def benchCheckpoints(options, maxtick, cptdir):
         exit_event = m5.simulate(maxtick - m5.curTick())
         exit_cause = exit_event.getCause()
 
-    return exit_cause
+    return exit_event
 
 def repeatSwitch(testsys, repeat_switch_cpu_list, maxtick, switch_freq):
     print "starting switch loop"
@@ -239,12 +240,9 @@ def repeatSwitch(testsys, repeat_switch_cpu_list, maxtick, switch_freq):
         exit_cause = exit_event.getCause()
 
         if exit_cause != "simulate() limit reached":
-            return exit_cause
+            return exit_event
 
-        print "draining the system"
-        m5.doDrain(testsys)
-        m5.switchCpus(repeat_switch_cpu_list)
-        m5.resume(testsys)
+        m5.switchCpus(testsys, repeat_switch_cpu_list)
 
         tmp_cpu_list = []
         for old_cpu, new_cpu in repeat_switch_cpu_list:
@@ -253,7 +251,7 @@ def repeatSwitch(testsys, repeat_switch_cpu_list, maxtick, switch_freq):
 
         if (maxtick - m5.curTick()) <= switch_freq:
             exit_event = m5.simulate(maxtick - m5.curTick())
-            return exit_event.getCause()
+            return exit_event
 
 def run(options, root, testsys, cpu_class):
     if options.maxtick:
@@ -296,7 +294,7 @@ def run(options, root, testsys, cpu_class):
             testsys.cpu[i].max_insts_any_thread = options.maxinsts
 
     if cpu_class:
-        switch_cpus = [cpu_class(defer_registration=True, cpu_id=(i))
+        switch_cpus = [cpu_class(switched_out=True, cpu_id=(i))
                        for i in xrange(np)]
 
         for i in xrange(np):
@@ -316,29 +314,17 @@ def run(options, root, testsys, cpu_class):
         switch_cpu_list = [(testsys.cpu[i], switch_cpus[i]) for i in xrange(np)]
 
     if options.repeat_switch:
-        if options.cpu_type == "arm_detailed":
-            if not options.caches:
-                print "O3 CPU must be used with caches"
-                sys.exit(1)
-
-            repeat_switch_cpus = [O3_ARM_v7a_3(defer_registration=True, \
-                                  cpu_id=(i)) for i in xrange(np)]
-        elif options.cpu_type == "detailed":
-            if not options.caches:
-                print "O3 CPU must be used with caches"
-                sys.exit(1)
-
-            repeat_switch_cpus = [DerivO3CPU(defer_registration=True, \
-                                  cpu_id=(i)) for i in xrange(np)]
-        elif options.cpu_type == "inorder":
-            print "inorder CPU switching not supported"
+        switch_class = getCPUClass(options.cpu_type)[0]
+        if switch_class.require_caches() and \
+                not options.caches:
+            print "%s: Must be used with caches" % str(switch_class)
             sys.exit(1)
-        elif options.cpu_type == "timing":
-            repeat_switch_cpus = [TimingSimpleCPU(defer_registration=True, \
-                                  cpu_id=(i)) for i in xrange(np)]
-        else:
-            repeat_switch_cpus = [AtomicSimpleCPU(defer_registration=True, \
-                                  cpu_id=(i)) for i in xrange(np)]
+        if not switch_class.support_take_over():
+            print "%s: CPU switching not supported" % str(switch_class)
+            sys.exit(1)
+
+        repeat_switch_cpus = [switch_class(switched_out=True, \
+                                               cpu_id=(i)) for i in xrange(np)]
 
         for i in xrange(np):
             repeat_switch_cpus[i].system = testsys
@@ -361,9 +347,9 @@ def run(options, root, testsys, cpu_class):
                                       for i in xrange(np)]
 
     if options.standard_switch:
-        switch_cpus = [TimingSimpleCPU(defer_registration=True, cpu_id=(i))
+        switch_cpus = [TimingSimpleCPU(switched_out=True, cpu_id=(i))
                        for i in xrange(np)]
-        switch_cpus_1 = [DerivO3CPU(defer_registration=True, cpu_id=(i))
+        switch_cpus_1 = [DerivO3CPU(switched_out=True, cpu_id=(i))
                         for i in xrange(np)]
 
         for i in xrange(np):
@@ -447,15 +433,7 @@ def run(options, root, testsys, cpu_class):
             exit_event = m5.simulate(10000)
         print "Switched CPUS @ tick %s" % (m5.curTick())
 
-        # when you change to Timing (or Atomic), you halt the system
-        # given as argument.  When you are finished with the system
-        # changes (including switchCpus), you must resume the system
-        # manually.  You DON'T need to resume after just switching
-        # CPUs if you haven't changed anything on the system level.
-
-        m5.changeToTiming(testsys)
-        m5.switchCpus(switch_cpu_list)
-        m5.resume(testsys)
+        m5.switchCpus(testsys, switch_cpu_list)
 
         if options.standard_switch:
             print "Switch at instruction count:%d" % \
@@ -469,9 +447,7 @@ def run(options, root, testsys, cpu_class):
             print "Switching CPUS @ tick %s" % (m5.curTick())
             print "Simulation ends instruction count:%d" % \
                     (testsys.switch_cpus_1[0].max_insts_any_thread)
-            m5.drain(testsys)
-            m5.switchCpus(switch_cpu_list1)
-            m5.resume(testsys)
+            m5.switchCpus(testsys, switch_cpu_list1)
 
     # If we're taking and restoring checkpoints, use checkpoint_dir
     # option only for finding the checkpoints to restore from.  This
@@ -488,7 +464,7 @@ def run(options, root, testsys, cpu_class):
         # subsequent periods of <period>.  Checkpoint instructions
         # received from the benchmark running are ignored and skipped in
         # favor of command line checkpoint instructions.
-        exit_cause = scriptCheckpoints(options, cptdir)
+        exit_event = scriptCheckpoints(options, maxtick, cptdir)
     else:
         if options.fast_forward:
             m5.stats.reset()
@@ -497,11 +473,14 @@ def run(options, root, testsys, cpu_class):
         # If checkpoints are being taken, then the checkpoint instruction
         # will occur in the benchmark code it self.
         if options.repeat_switch and maxtick > options.repeat_switch:
-            exit_cause = repeatSwitch(testsys, repeat_switch_cpu_list,
+            exit_event = repeatSwitch(testsys, repeat_switch_cpu_list,
                                       maxtick, options.repeat_switch)
         else:
-            exit_cause = benchCheckpoints(options, maxtick, cptdir)
+            exit_event = benchCheckpoints(options, maxtick, cptdir)
 
-    print 'Exiting @ tick %i because %s' % (m5.curTick(), exit_cause)
+    print 'Exiting @ tick %i because %s' % (m5.curTick(), exit_event.getCause())
     if options.checkpoint_at_end:
         m5.checkpoint(joinpath(cptdir, "cpt.%d"))
+
+    if not m5.options.interactive:
+        sys.exit(exit_event.getCode())

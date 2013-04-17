@@ -34,12 +34,11 @@
 
 #include "base/cprintf.hh"
 #include "base/stl_helpers.hh"
+#include "mem/ruby/common/Global.hh"
+#include "mem/ruby/system/System.hh"
 #include "mem/ruby/system/WireBuffer.hh"
 
 using namespace std;
-
-class Consumer;
-
 
 // Output operator definition
 
@@ -71,16 +70,18 @@ WireBuffer::~WireBuffer()
 }
 
 void
-WireBuffer::enqueue(MsgPtr message, int latency)
+WireBuffer::enqueue(MsgPtr message, Cycles latency)
 {
     m_msg_counter++;
-    Time current_time = g_system_ptr->getTime();
-    Time arrival_time = current_time + latency;
+    Cycles current_time = g_system_ptr->curCycle();
+    Cycles arrival_time = current_time + latency;
     assert(arrival_time > current_time);
+
     MessageBufferNode thisNode(arrival_time, m_msg_counter, message);
     m_message_queue.push_back(thisNode);
     if (m_consumer_ptr != NULL) {
-        m_consumer_ptr->scheduleEventAbsolute(arrival_time);
+        m_consumer_ptr->
+            scheduleEventAbsolute(g_system_ptr->clockPeriod() * arrival_time);
     } else {
         panic("No Consumer for WireBuffer! %s\n", *this);
     }
@@ -123,18 +124,20 @@ WireBuffer::recycle()
     MessageBufferNode node = m_message_queue.front();
     pop_heap(m_message_queue.begin(), m_message_queue.end(),
         greater<MessageBufferNode>());
-    node.m_time = g_system_ptr->getTime() + 1;
+
+    node.m_time = g_system_ptr->curCycle() + Cycles(1);
     m_message_queue.back() = node;
     push_heap(m_message_queue.begin(), m_message_queue.end(),
         greater<MessageBufferNode>());
-    m_consumer_ptr->scheduleEventAbsolute(g_system_ptr->getTime() + 1);
+    m_consumer_ptr->
+        scheduleEventAbsolute(g_system_ptr->clockPeriod() * node.m_time);
 }
 
 bool
 WireBuffer::isReady()
 {
     return ((!m_message_queue.empty()) &&
-            (m_message_queue.front().m_time <= g_system_ptr->getTime()));
+            (m_message_queue.front().m_time <= g_system_ptr->curCycle()));
 }
 
 void

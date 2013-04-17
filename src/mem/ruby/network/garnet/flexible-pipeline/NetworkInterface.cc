@@ -44,6 +44,7 @@ using m5::stl_helpers::deletePointers;
 
 NetworkInterface::NetworkInterface(int id, int virtual_networks,
                                    GarnetNetwork *network_ptr)
+    : FlexibleConsumer(network_ptr)
 {
     m_id = id;
     m_net_ptr = network_ptr;
@@ -67,7 +68,7 @@ NetworkInterface::NetworkInterface(int id, int virtual_networks,
 
     for (int i = 0; i < m_num_vcs; i++) {
         m_out_vc_state.push_back(new OutVcState(i));
-        m_out_vc_state[i]->setState(IDLE_, g_system_ptr->getTime());
+        m_out_vc_state[i]->setState(IDLE_, m_net_ptr->curCycle());
     }
 }
 
@@ -105,12 +106,15 @@ NetworkInterface::addNode(vector<MessageBuffer*>& in,
     // protocol injects messages into the NI
     for (int j = 0; j < m_virtual_networks; j++) {
         inNode_ptr[j]->setConsumer(this);
+        inNode_ptr[j]->setReceiver(m_net_ptr);
+
+        outNode_ptr[j]->setSender(m_net_ptr);
     }
 }
 
 void
 NetworkInterface::request_vc(int in_vc, int in_port, NetDest destination,
-                             Time request_time)
+                             Cycles request_time)
 {
     inNetLink->grant_vc_link(in_vc, request_time);
 }
@@ -165,19 +169,21 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
         }
         for (int i = 0; i < num_flits; i++) {
             m_net_ptr->increment_injected_flits(vnet);
-            flit *fl = new flit(i, vc, vnet, num_flits, new_msg_ptr);
-            fl->set_delay(g_system_ptr->getTime() - msg_ptr->getTime());
+            flit *fl = new flit(i, vc, vnet, num_flits, new_msg_ptr,
+                                m_net_ptr->curCycle());
+            fl->set_delay(m_net_ptr->curCycle() -
+                          m_net_ptr->ticksToCycles(msg_ptr->getTime()));
             m_ni_buffers[vc]->insert(fl);
         }
 
-        m_out_vc_state[vc]->setState(VC_AB_, g_system_ptr->getTime());
+        m_out_vc_state[vc]->setState(VC_AB_, m_net_ptr->curCycle());
 
         // setting an output vc request for the next hop.
         // This flit will be ready to traverse the link and into the next hop
         // only when an output vc is acquired at the next hop
         outNetLink->request_vc_link(vc,
                                     new_net_msg_ptr->getInternalDestination(),
-                                    g_system_ptr->getTime());
+                                    m_net_ptr->curCycle());
     }
 
     return true ;
@@ -186,21 +192,21 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
 // An output vc has been granted at the next hop to one of the vc's.
 // We have to update the state of the vc to reflect this
 void
-NetworkInterface::grant_vc(int out_port, int vc, Time grant_time)
+NetworkInterface::grant_vc(int out_port, int vc, Cycles grant_time)
 {
     assert(m_out_vc_state[vc]->isInState(VC_AB_, grant_time));
     m_out_vc_state[vc]->grant_vc(grant_time);
-    scheduleEvent(1);
+    scheduleEvent(Cycles(1));
 }
 
 // The tail flit corresponding to this vc has been buffered at the next hop
 // and thus this vc is now free
 void
-NetworkInterface::release_vc(int out_port, int vc, Time release_time)
+NetworkInterface::release_vc(int out_port, int vc, Cycles release_time)
 {
     assert(m_out_vc_state[vc]->isInState(ACTIVE_, release_time));
     m_out_vc_state[vc]->setState(IDLE_, release_time);
-    scheduleEvent(1);
+    scheduleEvent(Cycles(1));
 }
 
 // Looking for a free output vc
@@ -220,7 +226,7 @@ NetworkInterface::calculateVC(int vnet)
             m_vc_allocator[vnet] = 0;
 
         if (m_out_vc_state[(vnet*m_vc_per_vnet) + delta]->isInState(IDLE_,
-            g_system_ptr->getTime())) {
+            m_net_ptr->curCycle())) {
             return ((vnet*m_vc_per_vnet) + delta);
         }
     }
@@ -264,20 +270,22 @@ NetworkInterface::wakeup()
         flit *t_flit = inNetLink->consumeLink();
         if (t_flit->get_type() == TAIL_ || t_flit->get_type() == HEAD_TAIL_) {
             DPRINTF(RubyNetwork, "m_id: %d, Message delivered at time: %lld\n",
-                    m_id, g_system_ptr->getTime());
+                    m_id, m_net_ptr->curCycle());
 
             outNode_ptr[t_flit->get_vnet()]->enqueue(
-                t_flit->get_msg_ptr(), 1);
+                t_flit->get_msg_ptr(), Cycles(1));
 
             // signal the upstream router that this vc can be freed now
             inNetLink->release_vc_link(t_flit->get_vc(),
-                g_system_ptr->getTime() + 1);
+                m_net_ptr->curCycle() + Cycles(1));
         }
+
         int vnet = t_flit->get_vnet();
         m_net_ptr->increment_received_flits(vnet);
-        int network_delay = g_system_ptr->getTime() -
-                            t_flit->get_enqueue_time();
-        int queueing_delay = t_flit->get_delay();
+        Cycles network_delay = m_net_ptr->curCycle() -
+                               t_flit->get_enqueue_time();
+        Cycles queueing_delay = t_flit->get_delay();
+
         m_net_ptr->increment_network_latency(network_delay, vnet);
         m_net_ptr->increment_queueing_latency(queueing_delay, vnet);
         delete t_flit;
@@ -302,18 +310,19 @@ NetworkInterface::scheduleOutputLink()
         vc++;
         if (vc == m_num_vcs)
             vc = 0;
-        if (m_ni_buffers[vc]->isReady()) {
+        if (m_ni_buffers[vc]->isReady(m_net_ptr->curCycle())) {
             if (m_out_vc_state[vc]->isInState(ACTIVE_,
-               g_system_ptr->getTime()) &&
+               m_net_ptr->curCycle()) &&
                outNetLink->isBufferNotFull_link(vc)) {  // buffer backpressure
 
                 // Just removing the flit
                 flit *t_flit = m_ni_buffers[vc]->getTopFlit();
-                t_flit->set_time(g_system_ptr->getTime() + 1);
+                t_flit->set_time(m_net_ptr->curCycle() + Cycles(1));
                 outSrcQueue->insert(t_flit);
 
                 // schedule the out link
-                outNetLink->scheduleEvent(1);
+                outNetLink->
+                    scheduleEventAbsolute(m_net_ptr->clockEdge(Cycles(1)));
                 return;
             }
         }
@@ -325,16 +334,46 @@ NetworkInterface::checkReschedule()
 {
     for (int vnet = 0; vnet < m_virtual_networks; vnet++) {
         if (inNode_ptr[vnet]->isReady()) { // Is there a message waiting
-            scheduleEvent(1);
+            scheduleEvent(Cycles(1));
             return;
         }
     }
     for (int vc = 0; vc < m_num_vcs; vc++) {
-        if (m_ni_buffers[vc]->isReadyForNext()) {
-            scheduleEvent(1);
+        if (m_ni_buffers[vc]->isReadyForNext(m_net_ptr->curCycle())) {
+            scheduleEvent(Cycles(1));
             return;
         }
     }
+}
+
+bool
+NetworkInterface::functionalRead(Packet *pkt)
+{
+    // Go through the internal buffers
+    for (unsigned int i = 0; i < m_ni_buffers.size(); ++i) {
+        if (m_ni_buffers[i]->functionalRead(pkt)) {
+            return true;
+        }
+    }
+
+    // Go through the buffer between this network interface and the router
+    if (outSrcQueue->functionalRead(pkt)) {
+        return true;
+    }
+
+    return false;
+}
+
+uint32_t
+NetworkInterface::functionalWrite(Packet *pkt)
+{
+    uint32_t num_functional_writes = 0;
+    for (unsigned int i = 0; i < m_ni_buffers.size(); ++i) {
+        num_functional_writes += m_ni_buffers[i]->functionalWrite(pkt);
+    }
+
+    num_functional_writes += outSrcQueue->functionalWrite(pkt);
+    return num_functional_writes;
 }
 
 void

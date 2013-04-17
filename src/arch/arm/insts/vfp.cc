@@ -993,10 +993,8 @@ FpOp::binaryOp(FPSCR &fpscr, fpType op1, fpType op2,
     fpType dest = func(op1, op2);
     __asm__ __volatile__ ("" : "=m" (dest) : "m" (dest));
 
-    int fpClass = std::fpclassify(dest);
     // Get NAN behavior right. This varies between x86 and ARM.
-    if (fpClass == FP_NAN) {
-        const bool single = (sizeof(fpType) == sizeof(float));
+    if (std::isnan(dest)) {
         const uint64_t qnan =
             single ? 0x7fc00000 : ULL(0x7ff8000000000000);
         const bool nan1 = std::isnan(op1);
@@ -1065,10 +1063,8 @@ FpOp::unaryOp(FPSCR &fpscr, fpType op1, fpType (*func)(fpType),
     fpType dest = func(op1);
     __asm__ __volatile__ ("" : "=m" (dest) : "m" (dest));
 
-    int fpClass = std::fpclassify(dest);
     // Get NAN behavior right. This varies between x86 and ARM.
-    if (fpClass == FP_NAN) {
-        const bool single = (sizeof(fpType) == sizeof(float));
+    if (std::isnan(dest)) {
         const uint64_t qnan =
             single ? 0x7fc00000 : ULL(0x7ff8000000000000);
         const bool nan = std::isnan(op1);

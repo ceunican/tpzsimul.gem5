@@ -58,6 +58,7 @@
 #include "mem/ruby/network/Network.hh"
 #include "mem/ruby/profiler/AddressProfiler.hh"
 #include "mem/ruby/profiler/Profiler.hh"
+#include "mem/ruby/system/Sequencer.hh"
 #include "mem/ruby/system/System.hh"
 
 using namespace std;
@@ -109,17 +110,17 @@ Profiler::wakeup()
 {
     // FIXME - avoid the repeated code
 
-    vector<integer_t> perProcCycleCount(m_num_of_sequencers);
+    vector<int64_t> perProcCycleCount(m_num_of_sequencers);
 
     for (int i = 0; i < m_num_of_sequencers; i++) {
         perProcCycleCount[i] =
-            g_system_ptr->getTime() - m_cycles_executed_at_start[i] + 1;
+            g_system_ptr->curCycle() - m_cycles_executed_at_start[i] + 1;
         // The +1 allows us to avoid division by zero
     }
 
     ostream &out = *m_periodic_output_file_ptr;
 
-    out << "ruby_cycles: " << g_system_ptr->getTime()-m_ruby_start << endl
+    out << "ruby_cycles: " << g_system_ptr->curCycle()-m_ruby_start << endl
         << "mbytes_resident: " << process_memory_resident() << endl
         << "mbytes_total: " << process_memory_total() << endl;
 
@@ -137,7 +138,7 @@ Profiler::wakeup()
     }
 
     //g_system_ptr->getNetwork()->printStats(out);
-    schedule(m_event, curTick() + m_stats_period * g_system_ptr->getClock());
+    schedule(m_event, g_system_ptr->clockEdge(Cycles(m_stats_period)));
 }
 
 void
@@ -151,23 +152,130 @@ Profiler::setPeriodicStatsFile(const string& filename)
     }
 
     m_periodic_output_file_ptr = new ofstream(filename.c_str());
-    schedule(m_event, curTick() + g_system_ptr->getClock());
+    schedule(m_event, g_system_ptr->clockEdge(Cycles(1)));
 }
 
 void
-Profiler::setPeriodicStatsInterval(integer_t period)
+Profiler::setPeriodicStatsInterval(int64_t period)
 {
     cout << "Recording periodic statistics every " << m_stats_period
          << " Ruby cycles" << endl;
 
     m_stats_period = period;
-    schedule(m_event, curTick() + g_system_ptr->getClock());
+    schedule(m_event, g_system_ptr->clockEdge(Cycles(1)));
 }
 
 void
 Profiler::print(ostream& out) const
 {
     out << "[Profiler]";
+}
+
+void
+Profiler::printRequestProfile(ostream &out) const
+{
+    out << "Request vs. RubySystem State Profile" << endl;
+    out << "--------------------------------" << endl;
+    out << endl;
+
+    map<string, uint64_t> m_requestProfileMap;
+    uint64_t m_requests = 0;
+
+    for (uint32_t i = 0; i < MachineType_NUM; i++) {
+        for (map<uint32_t, AbstractController*>::iterator it =
+                  g_abs_controls[i].begin();
+             it != g_abs_controls[i].end(); ++it) {
+
+            AbstractController *ctr = (*it).second;
+            map<string, uint64_t> mp = ctr->getRequestProfileMap();
+
+            for (map<string, uint64_t>::iterator jt = mp.begin();
+                 jt != mp.end(); ++jt) {
+
+                map<string, uint64_t>::iterator kt =
+                    m_requestProfileMap.find((*jt).first);
+                if (kt != m_requestProfileMap.end()) {
+                    (*kt).second += (*jt).second;
+                } else {
+                    m_requestProfileMap[(*jt).first] = (*jt).second;
+                }
+            }
+
+            m_requests += ctr->getRequestCount();
+        }
+    }
+
+    map<string, uint64_t>::const_iterator i = m_requestProfileMap.begin();
+    map<string, uint64_t>::const_iterator end = m_requestProfileMap.end();
+    for (; i != end; ++i) {
+        const string &key = i->first;
+        uint64_t count = i->second;
+
+        double percent = (100.0 * double(count)) / double(m_requests);
+        vector<string> items;
+        tokenize(items, key, ':');
+        vector<string>::iterator j = items.begin();
+        vector<string>::iterator end = items.end();
+        for (; j != end; ++i)
+            out << setw(10) << *j;
+        out << setw(11) << count;
+        out << setw(14) << percent << endl;
+    }
+    out << endl;
+}
+
+void
+Profiler::printDelayProfile(ostream &out) const
+{
+    out << "Message Delayed Cycles" << endl;
+    out << "----------------------" << endl;
+
+    uint32_t numVNets = Network::getNumberOfVirtualNetworks();
+    Histogram delayHistogram;
+    std::vector<Histogram> delayVCHistogram(numVNets);
+
+    for (uint32_t i = 0; i < MachineType_NUM; i++) {
+        for (map<uint32_t, AbstractController*>::iterator it =
+                  g_abs_controls[i].begin();
+             it != g_abs_controls[i].end(); ++it) {
+
+            AbstractController *ctr = (*it).second;
+            delayHistogram.add(ctr->getDelayHist());
+
+            for (uint32_t i = 0; i < numVNets; i++) {
+                delayVCHistogram[i].add(ctr->getDelayVCHist(i));
+            }
+        }
+    }
+
+    out << "Total_delay_cycles: " <<   delayHistogram << endl;
+
+    for (int i = 0; i < numVNets; i++) {
+        out << "  virtual_network_" << i << "_delay_cycles: "
+            << delayVCHistogram[i] << endl;
+    }
+}
+
+void
+Profiler::printOutstandingReqProfile(ostream &out) const
+{
+    Histogram sequencerRequests;
+
+    for (uint32_t i = 0; i < MachineType_NUM; i++) {
+        for (map<uint32_t, AbstractController*>::iterator it =
+                  g_abs_controls[i].begin();
+             it != g_abs_controls[i].end(); ++it) {
+
+            AbstractController *ctr = (*it).second;
+            Sequencer *seq = ctr->getSequencer();
+            if (seq != NULL) {
+                sequencerRequests.add(seq->getOutstandReqHist());
+            }
+        }
+    }
+
+    out << "sequencer_requests_outstanding: "
+        << sequencerRequests << endl;
 }
 
 void
@@ -185,7 +293,7 @@ Profiler::printStats(ostream& out, bool short_stats)
     double minutes = seconds / 60.0;
     double hours = minutes / 60.0;
     double days = hours / 24.0;
-    Time ruby_cycles = g_system_ptr->getTime()-m_ruby_start;
+    Cycles ruby_cycles = g_system_ptr->curCycle()-m_ruby_start;
 
     if (!short_stats) {
         out << "Elapsed_time_in_seconds: " << seconds << endl;
@@ -208,7 +316,7 @@ Profiler::printStats(ostream& out, bool short_stats)
     out << "Virtual_time_in_days:    " << days << endl;
     out << endl;
 
-    out << "Ruby_current_time: " << g_system_ptr->getTime() << endl;
+    out << "Ruby_current_time: " << g_system_ptr->curCycle() << endl;
     out << "Ruby_start_time: " << m_ruby_start << endl;
     out << "Ruby_cycles: " << ruby_cycles << endl;
     out << endl;
@@ -223,11 +331,11 @@ Profiler::printStats(ostream& out, bool short_stats)
         out << endl;
     }
 
-    vector<integer_t> perProcCycleCount(m_num_of_sequencers);
+    vector<int64_t> perProcCycleCount(m_num_of_sequencers);
 
     for (int i = 0; i < m_num_of_sequencers; i++) {
         perProcCycleCount[i] =
-            g_system_ptr->getTime() - m_cycles_executed_at_start[i] + 1;
+            g_system_ptr->curCycle() - m_cycles_executed_at_start[i] + 1;
         // The +1 allows us to avoid division by zero
     }
 
@@ -237,13 +345,17 @@ Profiler::printStats(ostream& out, bool short_stats)
 
     if (!short_stats) {
         out << "Busy Controller Counts:" << endl;
-        for (int i = 0; i < MachineType_NUM; i++) {
-            int size = MachineType_base_count((MachineType)i);
-            for (int j = 0; j < size; j++) {
+        for (uint32_t i = 0; i < MachineType_NUM; i++) {
+            uint32_t size = MachineType_base_count((MachineType)i);
+
+            for (uint32_t j = 0; j < size; j++) {
                 MachineID machID;
                 machID.type = (MachineType)i;
                 machID.num = j;
-                out << machID << ":" << m_busyControllerCount[i][j] << "  ";
+
+                AbstractController *ctr =
+                    (*(g_abs_controls[i].find(j))).second;
+                out << machID << ":" << ctr->getFullyBusyCycles() << "  ";
                 if ((j + 1) % 8 == 0) {
                     out << endl;
                 }
@@ -255,8 +367,7 @@ Profiler::printStats(ostream& out, bool short_stats)
         out << "Busy Bank Count:" << m_busyBankCount << endl;
         out << endl;
 
-        out << "sequencer_requests_outstanding: "
-            << m_sequencer_requests << endl;
+        printOutstandingReqProfile(out);
         out << endl;
     }
 
@@ -356,36 +467,7 @@ Profiler::printStats(ostream& out, bool short_stats)
             out << endl;
         }
 
-        if (m_outstanding_requests.size() > 0) {
-            out << "outstanding_requests: ";
-            m_outstanding_requests.printPercent(out);
-            out << endl;
-            out << endl;
-        }
-    }
-
-    if (!short_stats) {
-        out << "Request vs. RubySystem State Profile" << endl;
-        out << "--------------------------------" << endl;
-        out << endl;
-
-        map<string, int>::const_iterator i = m_requestProfileMap.begin();
-        map<string, int>::const_iterator end = m_requestProfileMap.end();
-        for (; i != end; ++i) {
-            const string &key = i->first;
-            int count = i->second;
-
-            double percent = (100.0 * double(count)) / double(m_requests);
-            vector<string> items;
-            tokenize(items, key, ':');
-            vector<string>::iterator j = items.begin();
-            vector<string>::iterator end = items.end();
-            for (; j != end; ++i)
-                out << setw(10) << *j;
-            out << setw(11) << count;
-            out << setw(14) << percent << endl;
-        }
-        out << endl;
+        printRequestProfile(out);
 
         out << "filter_action: " << m_filter_action_histogram << endl;
 
@@ -398,16 +480,7 @@ Profiler::printStats(ostream& out, bool short_stats)
         }
 
         out << endl;
-        out << "Message Delayed Cycles" << endl;
-        out << "----------------------" << endl;
-        out << "Total_delay_cycles: " <<   m_delayedCyclesHistogram << endl;
-        out << "Total_nonPF_delay_cycles: "
-            << m_delayedCyclesNonPFHistogram << endl;
-        for (int i = 0; i < m_delayedCyclesVCHistograms.size(); i++) {
-            out << "  virtual_network_" << i << "_delay_cycles: "
-                << m_delayedCyclesVCHistograms[i] << endl;
-        }
-
+        printDelayProfile(out);
         printResourceUsage(out);
     }
 }
@@ -419,7 +492,7 @@ Profiler::printResourceUsage(ostream& out) const
     out << "Resource Usage" << endl;
     out << "--------------" << endl;
 
-    integer_t pagesize = getpagesize(); // page size in bytes
+    int64_t pagesize = getpagesize(); // page size in bytes
     out << "page_size: " << pagesize << endl;
 
     rusage usage;
@@ -437,34 +510,19 @@ Profiler::printResourceUsage(ostream& out) const
 void
 Profiler::clearStats()
 {
-    m_ruby_start = g_system_ptr->getTime();
+    m_ruby_start = g_system_ptr->curCycle();
+    m_real_time_start_time = time(NULL);
 
     m_cycles_executed_at_start.resize(m_num_of_sequencers);
     for (int i = 0; i < m_num_of_sequencers; i++) {
         if (g_system_ptr == NULL) {
             m_cycles_executed_at_start[i] = 0;
         } else {
-            m_cycles_executed_at_start[i] = g_system_ptr->getTime();
+            m_cycles_executed_at_start[i] = g_system_ptr->curCycle();
         }
     }
 
-    m_busyControllerCount.resize(MachineType_NUM); // all machines
-    for (int i = 0; i < MachineType_NUM; i++) {
-        int size = MachineType_base_count((MachineType)i);
-        m_busyControllerCount[i].resize(size);
-        for (int j = 0; j < size; j++) {
-            m_busyControllerCount[i][j] = 0;
-        }
-    }
     m_busyBankCount = 0;
-
-    m_delayedCyclesHistogram.clear();
-    m_delayedCyclesNonPFHistogram.clear();
-    int size = RubySystem::getNetwork()->getNumberOfVirtualNetworks();
-    m_delayedCyclesVCHistograms.resize(size);
-    for (int i = 0; i < size; i++) {
-        m_delayedCyclesVCHistograms[i].clear();
-    }
 
     m_missLatencyHistograms.resize(RubyRequestType_NUM);
     for (int i = 0; i < m_missLatencyHistograms.size(); i++) {
@@ -503,28 +561,14 @@ Profiler::clearStats()
     }
     m_allSWPrefetchLatencyHistogram.clear(200);
 
-    m_sequencer_requests.clear();
     m_read_sharing_histogram.clear();
     m_write_sharing_histogram.clear();
     m_all_sharing_histogram.clear();
     m_cache_to_cache = 0;
     m_memory_to_cache = 0;
 
-    // clear HashMaps
-    m_requestProfileMap.clear();
-
-    // count requests profiled
-    m_requests = 0;
-
-    m_outstanding_requests.clear();
-    m_outstanding_persistent_requests.clear();
-
-    // Flush the prefetches through the system - used so that there
-    // are no outstanding requests after stats are cleared
-    //g_eventQueue_ptr->triggerAllEvents();
-
     // update the start time
-    m_ruby_start = g_system_ptr->getTime();
+    m_ruby_start = g_system_ptr->curCycle();
 }
 
 void
@@ -570,35 +614,7 @@ Profiler::profileSharing(const Address& addr, AccessType type,
 }
 
 void
-Profiler::profileMsgDelay(int virtualNetwork, int delayCycles)
-{
-    assert(virtualNetwork < m_delayedCyclesVCHistograms.size());
-    m_delayedCyclesHistogram.add(delayCycles);
-    m_delayedCyclesVCHistograms[virtualNetwork].add(delayCycles);
-    if (virtualNetwork != 0) {
-        m_delayedCyclesNonPFHistogram.add(delayCycles);
-    }
-}
-
-// profiles original cache requests including PUTs
-void
-Profiler::profileRequest(const string& requestStr)
-{
-    m_requests++;
-
-    // if it doesn't exist, conveniently, it will be created with the
-    // default value which is 0
-    m_requestProfileMap[requestStr]++;
-}
-
-void
-Profiler::controllerBusy(MachineID machID)
-{
-    m_busyControllerCount[(int)machID.type][(int)machID.num]++;
-}
-
-void
-Profiler::profilePFWait(Time waitTime)
+Profiler::profilePFWait(Cycles waitTime)
 {
     m_prefetchWaitHistogram.add(waitTime);
 }
@@ -611,7 +627,7 @@ Profiler::bankBusy()
 
 // non-zero cycle demand request
 void
-Profiler::missLatency(Time cycles, 
+Profiler::missLatency(Cycles cycles,
                       RubyRequestType type,
                       const GenericMachineType respondingMach)
 {
@@ -622,11 +638,11 @@ Profiler::missLatency(Time cycles,
 }
 
 void
-Profiler::missLatencyWcc(Time issuedTime,
-                         Time initialRequestTime,
-                         Time forwardRequestTime,
-                         Time firstResponseTime,
-                         Time completionTime)
+Profiler::missLatencyWcc(Cycles issuedTime,
+                         Cycles initialRequestTime,
+                         Cycles forwardRequestTime,
+                         Cycles firstResponseTime,
+                         Cycles completionTime)
 {
     if ((issuedTime <= initialRequestTime) &&
         (initialRequestTime <= forwardRequestTime) &&
@@ -648,11 +664,11 @@ Profiler::missLatencyWcc(Time issuedTime,
 }
 
 void
-Profiler::missLatencyDir(Time issuedTime,
-                         Time initialRequestTime,
-                         Time forwardRequestTime,
-                         Time firstResponseTime,
-                         Time completionTime)
+Profiler::missLatencyDir(Cycles issuedTime,
+                         Cycles initialRequestTime,
+                         Cycles forwardRequestTime,
+                         Cycles firstResponseTime,
+                         Cycles completionTime)
 {
     if ((issuedTime <= initialRequestTime) &&
         (initialRequestTime <= forwardRequestTime) &&
@@ -675,13 +691,13 @@ Profiler::missLatencyDir(Time issuedTime,
 
 // non-zero cycle prefetch request
 void
-Profiler::swPrefetchLatency(Time cycles, 
-                            RubyRequestType type,
+Profiler::swPrefetchLatency(Cycles cycles, RubyRequestType type,
                             const GenericMachineType respondingMach)
 {
     m_allSWPrefetchLatencyHistogram.add(cycles);
     m_SWPrefetchLatencyHistograms[type].add(cycles);
     m_SWPrefetchMachLatencyHistograms[respondingMach].add(cycles);
+
     if (respondingMach == GenericMachineType_Directory ||
         respondingMach == GenericMachineType_NUM) {
         m_SWPrefetchL2MissLatencyHistogram.add(cycles);
@@ -723,7 +739,7 @@ Profiler::rubyWatch(int id)
     uint64 tr = 0;
     Address watch_address = Address(tr);
 
-    DPRINTFN("%7s %3s RUBY WATCH %d\n", g_system_ptr->getTime(), id,
+    DPRINTFN("%7s %3s RUBY WATCH %d\n", g_system_ptr->curCycle(), id,
         watch_address);
 
     // don't care about success or failure

@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved.
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2003-2005 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -26,6 +38,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Erik Hallnor
+ *          Andreas Sandberg
  */
 
 /** @file
@@ -114,15 +127,30 @@ class CacheBlk
     class Lock {
       public:
         int contextId;     // locking context
+        Addr lowAddr;      // low address of lock range
+        Addr highAddr;     // high address of lock range
 
         // check for matching execution context
         bool matchesContext(Request *req)
         {
-            return (contextId == req->contextId());
+            Addr req_low = req->getPaddr();
+            Addr req_high = req_low + req->getSize() -1;
+            return (contextId == req->contextId()) &&
+                   (req_low >= lowAddr) && (req_high <= highAddr);
+        }
+
+        bool overlapping(Request *req)
+        {
+            Addr req_low = req->getPaddr();
+            Addr req_high = req_low + req->getSize() - 1;
+
+            return (req_low <= highAddr) && (req_high >= lowAddr);
         }
 
         Lock(Request *req)
-            : contextId(req->contextId())
+            : contextId(req->contextId()),
+              lowAddr(req->getPaddr()),
+              highAddr(lowAddr + req->getSize() - 1)
         {
         }
     };
@@ -189,6 +217,16 @@ class CacheBlk
     }
 
     /**
+     * Invalidate the block and clear all state.
+     */
+    void invalidate()
+    {
+        status = 0;
+        isTouched = false;
+        clearLoadLocks();
+    }
+
+    /**
      * Check to see if a block has been written.
      * @return True if the block is dirty.
      */
@@ -232,7 +270,23 @@ class CacheBlk
      * Clear the list of valid load locks.  Should be called whenever
      * block is written to or invalidated.
      */
-    void clearLoadLocks() { lockList.clear(); }
+    void clearLoadLocks(Request *req = NULL)
+    {
+        if (!req) {
+            // No request, invaldate all locks to this line
+            lockList.clear();
+        } else {
+            // Only invalidate locks that overlap with this request
+            std::list<Lock>::iterator lock_itr = lockList.begin();
+            while (lock_itr != lockList.end()) {
+                if (lock_itr->overlapping(req)) {
+                    lock_itr = lockList.erase(lock_itr);
+                } else {
+                    ++lock_itr;
+                }
+            }
+        }
+    }
 
     /**
      * Handle interaction of load-locked operations and stores.
@@ -260,12 +314,12 @@ class CacheBlk
             }
 
             req->setExtraData(success ? 1 : 0);
-            clearLoadLocks();
+            clearLoadLocks(req);
             return success;
         } else {
             // for *all* stores (conditional or otherwise) we have to
             // clear the list of load-locks as they're all invalid now.
-            clearLoadLocks();
+            clearLoadLocks(req);
             return true;
         }
     }
@@ -287,6 +341,64 @@ class CacheBlkPrintWrapper : public Printable
                const std::string &prefix = "") const;
 };
 
+/**
+ * Wrap a method and present it as a cache block visitor.
+ *
+ * For example the forEachBlk method in the tag arrays expects a
+ * callable object/function as their parameter. This class wraps a
+ * method in an object and presents  callable object that adheres to
+ * the cache block visitor protocol.
+ */
+template <typename T, typename BlkType>
+class CacheBlkVisitorWrapper
+{
+  public:
+    typedef bool (T::*visitorPtr)(BlkType &blk);
 
+    CacheBlkVisitorWrapper(T &_obj, visitorPtr _visitor)
+        : obj(_obj), visitor(_visitor) {}
+
+    bool operator()(BlkType &blk) {
+        return (obj.*visitor)(blk);
+    }
+
+  private:
+    T &obj;
+    visitorPtr visitor;
+};
+
+/**
+ * Cache block visitor that determines if there are dirty blocks in a
+ * cache.
+ *
+ * Use with the forEachBlk method in the tag array to determine if the
+ * array contains dirty blocks.
+ */
+template <typename BlkType>
+class CacheBlkIsDirtyVisitor
+{
+  public:
+    CacheBlkIsDirtyVisitor()
+        : _isDirty(false) {}
+
+    bool operator()(BlkType &blk) {
+        if (blk.isDirty()) {
+            _isDirty = true;
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    /**
+     * Does the array contain a dirty line?
+     *
+     * \return true if yes, false otherwise.
+     */
+    bool isDirty() const { return _isDirty; };
+
+  private:
+    bool _isDirty;
+};
 
 #endif //__CACHE_BLK_HH__

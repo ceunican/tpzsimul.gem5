@@ -216,9 +216,10 @@ class PciDev : public DmaDevice
     virtual void unserialize(Checkpoint *cp, const std::string &section);
 
 
-    virtual unsigned int drain(Event *de);
+    virtual unsigned int drain(DrainManager *dm);
 
-    virtual SlavePort &getSlavePort(const std::string &if_name, int idx = -1)
+    virtual BaseSlavePort &getSlavePort(const std::string &if_name,
+                                        PortID idx = InvalidPortID)
     {
         if (if_name == "config") {
             return configPort;

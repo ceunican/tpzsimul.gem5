@@ -50,16 +50,19 @@ from Platform import Platform
 from Terminal import Terminal
 from Uart import Uart
 from SimpleMemory import SimpleMemory
+from Gic import *
 
 class AmbaDevice(BasicPioDevice):
     type = 'AmbaDevice'
     abstract = True
+    cxx_header = "dev/arm/amba_device.hh"
     amba_id = Param.UInt32("ID of AMBA device for kernel detection")
 
 class AmbaIntDevice(AmbaDevice):
     type = 'AmbaIntDevice'
     abstract = True
-    gic = Param.Gic(Parent.any, "Gic to use for interrupting")
+    cxx_header = "dev/arm/amba_device.hh"
+    gic = Param.BaseGic(Parent.any, "Gic to use for interrupting")
     int_num = Param.UInt32("Interrupt number that connects to GIC")
     int_delay = Param.Latency("100ns",
             "Time between action and interrupt generation by device")
@@ -67,46 +70,42 @@ class AmbaIntDevice(AmbaDevice):
 class AmbaDmaDevice(DmaDevice):
     type = 'AmbaDmaDevice'
     abstract = True
+    cxx_header = "dev/arm/amba_device.hh"
     pio_addr = Param.Addr("Address for AMBA slave interface")
     pio_latency = Param.Latency("10ns", "Time between action and write/read result by AMBA DMA Device")
-    gic = Param.Gic(Parent.any, "Gic to use for interrupting")
+    gic = Param.BaseGic(Parent.any, "Gic to use for interrupting")
     int_num = Param.UInt32("Interrupt number that connects to GIC")
     amba_id = Param.UInt32("ID of AMBA device for kernel detection")
 
 class A9SCU(BasicPioDevice):
     type = 'A9SCU'
+    cxx_header = "dev/arm/a9scu.hh"
 
 class RealViewCtrl(BasicPioDevice):
     type = 'RealViewCtrl'
+    cxx_header = "dev/arm/rv_ctrl.hh"
     proc_id0 = Param.UInt32(0x0C000000, "Processor ID, SYS_PROCID")
     proc_id1 = Param.UInt32(0x0C000222, "Processor ID, SYS_PROCID1")
     idreg = Param.UInt32(0x00000000, "ID Register, SYS_ID")
 
-class Gic(PioDevice):
-    type = 'Gic'
-    platform = Param.Platform(Parent.any, "Platform this device is part of.")
-    dist_addr = Param.Addr(0x1f001000, "Address for distributor")
-    cpu_addr = Param.Addr(0x1f000100, "Address for cpu")
-    dist_pio_delay = Param.Latency('10ns', "Delay for PIO r/w to distributor")
-    cpu_pio_delay = Param.Latency('10ns', "Delay for PIO r/w to cpu interface")
-    int_latency = Param.Latency('10ns', "Delay for interrupt to get to CPU")
-    it_lines = Param.UInt32(128, "Number of interrupt lines supported (max = 1020)")
-
 class AmbaFake(AmbaDevice):
     type = 'AmbaFake'
+    cxx_header = "dev/arm/amba_fake.hh"
     ignore_access = Param.Bool(False, "Ignore reads/writes to this device, (e.g. IsaFake + AMBA)")
     amba_id = 0;
 
 class Pl011(Uart):
     type = 'Pl011'
-    gic = Param.Gic(Parent.any, "Gic to use for interrupting")
+    cxx_header = "dev/arm/pl011.hh"
+    gic = Param.BaseGic(Parent.any, "Gic to use for interrupting")
     int_num = Param.UInt32("Interrupt number that connects to GIC")
     end_on_eot = Param.Bool(False, "End the simulation when a EOT is received on the UART")
     int_delay = Param.Latency("100ns", "Time between action and interrupt generation by UART")
 
 class Sp804(AmbaDevice):
     type = 'Sp804'
-    gic = Param.Gic(Parent.any, "Gic to use for interrupting")
+    cxx_header = "dev/arm/timer_sp804.hh"
+    gic = Param.BaseGic(Parent.any, "Gic to use for interrupting")
     int_num0 = Param.UInt32("Interrupt number that connects to GIC")
     clock0 = Param.Clock('1MHz', "Clock speed of the input")
     int_num1 = Param.UInt32("Interrupt number that connects to GIC")
@@ -115,7 +114,8 @@ class Sp804(AmbaDevice):
 
 class CpuLocalTimer(BasicPioDevice):
     type = 'CpuLocalTimer'
-    gic = Param.Gic(Parent.any, "Gic to use for interrupting")
+    cxx_header = "dev/arm/timer_cpulocal.hh"
+    gic = Param.BaseGic(Parent.any, "Gic to use for interrupting")
     int_num_timer = Param.UInt32("Interrrupt number used per-cpu to GIC")
     int_num_watchdog = Param.UInt32("Interrupt number for per-cpu watchdog to GIC")
     # Override the default clock
@@ -123,25 +123,28 @@ class CpuLocalTimer(BasicPioDevice):
 
 class PL031(AmbaIntDevice):
     type = 'PL031'
+    cxx_header = "dev/arm/rtc_pl031.hh"
     time = Param.Time('01/01/2009', "System time to use ('Now' for actual time)")
     amba_id = 0x00341031
 
 class Pl050(AmbaIntDevice):
     type = 'Pl050'
-    vnc = Param.VncServer(Parent.any, "Vnc server for remote frame buffer display")
+    cxx_header = "dev/arm/kmi.hh"
+    vnc = Param.VncInput(Parent.any, "Vnc server for remote frame buffer display")
     is_mouse = Param.Bool(False, "Is this interface a mouse, if not a keyboard")
     int_delay = '1us'
     amba_id = 0x00141050
 
 class Pl111(AmbaDmaDevice):
     type = 'Pl111'
-    # Override the default clock
-    clock = '24MHz'
-    vnc   = Param.VncServer(Parent.any, "Vnc server for remote frame buffer display")
+    cxx_header = "dev/arm/pl111.hh"
+    pixel_clock = Param.Clock('24MHz', "Pixel clock")
+    vnc   = Param.VncInput(Parent.any, "Vnc server for remote frame buffer display")
     amba_id = 0x00141111
 
 class RealView(Platform):
     type = 'RealView'
+    cxx_header = "dev/arm/realview.hh"
     system = Param.System(Parent.any, "system")
     pci_cfg_base = Param.Addr(0, "Base address of PCI Configuraiton Space")
     mem_start_addr = Param.Addr(0, "Start address of main memory")
@@ -161,7 +164,7 @@ class RealView(Platform):
 class RealViewPBX(RealView):
     uart = Pl011(pio_addr=0x10009000, int_num=44)
     realview_io = RealViewCtrl(pio_addr=0x10000000)
-    gic = Gic()
+    gic = Pl390()
     timer0 = Sp804(int_num0=36, int_num1=36, pio_addr=0x10011000)
     timer1 = Sp804(int_num0=37, int_num1=37, pio_addr=0x10012000)
     local_cpu_timer = CpuLocalTimer(int_num_timer=29, int_num_watchdog=30, pio_addr=0x1f000600)
@@ -249,7 +252,7 @@ class RealViewPBX(RealView):
 class RealViewEB(RealView):
     uart = Pl011(pio_addr=0x10009000, int_num=44)
     realview_io = RealViewCtrl(pio_addr=0x10000000)
-    gic = Gic(dist_addr=0x10041000, cpu_addr=0x10040000)
+    gic = Pl390(dist_addr=0x10041000, cpu_addr=0x10040000)
     timer0 = Sp804(int_num0=36, int_num1=36, pio_addr=0x10011000)
     timer1 = Sp804(int_num0=37, int_num1=37, pio_addr=0x10012000)
     clcd   = Pl111(pio_addr=0x10020000, int_num=23)
@@ -325,13 +328,13 @@ class VExpress_EMM(RealView):
     pci_cfg_base = 0x30000000
     uart = Pl011(pio_addr=0x1c090000, int_num=37)
     realview_io = RealViewCtrl(proc_id0=0x14000000, proc_id1=0x14000000, pio_addr=0x1C010000)
-    gic = Gic(dist_addr=0x2C001000, cpu_addr=0x2C002000)
+    gic = Pl390(dist_addr=0x2C001000, cpu_addr=0x2C002000)
     local_cpu_timer = CpuLocalTimer(int_num_timer=29, int_num_watchdog=30, pio_addr=0x2C080000)
     timer0 = Sp804(int_num0=34, int_num1=34, pio_addr=0x1C110000, clock0='1MHz', clock1='1MHz')
     timer1 = Sp804(int_num0=35, int_num1=35, pio_addr=0x1C120000, clock0='1MHz', clock1='1MHz')
     clcd   = Pl111(pio_addr=0x1c1f0000, int_num=46)
     kmi0   = Pl050(pio_addr=0x1c060000, int_num=44)
-    kmi1   = Pl050(pio_addr=0x1c070000, int_num=45)
+    kmi1   = Pl050(pio_addr=0x1c070000, int_num=45, is_mouse=True)
     cf_ctrl = IdeController(disks=[], pci_func=0, pci_dev=0, pci_bus=2,
                             io_shift = 2, ctrl_offset = 2, Command = 0x1,
                             BAR0 = 0x1C1A0000, BAR0Size = '256B',

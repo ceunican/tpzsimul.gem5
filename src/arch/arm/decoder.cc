@@ -32,7 +32,6 @@
 #include "arch/arm/isa_traits.hh"
 #include "arch/arm/utility.hh"
 #include "base/trace.hh"
-#include "cpu/thread_context.hh"
 #include "debug/Decoder.hh"
 
 namespace ArmISA
@@ -113,9 +112,8 @@ Decoder::moreBytes(const PCState &pc, Addr fetchPC, MachInst inst)
     data = inst;
     offset = (fetchPC >= pc.instAddr()) ? 0 : pc.instAddr() - fetchPC;
     emi.thumb = pc.thumb();
-    FPSCR fpscr = tc->readMiscReg(MISCREG_FPSCR);
-    emi.fpscrLen = fpscr.len;
-    emi.fpscrStride = fpscr.stride;
+    emi.fpscrLen = fpscrLen;
+    emi.fpscrStride = fpscrStride;
 
     outOfBytes = false;
     process();

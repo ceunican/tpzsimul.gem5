@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -134,7 +134,7 @@ class NoncoherentBus : public BaseBus
          * Get the maximum block size as seen by the bus.
          */
         virtual unsigned deviceBlockSize() const
-        { return bus.findBlockSize(); }
+        { return bus.deviceBlockSize(); }
 
     };
 
@@ -173,13 +173,13 @@ class NoncoherentBus : public BaseBus
         /** When reciving a retry from the peer port (at id),
             pass it to the bus. */
         virtual void recvRetry()
-        { bus.recvRetry(); }
+        { bus.recvRetry(id); }
 
         /**
          * Get the maximum block size as seen by the bus.
          */
         virtual unsigned deviceBlockSize() const
-        { return bus.findBlockSize(); }
+        { return bus.deviceBlockSize(); }
 
     };
 
@@ -193,7 +193,7 @@ class NoncoherentBus : public BaseBus
 
     /** Timing function called by port when it is once again able to process
      * requests. */
-    void recvRetry();
+    void recvRetry(PortID master_port_id);
 
     /** Function called by the port when the bus is recieving a Atomic
       transaction.*/
@@ -207,7 +207,7 @@ class NoncoherentBus : public BaseBus
 
     NoncoherentBus(const NoncoherentBusParams *p);
 
-    unsigned int drain(Event *de);
+    unsigned int drain(DrainManager *dm);
 
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -177,9 +177,6 @@ class ThreadContext
 
     virtual void regStats(const std::string &name) = 0;
 
-    virtual void serialize(std::ostream &os) = 0;
-    virtual void unserialize(Checkpoint *cp, const std::string &section) = 0;
-
     virtual EndQuiesceEvent *getQuiesceEvent() = 0;
 
     // Not necessarily the best location for these...
@@ -264,6 +261,30 @@ class ThreadContext
 
     /** function to compare two thread contexts (for debugging) */
     static void compare(ThreadContext *one, ThreadContext *two);
+
+    /** @{ */
+    /**
+     * Flat register interfaces
+     *
+     * Some architectures have different registers visible in
+     * different modes. Such architectures "flatten" a register (see
+     * flattenIntIndex() and flattenFloatIndex()) to map it into the
+     * gem5 register file. This interface provides a flat interface to
+     * the underlying register file, which allows for example
+     * serialization code to access all registers.
+     */
+
+    virtual uint64_t readIntRegFlat(int idx) = 0;
+    virtual void setIntRegFlat(int idx, uint64_t val) = 0;
+
+    virtual FloatReg readFloatRegFlat(int idx) = 0;
+    virtual void setFloatRegFlat(int idx, FloatReg val) = 0;
+
+    virtual FloatRegBits readFloatRegBitsFlat(int idx) = 0;
+    virtual void setFloatRegBitsFlat(int idx, FloatRegBits val) = 0;
+
+    /** @} */
+
 };
 
 /**
@@ -345,10 +366,6 @@ class ProxyThreadContext : public ThreadContext
 
     void regStats(const std::string &name) { actualTC->regStats(name); }
 
-    void serialize(std::ostream &os) { actualTC->serialize(os); }
-    void unserialize(Checkpoint *cp, const std::string &section)
-    { actualTC->unserialize(cp, section); }
-
     EndQuiesceEvent *getQuiesceEvent() { return actualTC->getQuiesceEvent(); }
 
     Tick readLastActivate() { return actualTC->readLastActivate(); }
@@ -429,6 +446,52 @@ class ProxyThreadContext : public ThreadContext
     { actualTC->syscall(callnum); }
 
     Counter readFuncExeInst() { return actualTC->readFuncExeInst(); }
+
+    uint64_t readIntRegFlat(int idx)
+    { return actualTC->readIntRegFlat(idx); }
+
+    void setIntRegFlat(int idx, uint64_t val)
+    { actualTC->setIntRegFlat(idx, val); }
+
+    FloatReg readFloatRegFlat(int idx)
+    { return actualTC->readFloatRegFlat(idx); }
+
+    void setFloatRegFlat(int idx, FloatReg val)
+    { actualTC->setFloatRegFlat(idx, val); }
+
+    FloatRegBits readFloatRegBitsFlat(int idx)
+    { return actualTC->readFloatRegBitsFlat(idx); }
+
+    void setFloatRegBitsFlat(int idx, FloatRegBits val)
+    { actualTC->setFloatRegBitsFlat(idx, val); }
 };
+
+/** @{ */
+/**
+ * Thread context serialization helpers
+ *
+ * These helper functions provide a way to the data in a
+ * ThreadContext. They are provided as separate helper function since
+ * implementing them as members of the ThreadContext interface would
+ * be confusing when the ThreadContext is exported via a proxy.
+ */
+
+void serialize(ThreadContext &tc, std::ostream &os);
+void unserialize(ThreadContext &tc, Checkpoint *cp, const std::string &section);
+
+/** @} */
+
+
+/**
+ * Copy state between thread contexts in preparation for CPU handover.
+ *
+ * @note This method modifies the old thread contexts as well as the
+ * new thread context. The old thread context will have its quiesce
+ * event descheduled if it is scheduled and its status set to halted.
+ *
+ * @param new_tc Destination ThreadContext.
+ * @param old_tc Source ThreadContext.
+ */
+void takeOverFrom(ThreadContext &new_tc, ThreadContext &old_tc);
 
 #endif

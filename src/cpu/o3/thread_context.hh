@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011-2012 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -153,11 +153,6 @@ class O3ThreadContext : public ThreadContext
     /** Registers statistics associated with this TC. */
     virtual void regStats(const std::string &name);
 
-    /** Serializes state. */
-    virtual void serialize(std::ostream &os);
-    /** Unserializes state. */
-    virtual void unserialize(Checkpoint *cp, const std::string &section);
-
     /** Reads the last tick that this thread was activated on. */
     virtual Tick readLastActivate();
     /** Reads the last tick that this thread was suspended on. */
@@ -175,18 +170,30 @@ class O3ThreadContext : public ThreadContext
     virtual void clearArchRegs();
 
     /** Reads an integer register. */
-    virtual uint64_t readIntReg(int reg_idx);
+    virtual uint64_t readIntReg(int reg_idx) {
+        return readIntRegFlat(flattenIntIndex(reg_idx));
+    }
 
-    virtual FloatReg readFloatReg(int reg_idx);
+    virtual FloatReg readFloatReg(int reg_idx) {
+        return readFloatRegFlat(flattenFloatIndex(reg_idx));
+    }
 
-    virtual FloatRegBits readFloatRegBits(int reg_idx);
+    virtual FloatRegBits readFloatRegBits(int reg_idx) {
+        return readFloatRegBitsFlat(flattenFloatIndex(reg_idx));
+    }
 
     /** Sets an integer register to a value. */
-    virtual void setIntReg(int reg_idx, uint64_t val);
+    virtual void setIntReg(int reg_idx, uint64_t val) {
+        setIntRegFlat(flattenIntIndex(reg_idx), val);
+    }
 
-    virtual void setFloatReg(int reg_idx, FloatReg val);
+    virtual void setFloatReg(int reg_idx, FloatReg val) {
+        setFloatRegFlat(flattenFloatIndex(reg_idx), val);
+    }
 
-    virtual void setFloatRegBits(int reg_idx, FloatRegBits val);
+    virtual void setFloatRegBits(int reg_idx, FloatRegBits val) {
+        setFloatRegBitsFlat(flattenFloatIndex(reg_idx), val);
+    }
 
     /** Reads this thread's PC state. */
     virtual TheISA::PCState pcState()
@@ -257,7 +264,25 @@ class O3ThreadContext : public ThreadContext
     {
         return this->thread->quiesceEvent;
     }
+    /** check if the cpu is currently in state update mode and squash if not.
+     * This function will return true if a trap is pending or if a fault or
+     * similar is currently writing to the thread context and doesn't want
+     * reset all the state (see noSquashFromTC).
+     */
+    inline void conditionalSquash()
+    {
+        if (!thread->trapPending && !thread->noSquashFromTC)
+            cpu->squashFromTC(thread->threadId());
+    }
 
+    virtual uint64_t readIntRegFlat(int idx);
+    virtual void setIntRegFlat(int idx, uint64_t val);
+
+    virtual FloatReg readFloatRegFlat(int idx);
+    virtual void setFloatRegFlat(int idx, FloatReg val);
+
+    virtual FloatRegBits readFloatRegBitsFlat(int idx);
+    virtual void setFloatRegBitsFlat(int idx, FloatRegBits val);
 };
 
 #endif

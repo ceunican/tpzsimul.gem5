@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2006 The Regents of The University of Michigan
  * All rights reserved.
  *
@@ -123,10 +135,7 @@ FUPool::FUPool(const Params *p)
             numFU++;
 
             //  Add the appropriate number of copies of this FU to the list
-            ostringstream s;
-
-            s << (*i)->name() << "(0)";
-            fu->name = s.str();
+            fu->name = (*i)->name() + "(0)";
             funcUnits.push_back(fu);
 
             for (int c = 1; c < (*i)->number; ++c) {
@@ -247,17 +256,11 @@ FUPool::dump()
 }
 
 void
-FUPool::switchOut()
+FUPool::drainSanityCheck() const
 {
-}
-
-void
-FUPool::takeOver()
-{
-    for (int i = 0; i < numFU; i++) {
-        unitBusy[i] = false;
-    }
-    unitsToBeFreed.clear();
+    assert(unitsToBeFreed.empty());
+    for (int i = 0; i < numFU; i++)
+        assert(!unitBusy[i]);
 }
 
 //

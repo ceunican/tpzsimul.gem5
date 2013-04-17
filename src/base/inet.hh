@@ -39,7 +39,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/range.hh"
 #include "base/types.hh"
 #include "dev/etherpkt.hh"
 #include "dnet/os.h"
@@ -464,6 +463,7 @@ class UdpPtr
     int pstart() const { return off() + get()->size(); }
 };
 
+uint16_t __tu_cksum(const IpPtr &ip);
 uint16_t cksum(const UdpPtr &ptr);
 
 int hsplit(const EthPacketPtr &ptr);

@@ -37,6 +37,7 @@
 using m5::stl_helpers::deletePointers;
 
 Switch_d::Switch_d(Router_d *router)
+    : Consumer(router)
 {
     m_router = router;
     m_num_vcs = m_router->get_num_vcs();
@@ -64,16 +65,16 @@ void
 Switch_d::wakeup()
 {
     DPRINTF(RubyNetwork, "Switch woke up at time: %lld\n",
-            g_system_ptr->getTime());
+            m_router->curCycle());
 
     for (int inport = 0; inport < m_num_inports; inport++) {
-        if (!m_switch_buffer[inport]->isReady())
+        if (!m_switch_buffer[inport]->isReady(m_router->curCycle()))
             continue;
         flit_d *t_flit = m_switch_buffer[inport]->peekTopFlit();
-        if (t_flit->is_stage(ST_)) {
+        if (t_flit->is_stage(ST_, m_router->curCycle())) {
             int outport = t_flit->get_outport();
-            t_flit->advance_stage(LT_);
-            t_flit->set_time(g_system_ptr->getTime() + 1);
+            t_flit->advance_stage(LT_, m_router->curCycle());
+            t_flit->set_time(m_router->curCycle() + Cycles(1));
 
             // This will take care of waking up the Network Link
             m_output_unit[outport]->insert_flit(t_flit);
@@ -88,9 +89,21 @@ void
 Switch_d::check_for_wakeup()
 {
     for (int inport = 0; inport < m_num_inports; inport++) {
-        if (m_switch_buffer[inport]->isReadyForNext()) {
-            scheduleEvent(1);
+        if (m_switch_buffer[inport]->isReadyForNext(m_router->curCycle())) {
+            scheduleEvent(Cycles(1));
             break;
         }
     }
+}
+
+uint32_t
+Switch_d::functionalWrite(Packet *pkt)
+{
+   uint32_t num_functional_writes = 0;
+
+   for (uint32_t i = 0; i < m_switch_buffer.size(); ++i) {
+       num_functional_writes += m_switch_buffer[i]->functionalWrite(pkt);
+   }
+
+   return num_functional_writes;
 }

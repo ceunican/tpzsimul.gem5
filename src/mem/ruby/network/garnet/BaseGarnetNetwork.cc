@@ -36,7 +36,7 @@
 using namespace std;
 
 BaseGarnetNetwork::BaseGarnetNetwork(const Params *p)
-    : Network(p)
+    : Network(p), m_ruby_start(0)
 {
     m_ni_flit_size = p->ni_flit_size;
     m_vcs_per_vnet = p->vcs_per_vnet;
@@ -44,21 +44,17 @@ BaseGarnetNetwork::BaseGarnetNetwork(const Params *p)
     if (m_enable_fault_model)
         fault_model = p->fault_model;
 
-    m_ruby_start = 0;
-
     // Currently Garnet only supports uniform bandwidth for all
     // links and network interfaces.
-    for (std::vector<BasicExtLink*>::const_iterator i = 
-             m_topology_ptr->params()->ext_links.begin();
-         i != m_topology_ptr->params()->ext_links.end(); ++i) {
+    for (std::vector<BasicExtLink*>::const_iterator i = p->ext_links.begin();
+         i != p->ext_links.end(); ++i) {
         BasicExtLink* ext_link = (*i);
         if (ext_link->params()->bandwidth_factor != m_ni_flit_size) {
             fatal("Garnet only supports uniform bw across all links and NIs\n");
         }
     }
-    for (std::vector<BasicIntLink*>::const_iterator i = 
-             m_topology_ptr->params()->int_links.begin();
-         i != m_topology_ptr->params()->int_links.end(); ++i) {
+    for (std::vector<BasicIntLink*>::const_iterator i =  p->int_links.begin();
+         i != p->int_links.end(); ++i) {
         BasicIntLink* int_link = (*i);
         if (int_link->params()->bandwidth_factor != m_ni_flit_size) {
             fatal("Garnet only supports uniform bw across all links and NIs\n");
@@ -127,10 +123,10 @@ BaseGarnetNetwork::getFromNetQueue(NodeID id, bool ordered, int network_num,
 void
 BaseGarnetNetwork::clearStats()
 {
-    m_ruby_start = g_system_ptr->getTime();
+    m_ruby_start = curCycle();
 }
 
-Time
+Cycles
 BaseGarnetNetwork::getRubyStartTime()
 {
     return m_ruby_start;
@@ -146,7 +142,6 @@ BaseGarnetNetwork::printStats(ostream& out) const
     printPerformanceStats(out);
     printLinkStats(out);
     printPowerStats(out);
-    m_topology_ptr->printStats(out);
 }
 
 void
@@ -190,4 +185,3 @@ BaseGarnetNetwork::printPerformanceStats(ostream& out) const
     out << "-------------" << endl;
     out << endl;
 }
-

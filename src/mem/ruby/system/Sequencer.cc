@@ -39,7 +39,6 @@
 #include "debug/RubyStats.hh"
 #include "mem/protocol/PrefetchBit.hh"
 #include "mem/protocol/RubyAccessMode.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/common/Global.hh"
 #include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/slicc_interface/RubyRequest.hh"
@@ -85,8 +84,10 @@ Sequencer::~Sequencer()
 void
 Sequencer::wakeup()
 {
+    assert(getDrainState() != Drainable::Draining);
+
     // Check for deadlock of any of the requests
-    Time current_time = g_system_ptr->getTime();
+    Cycles current_time = curCycle();
 
     // Check across all outstanding requests
     int total_outstanding = 0;
@@ -102,8 +103,8 @@ Sequencer::wakeup()
              "version: %d request.paddr: 0x%x m_readRequestTable: %d "
              "current time: %u issue_time: %d difference: %d\n", m_version,
              Address(request->pkt->getAddr()), m_readRequestTable.size(),
-             current_time, request->issue_time,
-             current_time - request->issue_time);
+              current_time * clockPeriod(), request->issue_time * clockPeriod(),
+              (current_time * clockPeriod()) - (request->issue_time * clockPeriod()));
     }
 
     RequestTable::iterator write = m_writeRequestTable.begin();
@@ -117,8 +118,8 @@ Sequencer::wakeup()
              "version: %d request.paddr: 0x%x m_writeRequestTable: %d "
              "current time: %u issue_time: %d difference: %d\n", m_version,
              Address(request->pkt->getAddr()), m_writeRequestTable.size(),
-             current_time, request->issue_time,
-             current_time - request->issue_time);
+              current_time * clockPeriod(), request->issue_time * clockPeriod(),
+              (current_time * clockPeriod()) - (request->issue_time * clockPeriod()));
     }
 
     total_outstanding += m_writeRequestTable.size();
@@ -128,10 +129,13 @@ Sequencer::wakeup()
 
     if (m_outstanding_count > 0) {
         // If there are still outstanding requests, keep checking
-        schedule(deadlockCheckEvent,
-                 m_deadlock_threshold * g_system_ptr->getClock() +
-                 curTick());
+        schedule(deadlockCheckEvent, clockEdge(m_deadlock_threshold));
     }
+}
+
+void Sequencer::clearStats()
+{
+    m_outstandReqHist.clear();
 }
 
 void
@@ -208,14 +212,18 @@ Sequencer::insertRequest(PacketPtr pkt, RubyRequestType request_type)
         (m_writeRequestTable.size() + m_readRequestTable.size()));
 
     // See if we should schedule a deadlock check
-    if (deadlockCheckEvent.scheduled() == false) {
-        schedule(deadlockCheckEvent,
-                 m_deadlock_threshold * g_system_ptr->getClock()
-                 + curTick());
+    if (!deadlockCheckEvent.scheduled() &&
+        getDrainState() != Drainable::Draining) {
+        schedule(deadlockCheckEvent, clockEdge(m_deadlock_threshold));
     }
 
     Address line_addr(pkt->getAddr());
     line_addr.makeLineAddress();
+    // Create a default entry, mapping the address to NULL, the cast is
+    // there to make gcc 4.4 happy
+    RequestTable::value_type default_entry(line_addr,
+                                           (SequencerRequest*) NULL);
+
     if ((request_type == RubyRequestType_ST) ||
         (request_type == RubyRequestType_RMW_Read) ||
         (request_type == RubyRequestType_RMW_Write) ||
@@ -233,11 +241,10 @@ Sequencer::insertRequest(PacketPtr pkt, RubyRequestType request_type)
         }
 
         pair<RequestTable::iterator, bool> r =
-            m_writeRequestTable.insert(RequestTable::value_type(line_addr, 0));
+            m_writeRequestTable.insert(default_entry);
         if (r.second) {
             RequestTable::iterator i = r.first;
-            i->second = new SequencerRequest(pkt, request_type,
-                                             g_system_ptr->getTime());
+            i->second = new SequencerRequest(pkt, request_type, curCycle());
             m_outstanding_count++;
         } else {
           // There is an outstanding write request for the cache line
@@ -253,12 +260,11 @@ Sequencer::insertRequest(PacketPtr pkt, RubyRequestType request_type)
         }
 
         pair<RequestTable::iterator, bool> r =
-            m_readRequestTable.insert(RequestTable::value_type(line_addr, 0));
+            m_readRequestTable.insert(default_entry);
 
         if (r.second) {
             RequestTable::iterator i = r.first;
-            i->second = new SequencerRequest(pkt, request_type,
-                                             g_system_ptr->getTime());
+            i->second = new SequencerRequest(pkt, request_type, curCycle());
             m_outstanding_count++;
         } else {
             // There is an outstanding read request for the cache line
@@ -267,7 +273,7 @@ Sequencer::insertRequest(PacketPtr pkt, RubyRequestType request_type)
         }
     }
 
-    g_system_ptr->getProfiler()->sequencerRequests(m_outstanding_count);
+    m_outstandReqHist.add(m_outstanding_count);
     assert(m_outstanding_count ==
         (m_writeRequestTable.size() + m_readRequestTable.size()));
 
@@ -303,6 +309,20 @@ Sequencer::removeRequest(SequencerRequest* srequest)
     }
 
     markRemoved();
+}
+
+void
+Sequencer::invalidateSC(const Address& address)
+{
+    RequestTable::iterator i = m_writeRequestTable.find(address);
+    if (i != m_writeRequestTable.end()) {
+        SequencerRequest* request = i->second;
+        // The controller has lost the coherence permissions, hence the lock
+        // on the cache line maintained by the cache should be cleared.
+        if (request->m_type == RubyRequestType_Store_Conditional) {
+            m_dataCache_ptr->clearLocked(address);
+        }
+    }
 }
 
 bool
@@ -357,19 +377,19 @@ Sequencer::writeCallback(const Address& address, DataBlock& data)
 
 void
 Sequencer::writeCallback(const Address& address,
-                         GenericMachineType mach, 
+                         GenericMachineType mach,
                          DataBlock& data)
 {
-    writeCallback(address, mach, data, 0, 0, 0);
+    writeCallback(address, mach, data, Cycles(0), Cycles(0), Cycles(0));
 }
 
 void
 Sequencer::writeCallback(const Address& address,
-                         GenericMachineType mach, 
+                         GenericMachineType mach,
                          DataBlock& data,
-                         Time initialRequestTime,
-                         Time forwardRequestTime,
-                         Time firstResponseTime)
+                         Cycles initialRequestTime,
+                         Cycles forwardRequestTime,
+                         Cycles firstResponseTime)
 {
     assert(address == line_address(address));
     assert(m_writeRequestTable.count(line_address(address)));
@@ -391,7 +411,6 @@ Sequencer::writeCallback(const Address& address,
            (request->m_type == RubyRequestType_Locked_RMW_Write) ||
            (request->m_type == RubyRequestType_FLUSH));
 
-
     //
     // For Alpha, properly handle LL, SC, and write requests with respect to
     // locked cache blocks.
@@ -408,7 +427,7 @@ Sequencer::writeCallback(const Address& address,
         m_controller->unblock(address);
     }
 
-    hitCallback(request, mach, data, success, 
+    hitCallback(request, mach, data, success,
                 initialRequestTime, forwardRequestTime, firstResponseTime);
 }
 
@@ -423,16 +442,16 @@ Sequencer::readCallback(const Address& address,
                         GenericMachineType mach,
                         DataBlock& data)
 {
-    readCallback(address, mach, data, 0, 0, 0);
+    readCallback(address, mach, data, Cycles(0), Cycles(0), Cycles(0));
 }
 
 void
 Sequencer::readCallback(const Address& address,
                         GenericMachineType mach,
                         DataBlock& data,
-                        Time initialRequestTime,
-                        Time forwardRequestTime,
-                        Time firstResponseTime)
+                        Cycles initialRequestTime,
+                        Cycles forwardRequestTime,
+                        Cycles firstResponseTime)
 {
     assert(address == line_address(address));
     assert(m_readRequestTable.count(line_address(address)));
@@ -447,7 +466,7 @@ Sequencer::readCallback(const Address& address,
     assert((request->m_type == RubyRequestType_LD) ||
            (request->m_type == RubyRequestType_IFETCH));
 
-    hitCallback(request, mach, data, true, 
+    hitCallback(request, mach, data, true,
                 initialRequestTime, forwardRequestTime, firstResponseTime);
 }
 
@@ -456,16 +475,16 @@ Sequencer::hitCallback(SequencerRequest* srequest,
                        GenericMachineType mach,
                        DataBlock& data,
                        bool success,
-                       Time initialRequestTime,
-                       Time forwardRequestTime,
-                       Time firstResponseTime)
+                       Cycles initialRequestTime,
+                       Cycles forwardRequestTime,
+                       Cycles firstResponseTime)
 {
     PacketPtr pkt = srequest->pkt;
     Address request_address(pkt->getAddr());
     Address request_line_address(pkt->getAddr());
     request_line_address.makeLineAddress();
     RubyRequestType type = srequest->m_type;
-    Time issued_time = srequest->issue_time;
+    Cycles issued_time = srequest->issue_time;
 
     // Set this cache entry to the most recently used
     if (type == RubyRequestType_IFETCH) {
@@ -474,8 +493,8 @@ Sequencer::hitCallback(SequencerRequest* srequest,
         m_dataCache_ptr->setMRU(request_line_address);
     }
 
-    assert(g_system_ptr->getTime() >= issued_time);
-    Time miss_latency = g_system_ptr->getTime() - issued_time;
+    assert(curCycle() >= issued_time);
+    Cycles miss_latency = curCycle() - issued_time;
 
     // Profile the miss latency for all non-zero demand misses
     if (miss_latency != 0) {
@@ -483,18 +502,14 @@ Sequencer::hitCallback(SequencerRequest* srequest,
 
         if (mach == GenericMachineType_L1Cache_wCC) {
             g_system_ptr->getProfiler()->missLatencyWcc(issued_time,
-                                                   initialRequestTime,
-                                                   forwardRequestTime,
-                                                   firstResponseTime,
-                                                   g_system_ptr->getTime());
+                initialRequestTime, forwardRequestTime,
+                firstResponseTime, curCycle());
         }
 
         if (mach == GenericMachineType_Directory) {
             g_system_ptr->getProfiler()->missLatencyDir(issued_time,
-                                                   initialRequestTime,
-                                                   forwardRequestTime,
-                                                   firstResponseTime,
-                                                   g_system_ptr->getTime());
+                initialRequestTime, forwardRequestTime,
+                firstResponseTime, curCycle());
         }
 
         DPRINTFR(ProtocolTrace, "%15s %3s %10s%20s %6s>%-6s %s %d cycles\n",
@@ -533,16 +548,20 @@ Sequencer::hitCallback(SequencerRequest* srequest,
     // Note: RubyPort will access it's sender state before the
     // RubyTester.
     if (m_usingRubyTester) {
-        RubyPort::SenderState *requestSenderState =
+        RubyPort::SenderState *reqSenderState =
             safe_cast<RubyPort::SenderState*>(pkt->senderState);
+        // @todo This is a dangerous assumption on nothing else
+        // modifying the senderState
         RubyTester::SenderState* testerSenderState =
-            safe_cast<RubyTester::SenderState*>(requestSenderState->saved);
-        testerSenderState->subBlock->mergeFrom(data);
+            safe_cast<RubyTester::SenderState*>(reqSenderState->predecessor);
+        testerSenderState->subBlock.mergeFrom(data);
     }
 
     delete srequest;
 
     if (g_system_ptr->m_warmup_enabled) {
+        assert(pkt->req);
+        delete pkt->req;
         delete pkt;
         g_system_ptr->m_cache_recorder->enqueueNextFetchRequest();
     } else if (g_system_ptr->m_cooldown_enabled) {
@@ -647,8 +666,9 @@ Sequencer::makeRequest(PacketPtr pkt)
 void
 Sequencer::issueRequest(PacketPtr pkt, RubyRequestType secondary_type)
 {
+    assert(pkt != NULL);
     int proc_id = -1;
-    if (pkt != NULL && pkt->req->hasContextId()) {
+    if (pkt->req->hasContextId()) {
         proc_id = pkt->req->contextId();
     }
 
@@ -658,7 +678,7 @@ Sequencer::issueRequest(PacketPtr pkt, RubyRequestType secondary_type)
         pc = pkt->req->getPC();
     }
 
-    RubyRequest *msg = new RubyRequest(pkt->getAddr(),
+    RubyRequest *msg = new RubyRequest(clockEdge(), pkt->getAddr(),
                                        pkt->getPtr<uint8_t>(true),
                                        pkt->getSize(), pc, secondary_type,
                                        RubyAccessMode_Supervisor, pkt,
@@ -669,7 +689,7 @@ Sequencer::issueRequest(PacketPtr pkt, RubyRequestType secondary_type)
             msg->getPhysicalAddress(),
             RubyRequestType_to_string(secondary_type));
 
-    Time latency = 0;  // initialzed to an null value
+    Cycles latency(0);  // initialzed to an null value
 
     if (secondary_type == RubyRequestType_IFETCH)
         latency = m_instCache_ptr->getLatency();

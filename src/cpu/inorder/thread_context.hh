@@ -1,4 +1,16 @@
 /*
+ * Copyright (c) 2012 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
+ *
  * Copyright (c) 2007 MIPS Technologies, Inc.
  * All rights reserved.
  *
@@ -179,12 +191,6 @@ class InOrderThreadContext : public ThreadContext
     /** Registers statistics associated with this TC. */
     void regStats(const std::string &name);
 
-    /** Serializes state. */
-    void serialize(std::ostream &os);
-
-    /** Unserializes state. */
-    void unserialize(Checkpoint *cp, const std::string &section);
-
     /** Returns this thread's ID number. */
     int getThreadNum() { return thread->threadId(); }
 
@@ -254,10 +260,10 @@ class InOrderThreadContext : public ThreadContext
     void setMiscReg(int misc_reg, const MiscReg &val);
 
     int flattenIntIndex(int reg)
-    { return cpu->isa[thread->threadId()].flattenIntIndex(reg); }
+    { return cpu->isa[thread->threadId()]->flattenIntIndex(reg); }
 
     int flattenFloatIndex(int reg)
-    { return cpu->isa[thread->threadId()].flattenFloatIndex(reg); }
+    { return cpu->isa[thread->threadId()]->flattenFloatIndex(reg); }
 
     void activateContext(Cycles delay)
     { cpu->activateContext(thread->threadId(), delay); }
@@ -292,6 +298,15 @@ class InOrderThreadContext : public ThreadContext
     void changeRegFileContext(unsigned param,
                                       unsigned val)
     { panic("Not supported!"); }
+
+    uint64_t readIntRegFlat(int idx);
+    void setIntRegFlat(int idx, uint64_t val);
+
+    FloatReg readFloatRegFlat(int idx);
+    void setFloatRegFlat(int idx, FloatReg val);
+
+    FloatRegBits readFloatRegBitsFlat(int idx);
+    void setFloatRegBitsFlat(int idx, FloatRegBits val);
 };
 
 #endif

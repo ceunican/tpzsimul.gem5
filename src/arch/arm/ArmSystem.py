@@ -48,13 +48,8 @@ class ArmMachineType(Enum):
 
 class ArmSystem(System):
     type = 'ArmSystem'
+    cxx_header = "arch/arm/system.hh"
     load_addr_mask = 0xffffffff
-    # 0x35 Implementor is '5' from "M5"
-    # 0x0 Variant
-    # 0xf Architecture from CPUID scheme
-    # 0xc00 Primary part number ("c" or higher implies ARM v7)
-    # 0x0 Revision
-    midr_regval = Param.UInt32(0x350fc000, "MIDR value")
     multi_proc = Param.Bool(True, "Multiprocessor system?")
     boot_loader = Param.String("", "File that contains the boot loader code if any")
     gic_cpu_addr = Param.Addr(0, "Addres of the GIC CPU interface")
@@ -62,8 +57,14 @@ class ArmSystem(System):
 
 class LinuxArmSystem(ArmSystem):
     type = 'LinuxArmSystem'
+    cxx_header = "arch/arm/linux/system.hh"
     load_addr_mask = 0x0fffffff
     machine_type = Param.ArmMachineType('RealView_PBX',
         "Machine id from http://www.arm.linux.org.uk/developer/machines/")
-    atags_addr = Param.Addr(0x100, "Address where default atags structure should be written")
-    early_kernel_symbols = Param.Bool(False, "enable early kernel symbol tables before MMU")
+    atags_addr = Param.Addr(0x100,
+        "Address where default atags structure should be written")
+    dtb_filename = Param.String("",
+        "File that contains the Device Tree Blob. Don't use DTB if empty.")
+    early_kernel_symbols = Param.Bool(False,
+        "enable early kernel symbol tables before MMU")
+    enable_context_switch_stats_dump = Param.Bool(False, "enable stats/task info dumping at context switch boundaries")

@@ -29,6 +29,7 @@ from m5.util import orderdict
 
 from slicc.util import PairContainer
 from slicc.symbols.Symbol import Symbol
+from slicc.symbols.Var import Var
 
 class DataMember(PairContainer):
     def __init__(self, ident, type, pairs, init_code):
@@ -107,6 +108,7 @@ class Type(Symbol):
 
         # Methods
         self.methods = {}
+        self.functions = {}
 
         # Enums
         self.enums = orderdict()
@@ -143,13 +145,16 @@ class Type(Symbol):
         return "interface" in self
 
     # Return false on error
-    def dataMemberAdd(self, ident, type, pairs, init_code):
+    def addDataMember(self, ident, type, pairs, init_code):
         if ident in self.data_members:
             return False
 
         member = DataMember(ident, type, pairs, init_code)
         self.data_members[ident] = member
 
+        var = Var(self.symtab, ident, self.location, type,
+                "m_%s" % ident, {}, None)
+        self.symtab.registerSym(ident, var)
         return True
 
     def dataMemberType(self, ident):
@@ -164,7 +169,7 @@ class Type(Symbol):
     def statePermPairAdd(self, state_name, perm_name):
         self.statePermPairs.append([state_name, perm_name])
 
-    def methodAdd(self, name, return_type, param_type_vec):
+    def addMethod(self, name, return_type, param_type_vec):
         ident = self.methodId(name, param_type_vec)
         if ident in self.methods:
             return False
@@ -172,7 +177,18 @@ class Type(Symbol):
         self.methods[ident] = Method(return_type, param_type_vec)
         return True
 
-    def enumAdd(self, ident, pairs):
+    # Ideally either this function or the one above should exist. But
+    # methods and functions have different structures right now.
+    # Hence, these are different, at least for the time being.
+    def addFunc(self, func):
+        ident = self.methodId(func.ident, func.param_types)
+        if ident in self.functions:
+            return False
+
+        self.functions[ident] = func
+        return True
+
+    def addEnum(self, ident, pairs):
         if ident in self.enums:
             return False
 
@@ -184,7 +200,7 @@ class Type(Symbol):
 
         return True
 
-    def writeCodeFiles(self, path):
+    def writeCodeFiles(self, path, includes):
         if self.isExternal:
             # Do nothing
             pass
@@ -210,7 +226,7 @@ class Type(Symbol):
 
 #include <iostream>
 
-#include "mem/ruby/common/Global.hh"
+#include "mem/ruby/slicc_interface/RubySlicc_Util.hh"
 ''')
 
         for dm in self.data_members.values():
@@ -226,9 +242,13 @@ class Type(Symbol):
 $klass ${{self.c_ident}}$parent
 {
   public:
-    ${{self.c_ident}}()
-    {
+    ${{self.c_ident}}
 ''', klass="class")
+
+        if self.isMessage:
+            code('(Tick curTime) : %s(curTime) {' % self["interface"])
+        else:
+            code('()\n\t\t{')
 
         code.indent()
         if not self.isGlobal:
@@ -268,13 +288,19 @@ $klass ${{self.c_ident}}$parent
         if not self.isGlobal:
             params = [ 'const %s& local_%s' % (dm.type.c_ident, dm.ident) \
                        for dm in self.data_members.itervalues() ]
-
             params = ', '.join(params)
+
+            if self.isMessage:
+                params = "const Tick curTime, " + params
+
             code('${{self.c_ident}}($params)')
 
             # Call superclass constructor
             if "interface" in self:
-                code('    : ${{self["interface"]}}()')
+                if self.isMessage:
+                    code('    : ${{self["interface"]}}(curTime)')
+                else:
+                    code('    : ${{self["interface"]}}()')
 
             code('{')
             code.indent()
@@ -286,14 +312,8 @@ $klass ${{self.c_ident}}$parent
             code.dedent()
             code('}')
 
-        # create a static factory method and a clone member
+        # create a clone member
         code('''
-static ${{self.c_ident}}*
-create()
-{
-    return new ${{self.c_ident}}();
-}
-
 ${{self.c_ident}}*
 clone() const
 {
@@ -368,6 +388,12 @@ set${{dm.ident}}(const ${{dm.type.c_ident}}& local_${{dm.ident}})
 
                 code('$const${{dm.type.c_ident}} m_${{dm.ident}}$init;')
 
+        # Prototypes for functions defined for the Type
+        for item in self.functions:
+            proto = self.functions[item].prototype
+            if proto:
+                code('$proto')
+
         code.dedent()
         code('};')
 
@@ -397,6 +423,8 @@ operator<<(std::ostream& out, const ${{self.c_ident}}& obj)
 #include <iostream>
 
 #include "mem/protocol/${{self.c_ident}}.hh"
+#include "mem/ruby/common/Global.hh"
+#include "mem/ruby/system/System.hh"
 
 using namespace std;
 ''')
@@ -415,13 +443,17 @@ ${{self.c_ident}}::print(ostream& out) const
             code('out << "${{dm.ident}} = " << m_${{dm.ident}} << " ";''')
 
         if self.isMessage:
-            code('out << "Time = " << getTime() * g_system_ptr->getClock() << " ";')
+            code('out << "Time = " << g_system_ptr->clockPeriod() * getTime() << " ";')
         code.dedent()
 
         # Trailer
         code('''
     out << "]";
 }''')
+
+        # print the code for the functions in the type
+        for item in self.functions:
+            code(self.functions[item].generateCode())
 
         code.write(path, "%s.cc" % self.c_ident)
 
@@ -508,9 +540,11 @@ ConvertMachToGenericMach(MachineType machType)
 {
 ''')
             for enum in self.enums.itervalues():
+                genericType = self.enums[enum.ident].get('genericType',
+                                                         enum.ident)
                 code('''
       if (machType == MachineType_${{enum.ident}})
-          return GenericMachineType_${{enum.ident}};
+          return GenericMachineType_${{genericType}};
 ''')
             code('''
       panic("cannot convert to a GenericMachineType");

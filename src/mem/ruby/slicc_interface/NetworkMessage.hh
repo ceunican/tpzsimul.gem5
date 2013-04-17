@@ -33,11 +33,8 @@
 
 #include "base/refcnt.hh"
 #include "mem/protocol/MessageSizeType.hh"
-#include "mem/ruby/common/Global.hh"
 #include "mem/ruby/common/NetDest.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
-
-class Address;
 
 class NetworkMessage;
 typedef RefCountingPtr<NetworkMessage> NetMsgPtr;
@@ -45,8 +42,8 @@ typedef RefCountingPtr<NetworkMessage> NetMsgPtr;
 class NetworkMessage : public Message
 {
   public:
-    NetworkMessage()
-        : m_internal_dest_valid(false)
+    NetworkMessage(Tick curTime)
+        : Message(curTime), m_internal_dest_valid(false)
     { }
 
     NetworkMessage(const NetworkMessage &other)

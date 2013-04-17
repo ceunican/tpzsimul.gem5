@@ -44,8 +44,8 @@ class flitBuffer_d
     flitBuffer_d();
     flitBuffer_d(int maximum_size);
 
-    bool isReady();
-    bool isReadyForNext();
+    bool isReady(Cycles curTime);
+    bool isReadyForNext(Cycles curTime);
     bool isEmpty();
     void print(std::ostream& out) const;
     bool isFull();
@@ -73,9 +73,11 @@ class flitBuffer_d
         std::push_heap(m_buffer.begin(), m_buffer.end(), flit_d::greater);
     }
 
+    uint32_t functionalWrite(Packet *pkt);
+
   private:
     std::vector<flit_d *> m_buffer;
-    int size, max_size;
+    int max_size;
 };
 
 inline std::ostream&

@@ -36,9 +36,10 @@ machine(Directory, "Token protocol")
  : DirectoryMemory * directory,
    MemoryControl * memBuffer,
    int l2_select_num_bits,
-   int directory_latency = 5,
+   Cycles directory_latency = 5,
    bool distributed_persistent = true,
-   int fixed_timeout_latency = 100
+   Cycles fixed_timeout_latency = 100,
+   Cycles reissue_wakeup_latency = 10
 {
 
   MessageBuffer dmaResponseFromDir, network="To", virtual_network="5", ordered="true", vnet_type="response";
@@ -157,7 +158,7 @@ machine(Directory, "Token protocol")
   PersistentTable persistentTable;
   TimerTable reissueTimerTable;
 
-  TBETable TBEs, template_hack="<Directory_TBE>";
+  TBETable TBEs, template="<Directory_TBE>", constructor="m_number_of_TBEs";
 
   bool starving, default="false";
   int l2_select_low_bit, default="RubySystem::getBlockSizeBits()";
@@ -470,7 +471,7 @@ machine(Directory, "Token protocol")
       // IssueCount.
 
       // Set a wakeup timer
-      reissueTimerTable.set(address, 10);
+      reissueTimerTable.set(address, reissue_wakeup_latency);
     }
   }
 
@@ -540,7 +541,7 @@ machine(Directory, "Token protocol")
       // IssueCount.
 
       // Set a wakeup timer
-      reissueTimerTable.set(address, 10);
+      reissueTimerTable.set(address, reissue_wakeup_latency);
     }
   }
 
@@ -677,6 +678,7 @@ machine(Directory, "Token protocol")
     enqueue(memQueue_out, MemoryMsg, latency="1") {
       out_msg.Address := address;
       out_msg.Type := MemoryRequestType:MEMORY_WB;
+      out_msg.DataBlk := getDirectoryEntry(address).DataBlk;
       DPRINTF(RubySlicc, "%s\n", out_msg);
     }
   }

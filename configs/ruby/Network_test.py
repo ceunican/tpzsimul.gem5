@@ -97,7 +97,7 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
         if piobus != None:
             cpu_seq.pio_port = piobus.slave
 
-        exec("system.l1_cntrl%d = l1_cntrl" % i)
+        exec("ruby_system.l1_cntrl%d = l1_cntrl" % i)
         #
         # Add controllers and sequencers to the appropriate lists
         #
@@ -106,9 +106,8 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
 
         cntrl_count += 1
 
-    phys_mem_size = 0
-    for mem in system.memories.unproxy(system):
-        phys_mem_size += long(mem.range.second) - long(mem.range.first) + 1
+    phys_mem_size = sum(map(lambda mem: mem.range.size(),
+                            system.memories.unproxy(system)))
     mem_module_size = phys_mem_size / options.num_dirs
 
     for i in xrange(options.num_dirs):
@@ -130,7 +129,7 @@ def create_system(options, system, piobus, dma_ports, ruby_system):
                                          memBuffer = mem_cntrl,
                                          ruby_system = ruby_system)
 
-        exec("system.dir_cntrl%d = dir_cntrl" % i)
+        exec("ruby_system.dir_cntrl%d = dir_cntrl" % i)
         dir_cntrl_nodes.append(dir_cntrl)
 
         cntrl_count += 1

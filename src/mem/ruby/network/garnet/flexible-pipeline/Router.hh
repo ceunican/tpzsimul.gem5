@@ -60,10 +60,10 @@ class Router : public BasicRouter, public FlexibleConsumer
                     int link_weight);
     void wakeup();
     void request_vc(int in_vc, int in_port, NetDest destination,
-                    Time request_time);
+                    Cycles request_time);
     bool isBufferNotFull(int vc, int inport);
-    void grant_vc(int out_port, int vc, Time grant_time);
-    void release_vc(int out_port, int vc, Time release_time);
+    void grant_vc(int out_port, int vc, Cycles grant_time);
+    void release_vc(int out_port, int vc, Cycles release_time);
     void vc_arbitrate();
     int get_vnet(int vc);
 
@@ -74,8 +74,10 @@ class Router : public BasicRouter, public FlexibleConsumer
         m_net_ptr = net_ptr; 
     }
 
+    bool functionalRead(Packet *);
+    uint32_t functionalWrite(Packet *);
+
   private:
-    int m_id;
     int m_virtual_networks, m_num_vcs, m_vc_per_vnet;
     GarnetNetwork *m_net_ptr;
     std::vector<int> m_vc_round_robin; // For scheduling of out source queues
