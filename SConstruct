@@ -1094,10 +1094,13 @@ main.SConscript('ext/libelf/SConscript',
 # gzstream build is shared across all configs in the build root.
 main.SConscript('ext/gzstream/SConscript',
                 variant_dir = joinpath(build_root, 'gzstream'))
-
 # libfdt build is shared across all configs in the build root.
 main.SConscript('ext/libfdt/SConscript',
                 variant_dir = joinpath(build_root, 'libfdt'))
+
+# topaz build is shared across all configs in the build root.
+main.SConscript('ext/TOPAZ/SConscript',
+                variant_dir = joinpath(build_root, 'topaz'))
 
 ###################################################
 #

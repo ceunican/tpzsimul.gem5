@@ -62,6 +62,8 @@ MessageBuffer::MessageBuffer(const string &name)
     m_stall_msg_map.clear();
     m_input_link_id = 0;
     m_vnet_id = 0;
+    m_toNet = false;
+    m_fromNet = false;
 }
 
 int

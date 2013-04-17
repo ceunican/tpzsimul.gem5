@@ -97,6 +97,9 @@ class Network : public ClockedObject
     virtual void clearStats() = 0;
     virtual void print(std::ostream& out) const = 0;
 
+    //Required to let Topaz be aware of ruby node mapping
+    virtual void setTopazMapping (SwitchID node0, SwitchID node1) {};
+
     /*
      * Virtual functions for functionally reading and writing packets in
      * the network. Each network needs to implement these for functional
