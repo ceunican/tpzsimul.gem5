@@ -75,6 +75,25 @@ def define_options(parser):
 
     parser.add_option("--ruby_stats", type="string", default="ruby.stats")
 
+    #TOPAZ options
+    parser.add_option("--topaz-init-file", type = "string", default="./TPZSimul.ini",
+                       help="TOPAZ: File that declares <simulation>.sgm,"\
+                            " <network>.sgm and <router>.sgm" )
+
+    parser.add_option("--topaz-network", type = "string", default=False,
+                       help="TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ" )
+
+    parser.add_option("--topaz-flit-size", type="int", default=16,
+                      help="TOPAZ: Number of bytes per physical router-to-router wire")
+
+    parser.add_option("--topaz-clock-ratio", type="int", default=1,
+                      help="TOPAZ: memory-network clock multiplier")
+
+    parser.add_option("--topaz-adaptive-interface-threshold",  type = "int", default=0,
+                       help="TOPAZ: Number of messages that has to be transmitted "\
+                             "before to activate TOPAZ" )
+
+
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
     eval("%s.define_options(parser)" % protocol)
@@ -131,6 +150,11 @@ def create_system(options, system, piobus = None, dma_ports = []):
         class IntLinkClass(GarnetIntLink): pass
         class ExtLinkClass(GarnetExtLink): pass
         class RouterClass(GarnetRouter): pass
+    elif options.topaz_network:
+        class NetworkClass(TopazNetwork): pass
+        class IntLinkClass(SimpleIntLink): pass
+        class ExtLinkClass(SimpleExtLink): pass
+        class RouterClass(TopazSwitch): pass
     else:
         class NetworkClass(SimpleNetwork): pass
         class IntLinkClass(SimpleIntLink): pass
@@ -153,6 +177,18 @@ def create_system(options, system, piobus = None, dma_ports = []):
         assert(options.garnet_network == "fixed")
         network.enable_fault_model = True
         network.fault_model = FaultModel()
+
+    #
+    #  TOPAZ INPUT PARAMETERS
+    #
+    if options.topaz_network:
+       #Garnet and Topaz are incompatible
+       assert (not(options.garnet_network !=None))
+       network.topaz_network =  options.topaz_network
+       network.topaz_flit_size =  options.topaz_flit_size
+       network.topaz_clock_ratio = options.topaz_clock_ratio
+       network.topaz_adaptive_interface_threshold = options.topaz_adaptive_interface_threshold
+       network.topaz_init_file = options.topaz_init_file
 
     #
     # Loop through the directory controlers.

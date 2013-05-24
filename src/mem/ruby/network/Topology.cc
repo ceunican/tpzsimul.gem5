@@ -220,7 +220,7 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
         src_dest.second = dest;
         link_entry = m_link_map[src_dest];
         net->makeInLink(src, dest - (2 * m_nodes), link_entry.link,
-                        link_entry.direction, 
+                        link_entry.direction,
                         routing_table_entry,
                         isReconfiguration);
     } else if (dest < 2*m_nodes) {
@@ -233,6 +233,12 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
                          link_entry.direction, 
                          routing_table_entry,
                          isReconfiguration);
+        //Required to make TOPAZ aware of ruby Mapping
+        //When topaz needs to inject (after ruby "interception")
+        //a message should be know what router is
+        //connected to the destination machineID. This function
+        //constructs the maping between Topaz routers and ruby machineIds
+        net->setTopazMapping(dest-m_nodes, src);
     } else {
         assert((src >= 2 * m_nodes) && (dest >= 2 * m_nodes));
         src_dest.first = src;
