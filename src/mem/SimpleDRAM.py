@@ -43,10 +43,12 @@ from AbstractMemory import *
 # First-Served and a First-Row Hit then First-Come First-Served
 class MemSched(Enum): vals = ['fcfs', 'frfcfs']
 
-# Enum for the address mapping, currently corresponding to either
-# optimising for sequential accesses hitting in the open row, or
-# striping across banks.
-class AddrMap(Enum): vals = ['openmap', 'closemap']
+# Enum for the address mapping. With Ra, Co, Ba and Ch denoting rank,
+# column, bank and channel, respectively, and going from MSB to LSB.
+# Available are RaBaChCo and RaBaCoCh, that are suitable for an
+# open-page policy, optimising for sequential accesses hitting in the
+# open row. For a closed-page policy, CoRaBaCh maximises parallelism.
+class AddrMap(Enum): vals = ['RaBaChCo', 'RaBaCoCh', 'CoRaBaCh']
 
 # Enum for the page policy, either open or close.
 class PageManage(Enum): vals = ['open', 'close']
@@ -105,7 +107,7 @@ class SimpleDRAM(AbstractMemory):
 
     # scheduler, address map and page policy
     mem_sched_policy = Param.MemSched('frfcfs', "Memory scheduling policy")
-    addr_mapping = Param.AddrMap('openmap', "Address mapping policy")
+    addr_mapping = Param.AddrMap('RaBaChCo', "Address mapping policy")
     page_policy = Param.PageManage('open', "Page closure management policy")
 
     # the physical organisation of the DRAM
@@ -239,3 +241,39 @@ class SimpleLPDDR2_S4(SimpleDRAM):
     # Irrespective of size, tFAW is 50 ns
     tXAW = '50ns'
     activation_limit = 4
+
+# High-level model of a single WideIO x128 interface (one command and
+# address bus), with default timings based on an estimated WIO-200 8
+# Gbit part.
+class SimpleWideIO(SimpleDRAM):
+    # Assuming 64 byte cache lines, use a 4kbyte page size, this
+    # depends on the memory density
+    lines_per_rowbuffer = 64
+
+    # Use one rank for a one-high die stack
+    ranks_per_channel = 1
+
+    # WideIO has 4 banks in all configurations
+    banks_per_rank = 4
+
+    # WIO-200
+    tRCD = '18ns'
+    tCL = '18ns'
+    tRP = '18ns'
+
+    # Assuming 64 byte cache lines, across an x128 SDR interface,
+    # translates to BL4, 4 clocks @ 200 MHz
+    tBURST = '20ns'
+
+    # WIO 8 Gb
+    tRFC = '210ns'
+
+    # WIO 8 Gb, <=85C, half for >85C
+    tREFI = '3.9us'
+
+    # Greater of 2 CK or 15 ns, 2 CK @ 200 MHz = 10 ns
+    tWTR = '15ns'
+
+    # Two instead of four activation window
+    tXAW = '50ns'
+    activation_limit = 2

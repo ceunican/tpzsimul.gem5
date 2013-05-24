@@ -98,6 +98,7 @@ class BaseCPU(MemObject):
     void takeOverFrom(BaseCPU *cpu);
     bool switchedOut();
     void flushTLBs();
+    Counter totalInsts();
 ''')
 
     @classmethod
@@ -187,6 +188,8 @@ class BaseCPU(MemObject):
         "terminate when all threads have reached this inst count")
     max_insts_any_thread = Param.Counter(0,
         "terminate when any thread reaches this inst count")
+    simpoint_start_insts = VectorParam.Counter([],
+        "starting instruction counts of simpoints")
     max_loads_all_threads = Param.Counter(0,
         "terminate when all threads have reached this load count")
     max_loads_any_thread = Param.Counter(0,

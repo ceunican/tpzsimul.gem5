@@ -62,31 +62,31 @@ using namespace Linux;
 
 LinuxArmSystem::LinuxArmSystem(Params *p)
     : ArmSystem(p),
-      enableContextSwitchStatsDump(p->enable_context_switch_stats_dump)
+      enableContextSwitchStatsDump(p->enable_context_switch_stats_dump),
+      kernelPanicEvent(NULL), kernelOopsEvent(NULL)
 {
+    if (p->panic_on_panic) {
+        kernelPanicEvent = addKernelFuncEventOrPanic<PanicPCEvent>(
+            "panic", "Kernel panic in simulated kernel");
+    } else {
 #ifndef NDEBUG
-    kernelPanicEvent = addKernelFuncEvent<BreakPCEvent>("panic");
-    if (!kernelPanicEvent)
-        panic("could not find kernel symbol \'panic\'");
+        kernelPanicEvent = addKernelFuncEventOrPanic<BreakPCEvent>("panic");
 #endif
+    }
+
+    if (p->panic_on_oops) {
+        kernelOopsEvent = addKernelFuncEventOrPanic<PanicPCEvent>(
+            "oops_exit", "Kernel oops in guest");
+    }
 
     // With ARM udelay() is #defined to __udelay
-    Addr addr = 0;
-    if (kernelSymtab->findAddress("__udelay", addr)) {
-        uDelaySkipEvent = new UDelayEvent(&pcEventQueue, "__udelay",
-                fixFuncEventAddr(addr), 1000, 0);
-    } else {
-        panic("couldn't find kernel symbol \'udelay\'");
-    }
+    uDelaySkipEvent = addKernelFuncEventOrPanic<UDelayEvent>(
+        "__udelay", "__udelay", 1000, 0);
 
     // constant arguments to udelay() have some precomputation done ahead of
     // time. Constant comes from code.
-    if (kernelSymtab->findAddress("__const_udelay", addr)) {
-        constUDelaySkipEvent = new UDelayEvent(&pcEventQueue, "__const_udelay",
-                fixFuncEventAddr(addr), 1000, 107374);
-    } else {
-        panic("couldn't find kernel symbol \'udelay\'");
-    }
+    constUDelaySkipEvent = addKernelFuncEventOrPanic<UDelayEvent>(
+        "__const_udelay", "__const_udelay", 1000, 107374);
 
     secDataPtrAddr = 0;
     secDataAddr = 0;

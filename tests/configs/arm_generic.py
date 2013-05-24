@@ -61,7 +61,15 @@ class LinuxArmSystemBuilder(object):
     def create_system(self):
         system = FSConfig.makeArmSystem(self.mem_mode,
                                         self.machine_type,
+                                        SimpleDDR3,
                                         None, False)
+
+        # We typically want the simulator to panic if the kernel
+        # panics or oopses. This prevents the simulator from running
+        # an obviously failed test case until the end of time.
+        system.panic_on_panic = True
+        system.panic_on_oops = True
+
         self.init_system(system)
         return system
 

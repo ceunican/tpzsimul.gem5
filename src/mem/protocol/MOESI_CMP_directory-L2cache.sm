@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 1999-2005 Mark D. Hill and David A. Wood
+ * Copyright (c) 1999-2013 Mark D. Hill and David A. Wood
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,14 +26,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * $Id$
- *
- */
-
-machine(L2Cache, "Token protocol") 
-: CacheMemory * L2cacheMemory,
-  Cycles response_latency = 2, 
+machine(L2Cache, "Token protocol")
+: CacheMemory * L2cache,
+  Cycles response_latency = 2,
   Cycles request_latency = 2
 {
 
@@ -233,7 +227,7 @@ machine(L2Cache, "Token protocol")
   void unset_tbe();
 
   Entry getCacheEntry(Address address), return_by_pointer="yes" {
-    return static_cast(Entry, "pointer", L2cacheMemory[address]);
+    return static_cast(Entry, "pointer", L2cache[address]);
   }
 
   bool isDirTagPresent(Address addr) {
@@ -453,7 +447,7 @@ machine(L2Cache, "Token protocol")
   }
 
   void setState(TBE tbe, Entry cache_entry, Address addr, State state) {
-    assert((localDirectory.isTagPresent(addr) && L2cacheMemory.isTagPresent(addr)) == false);
+    assert((localDirectory.isTagPresent(addr) && L2cache.isTagPresent(addr)) == false);
 
     if (is_valid(tbe)) {
       tbe.TBEState := state;
@@ -653,10 +647,10 @@ machine(L2Cache, "Token protocol")
         } else if (in_msg.Type == CoherenceResponseType:WRITEBACK_DIRTY_DATA) {
           Entry cache_entry := getCacheEntry(in_msg.Address);
           if (is_invalid(cache_entry) &&
-                   L2cacheMemory.cacheAvail(in_msg.Address) == false) {
-            trigger(Event:L2_Replacement, L2cacheMemory.cacheProbe(in_msg.Address),
-                    getCacheEntry(L2cacheMemory.cacheProbe(in_msg.Address)),
-                    TBEs[L2cacheMemory.cacheProbe(in_msg.Address)]);
+                   L2cache.cacheAvail(in_msg.Address) == false) {
+            trigger(Event:L2_Replacement, L2cache.cacheProbe(in_msg.Address),
+                    getCacheEntry(L2cache.cacheProbe(in_msg.Address)),
+                    TBEs[L2cache.cacheProbe(in_msg.Address)]);
           }
           else {
             trigger(Event:L1_WBDIRTYDATA, in_msg.Address,
@@ -665,10 +659,10 @@ machine(L2Cache, "Token protocol")
         } else if (in_msg.Type == CoherenceResponseType:WRITEBACK_CLEAN_DATA) {
           Entry cache_entry := getCacheEntry(in_msg.Address);
           if (is_invalid(cache_entry) &&
-                   L2cacheMemory.cacheAvail(in_msg.Address) == false) {
-            trigger(Event:L2_Replacement, L2cacheMemory.cacheProbe(in_msg.Address),
-                    getCacheEntry(L2cacheMemory.cacheProbe(in_msg.Address)),
-                    TBEs[L2cacheMemory.cacheProbe(in_msg.Address)]);
+                   L2cache.cacheAvail(in_msg.Address) == false) {
+            trigger(Event:L2_Replacement, L2cache.cacheProbe(in_msg.Address),
+                    getCacheEntry(L2cache.cacheProbe(in_msg.Address)),
+                    TBEs[L2cache.cacheProbe(in_msg.Address)]);
           }
           else {
             trigger(Event:L1_WBCLEANDATA, in_msg.Address,
@@ -1406,7 +1400,7 @@ machine(L2Cache, "Token protocol")
 
   action( r_setMRU, "\rrr", desc="manually set the MRU bit for cache line" ) {
     if(is_valid(cache_entry)) {
-      L2cacheMemory.setMRU(address);
+      L2cache.setMRU(address);
     }
   }
 
@@ -1459,11 +1453,11 @@ machine(L2Cache, "Token protocol")
   }
 
   action(vv_allocateL2CacheBlock, "\v", desc="Set L2 cache tag equal to tag of block B.") {
-    set_cache_entry(L2cacheMemory.allocate(address, new Entry));
+    set_cache_entry(L2cache.allocate(address, new Entry));
   }
 
   action(rr_deallocateL2CacheBlock, "\r", desc="Deallocate L2 cache block.  Sets the cache to not present, allowing a replacement in parallel with a fetch.") {
-    L2cacheMemory.deallocate(address);
+    L2cache.deallocate(address);
     unset_cache_entry();
   }
 
@@ -1475,11 +1469,12 @@ machine(L2Cache, "Token protocol")
     }
   }
 
-  action(uu_profileMiss, "\u", desc="Profile the demand miss") {
-    peek(L1requestNetwork_in, RequestMsg) {
-      // AccessModeType not implemented
-      //      profile_L2Cache_miss(convertToGenericType(in_msg.Type), in_msg.AccessMode, MessageSizeTypeToInt(in_msg.MessageSize),  in_msg.Prefetch, machineIDToNodeID(in_msg.Requestor));
-    }
+  action(uu_profileMiss, "\um", desc="Profile the demand miss") {
+      ++L2cache.demand_misses;
+  }
+
+  action(uu_profileHit, "\uh", desc="Profile the demand hit") {
+      ++L2cache.demand_hits;
   }
 
   action(y_copyCacheStateToDir, "y", desc="Copy cache state to directory state") {
@@ -1909,7 +1904,7 @@ machine(L2Cache, "Token protocol")
     y_copyCacheStateToDir;
     r_setMRU;
     rr_deallocateL2CacheBlock;
-    uu_profileMiss;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -1922,6 +1917,7 @@ machine(L2Cache, "Token protocol")
   transition(OLSX, L1_GETS, OLSXS) {
     d_sendDataToL1GETS;
     r_setMRU;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -2311,6 +2307,7 @@ machine(L2Cache, "Token protocol")
   transition(SLS, L1_GETS, SLSS ) {
     d_sendDataToL1GETS;
     r_setMRU;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -2333,6 +2330,7 @@ machine(L2Cache, "Token protocol")
   transition(OLS, L1_GETS, OLSS) {
     d_sendDataToL1GETS;
     r_setMRU;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -2361,10 +2359,11 @@ machine(L2Cache, "Token protocol")
     i_allocateTBE;
     // should count 0 of course
     h_countLocalSharersExceptRequestor;
-    d_sendDataToL1GETX
+    d_sendDataToL1GETX;
     y_copyCacheStateToDir;
     rr_deallocateL2CacheBlock;
     s_deallocateTBE;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -2380,12 +2379,14 @@ machine(L2Cache, "Token protocol")
     d_sendDataToL1GETX;
     r_setMRU;
     s_deallocateTBE;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
   transition(S, L1_GETS, SS) {
     d_sendDataToL1GETS;
     r_setMRU;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 
@@ -2397,6 +2398,7 @@ machine(L2Cache, "Token protocol")
   transition(O, L1_GETS, OO) {
     d_sendDataToL1GETS;
     r_setMRU;
+    uu_profileHit;
     o_popL1RequestQueue;
   }
 

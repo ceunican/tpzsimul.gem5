@@ -58,6 +58,7 @@ class LinuxX86SystemBuilder(object):
     def create_system(self):
         mdesc = SysConfig(disk = 'linux-x86.img')
         system = FSConfig.makeLinuxX86System(self.mem_mode,
+                                             SimpleDDR3,
                                              numCPUs=self.num_cpus,
                                              mdesc=mdesc)
         system.kernel = FSConfig.binary('x86_64-vmlinux-2.6.22.9')
@@ -106,3 +107,11 @@ class LinuxX86FSSystemUniprocessor(LinuxX86SystemBuilder,
                                       L2Cache(size='4MB', assoc=8),
                                       PageTableWalkerCache(),
                                       PageTableWalkerCache())
+
+
+class LinuxX86FSSwitcheroo(LinuxX86SystemBuilder, BaseFSSwitcheroo):
+    """Uniprocessor X86 system prepared for CPU switching"""
+
+    def __init__(self, **kwargs):
+        BaseFSSwitcheroo.__init__(self, **kwargs)
+        LinuxX86SystemBuilder.__init__(self)

@@ -43,6 +43,8 @@ m5.util.addToPath('../configs/common')
 import FSConfig
 from Caches import *
 
+_have_kvm_support = 'BaseKvmCPU' in globals()
+
 class BaseSystem(object):
     """Base system builder.
 
@@ -102,14 +104,26 @@ class BaseSystem(object):
         system.l2c.mem_side = system.membus.slave
         return system.toL2Bus
 
-    def init_cpu(self, system, cpu):
+    def init_cpu(self, system, cpu, sha_bus):
         """Initialize a CPU.
 
         Arguments:
           system -- System to work on.
           cpu -- CPU to initialize.
         """
-        cpu.createInterruptController()
+        if not cpu.switched_out:
+            self.create_caches_private(cpu)
+            cpu.createInterruptController()
+            cpu.connectAllPorts(sha_bus if sha_bus != None else system.membus,
+                                system.membus)
+
+    def init_kvm(self, system):
+        """Do KVM-specific system initialization.
+
+        Arguments:
+          system -- System to work on.
+        """
+        system.vm = KvmVM()
 
     def init_system(self, system):
         """Initialize a system.
@@ -119,15 +133,13 @@ class BaseSystem(object):
         """
         system.cpu = self.create_cpus()
 
+        if _have_kvm_support and \
+                any([isinstance(c, BaseKvmCPU) for c in system.cpu]):
+            self.init_kvm(system)
+
         sha_bus = self.create_caches_shared(system)
         for cpu in system.cpu:
-            if not cpu.switched_out:
-                self.create_caches_private(cpu)
-                self.init_cpu(system, cpu)
-                cpu.connectAllPorts(sha_bus if sha_bus != None else system.membus,
-                                    system.membus)
-            else:
-                self.init_cpu(system, cpu)
+            self.init_cpu(system, cpu, sha_bus)
 
     @abstractmethod
     def create_system(self):
