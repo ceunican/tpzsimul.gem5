@@ -73,9 +73,9 @@ class TopazNetwork : public Network
     int getBufferSize() { return m_buffer_size; }
     int getEndpointBandwidth() { return m_endpoint_bandwidth; }
     bool getAdaptiveRouting() {return m_adaptive_routing; }
-
-    void printStats(std::ostream& out) const;
-    void clearStats();
+    
+    void collateStats();
+    void regStats();
     void printConfig(std::ostream& out) const;
 
     int getNumberOfNodes() {return m_nodes;};
@@ -124,18 +124,15 @@ class TopazNetwork : public Network
     int getNumNodes() {return m_nodes; }
 
     // Methods used by Topology to setup the network
-    void makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
-                     LinkDirection direction,
-                     const NetDest& routing_table_entry,
-                     bool isReconfiguration);
+    void makeOutLink(SwitchID src, NodeID dest, BasicLink* link, 
+                     LinkDirection direction, 
+                     const NetDest& routing_table_entry);
     void makeInLink(NodeID src, SwitchID dest, BasicLink* link,
                     LinkDirection direction,
-                    const NetDest& routing_table_entry,
-                    bool isReconfiguration);
+                    const NetDest& routing_table_entry);
     void makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
-                          LinkDirection direction,
-                          const NetDest& routing_table_entry,
-                          bool isReconfiguration);
+                          LinkDirection direction, 
+                          const NetDest& routing_table_entry);
 
     void print(std::ostream& out) const;
 
@@ -188,7 +185,11 @@ class TopazNetwork : public Network
 
     int m_buffer_size;
     int m_endpoint_bandwidth;
-    bool m_adaptive_routing;
+    bool m_adaptive_routing;    
+
+    //Statistical variables
+    Stats::Formula m_msg_counts[MessageSizeType_NUM];
+    Stats::Formula m_msg_bytes[MessageSizeType_NUM];
 };
 
 inline std::ostream&

@@ -44,6 +44,7 @@ using namespace std;
 
 const int PRIORITY_SWITCH_LIMIT = 128;
 
+//xA VPV KEEP COMMENTED!
 // Operator for helper class
 //bool
 //operator<(const LinkOrder& l1, const LinkOrder& l2)
@@ -82,8 +83,9 @@ TopazSwitchFlow::addInPort(const vector<MessageBuffer*>& in)
 
     for (int j = 0; j < m_virtual_networks; j++) {
         m_in[port][j]->setConsumer(this);
-        string desc = csprintf("[Queue from port %s %s %s to TopazSwitchFlow]",
-                                to_string(m_switch_id), to_string(port), to_string(j));
+
+        string desc = csprintf("[Queue from port %s %s %s to PerfectSwitch]",
+            to_string(m_switch_id), to_string(port), to_string(j));
         m_in[port][j]->setDescription(desc);
         m_in[port][j]->setIncomingLink(port);
         m_in[port][j]->setVnet(j);
@@ -127,33 +129,7 @@ TopazSwitchFlow::addOutNetPort(const vector<MessageBuffer*>& out,
     }*/
 }
 
-void
-TopazSwitchFlow::clearRoutingTables()
-{
-    m_routing_table.clear();
-}
 
-void
-TopazSwitchFlow::clearBuffers()
-{
-    for (int i = 0; i < m_in.size(); i++){
-        for(int vnet = 0; vnet < m_virtual_networks; vnet++) {
-            m_in[i][vnet]->clear();
-        }
-    }
-
-    for (int i = 0; i < m_out.size(); i++){
-        for(int vnet = 0; vnet < m_virtual_networks; vnet++) {
-            m_out[i][vnet]->clear();
-        }
-    }
-}
-
-void
-TopazSwitchFlow::reconfigureOutPort(const NetDest& routing_table_entry)
-{
-    m_routing_table.push_back(routing_table_entry);
-}
 
 TopazSwitchFlow::~TopazSwitchFlow()
 {
@@ -593,13 +569,13 @@ TopazSwitchFlow::storeEventInfo(int info)
 
 
 void
-TopazSwitchFlow::printStats(std::ostream& out) const
+TopazSwitchFlow::clearStats()
 {
-  out << "TopazSwitchFlow printStats" << endl;
+  //cout << "TopazSwitchFlow printStats" << endl;
 }
 
 void
-TopazSwitchFlow::clearStats()
+TopazSwitchFlow::collateStats()
 {
 }
 
@@ -611,6 +587,6 @@ TopazSwitchFlow::printConfig(std::ostream& out) const
 void
 TopazSwitchFlow::print(std::ostream& out) const
 {
-  out << "[TopazSwitchFlow " << m_switch_id << "]";
+  cout << "[TopazSwitchFlow " << m_switch_id << "]";
 }
 

@@ -73,11 +73,13 @@ class NoncoherentBus : public BaseBus
   protected:
 
     /**
-     * Declare the two layers of this bus, one for requests and one
+     * Declare the layers of this bus, one vector for requests and one
      * for responses.
      */
-    Layer<SlavePort> reqLayer;
-    Layer<MasterPort> respLayer;
+    typedef Layer<SlavePort,MasterPort> ReqLayer;
+    typedef Layer<MasterPort,SlavePort> RespLayer;
+    std::vector<ReqLayer*> reqLayers;
+    std::vector<RespLayer*> respLayers;
 
     /**
      * Declaration of the non-coherent bus slave port type, one will
@@ -130,12 +132,6 @@ class NoncoherentBus : public BaseBus
         virtual AddrRangeList getAddrRanges() const
         { return bus.getAddrRanges(); }
 
-        /**
-         * Get the maximum block size as seen by the bus.
-         */
-        virtual unsigned deviceBlockSize() const
-        { return bus.deviceBlockSize(); }
-
     };
 
     /**
@@ -175,12 +171,6 @@ class NoncoherentBus : public BaseBus
         virtual void recvRetry()
         { bus.recvRetry(id); }
 
-        /**
-         * Get the maximum block size as seen by the bus.
-         */
-        virtual unsigned deviceBlockSize() const
-        { return bus.deviceBlockSize(); }
-
     };
 
     /** Function called by the port when the bus is recieving a Timing
@@ -207,8 +197,15 @@ class NoncoherentBus : public BaseBus
 
     NoncoherentBus(const NoncoherentBusParams *p);
 
+    virtual ~NoncoherentBus();
+
     unsigned int drain(DrainManager *dm);
 
+    /**
+     * stats
+     */
+    virtual void regStats();
+    Stats::Scalar dataThroughBus;
 };
 
 #endif //__MEM_NONCOHERENT_BUS_HH__

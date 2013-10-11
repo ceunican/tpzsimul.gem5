@@ -80,21 +80,15 @@ class Network : public ClockedObject
 
     virtual void makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
                              LinkDirection direction,
-                             const NetDest& routing_table_entry,
-                             bool isReconfiguration) = 0;
+                             const NetDest& routing_table_entry) = 0;
     virtual void makeInLink(NodeID src, SwitchID dest, BasicLink* link,
                             LinkDirection direction,
-                            const NetDest& routing_table_entry,
-                            bool isReconfiguration) = 0;
+                            const NetDest& routing_table_entry) = 0;
     virtual void makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
                                   LinkDirection direction,
-                                  const NetDest& routing_table_entry,
-                                  bool isReconfiguration) = 0;
+                                  const NetDest& routing_table_entry) = 0;
 
-    virtual void reset() = 0;
-
-    virtual void printStats(std::ostream& out) const = 0;
-    virtual void clearStats() = 0;
+    virtual void collateStats() = 0;
     virtual void print(std::ostream& out) const = 0;
 
     //Required to let Topaz be aware of ruby node mapping
@@ -115,13 +109,30 @@ class Network : public ClockedObject
     Network(const Network& obj);
     Network& operator=(const Network& obj);
 
-  protected:
-    const std::string m_name;
-    int m_nodes;
+    uint32_t m_nodes;
     static uint32_t m_virtual_networks;
     Topology* m_topology_ptr;
     static uint32_t m_control_msg_size;
     static uint32_t m_data_msg_size;
+
+  private:
+    //! Callback class used for collating statistics from all the
+    //! controller of this type.
+    class StatsCallback : public Callback
+    {
+      private:
+        Network *ctr;
+
+      public:
+        virtual ~StatsCallback() {}
+
+        StatsCallback(Network *_ctr)
+            : ctr(_ctr)
+        {
+        }
+
+        void process() {ctr->collateStats();}
+    };
 };
 
 inline std::ostream&

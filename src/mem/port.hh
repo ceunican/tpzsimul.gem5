@@ -251,7 +251,7 @@ class MasterPort : public BaseMasterPort
      * Send a retry to the slave port that previously attempted a
      * sendTimingResp to this master port and failed.
      */
-    void sendRetry();
+    virtual void sendRetry();
 
     /**
      * Determine if this master port is snooping or not. The default
@@ -263,17 +263,6 @@ class MasterPort : public BaseMasterPort
      * @return true if the port should be considered a snooper
      */
     virtual bool isSnooping() const { return false; }
-
-    /**
-     * Called by a peer port in order to determine the block size of
-     * the owner of this port.
-     */
-    virtual unsigned deviceBlockSize() const { return 0; }
-
-    /** Called by the associated device if it wishes to find out the blocksize
-        of the device on attached to the peer port.
-    */
-    unsigned peerBlockSize() const;
 
     /**
      * Get the address ranges of the connected slave port.
@@ -404,17 +393,6 @@ class SlavePort : public BaseSlavePort
      * failed.
      */
     void sendRetry();
-
-    /**
-     * Called by a peer port in order to determine the block size of
-     * the owner of this port.
-     */
-    virtual unsigned deviceBlockSize() const { return 0; }
-
-    /** Called by the associated device if it wishes to find out the blocksize
-        of the device on attached to the peer port.
-    */
-    unsigned peerBlockSize() const;
 
     /**
      * Find out if the peer master port is snooping or not.

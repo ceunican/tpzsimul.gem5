@@ -268,6 +268,11 @@ namespace X86ISA
         tc->setMiscReg(MISCREG_DR6, 0x00000000ffff0ff0ULL);
         tc->setMiscReg(MISCREG_DR7, 0x0000000000000400ULL);
 
+        tc->setMiscReg(MISCREG_MXCSR, 0x1f80);
+
+        // Flag all elements on the x87 stack as empty.
+        tc->setMiscReg(MISCREG_FTW, 0xFFFF);
+
         // Update the handy M5 Reg.
         tc->setMiscReg(MISCREG_M5_REG, 0);
         MicroPC entry = X86ISAInst::RomLabels::extern_label_initIntHalt;

@@ -48,21 +48,25 @@
 
 #include <vector>
 
+// Before we do anything else, check if this build is the NULL ISA,
+// and if so stop here
+#include "config/the_isa.hh"
+#if THE_ISA == NULL_ISA
+#include "arch/null/cpu_dummy.hh"
+#else
 #include "arch/interrupts.hh"
 #include "arch/isa_traits.hh"
 #include "arch/microcode_rom.hh"
 #include "base/statistics.hh"
-#include "config/the_isa.hh"
 #include "mem/mem_object.hh"
 #include "sim/eventq.hh"
 #include "sim/full_system.hh"
 #include "sim/insttracer.hh"
+#include "sim/system.hh"
 
 struct BaseCPUParams;
-class BranchPred;
 class CheckerCPU;
 class ThreadContext;
-class System;
 
 class CPUProgressEvent : public Event
 {
@@ -116,6 +120,9 @@ class BaseCPU : public MemObject
 
     /** Is the CPU switched out or active? */
     bool _switchedOut;
+
+    /** Cache the cache line size that we get from the system */
+    const unsigned int _cacheLineSize;
 
   public:
 
@@ -343,6 +350,11 @@ class BaseCPU : public MemObject
     System *system;
 
     /**
+     * Get the cache line size of the system.
+     */
+    inline unsigned int cacheLineSize() const { return _cacheLineSize; }
+
+    /**
      * Serialize this object to the given output stream.
      *
      * @note CPU models should normally overload the serializeThread()
@@ -385,15 +397,39 @@ class BaseCPU : public MemObject
     virtual void unserializeThread(Checkpoint *cp, const std::string &section,
                                    ThreadID tid) {};
 
-    /**
-     * Return pointer to CPU's branch predictor (NULL if none).
-     * @return Branch predictor pointer.
-     */
-    virtual BranchPred *getBranchPred() { return NULL; };
-
     virtual Counter totalInsts() const = 0;
 
     virtual Counter totalOps() const = 0;
+
+    /**
+     * Schedule an event that exits the simulation loops after a
+     * predefined number of instructions.
+     *
+     * This method is usually called from the configuration script to
+     * get an exit event some time in the future. It is typically used
+     * when the script wants to simulate for a specific number of
+     * instructions rather than ticks.
+     *
+     * @param tid Thread monitor.
+     * @param insts Number of instructions into the future.
+     * @param cause Cause to signal in the exit event.
+     */
+    void scheduleInstStop(ThreadID tid, Counter insts, const char *cause);
+
+    /**
+     * Schedule an event that exits the simulation loops after a
+     * predefined number of load operations.
+     *
+     * This method is usually called from the configuration script to
+     * get an exit event some time in the future. It is typically used
+     * when the script wants to simulate for a specific number of
+     * loads rather than ticks.
+     *
+     * @param tid Thread monitor.
+     * @param loads Number of load instructions into the future.
+     * @param cause Cause to signal in the exit event.
+     */
+    void scheduleLoadStop(ThreadID tid, Counter loads, const char *cause);
 
     // Function tracing
   private:
@@ -444,5 +480,7 @@ class BaseCPU : public MemObject
     Stats::Scalar numWorkItemsStarted;
     Stats::Scalar numWorkItemsCompleted;
 };
+
+#endif // THE_ISA == NULL_ISA
 
 #endif // __CPU_BASE_HH__

@@ -109,7 +109,7 @@ if len(treespec) < 1:
      sys.exit(1)
 
 # define prototype L1 cache
-proto_l1 = BaseCache(size = '32kB', assoc = 4, block_size = block_size,
+proto_l1 = BaseCache(size = '32kB', assoc = 4,
                      hit_latency = '1ns', response_latency = '1ns',
                      tgts_per_mshr = 8)
 
@@ -143,14 +143,16 @@ for scale in treespec[:-2]:
 # system simulated
 system = System(funcmem = SimpleMemory(in_addr_map = False),
                 funcbus = NoncoherentBus(),
-                physmem = SimpleMemory(latency = "100ns"))
+                physmem = SimpleMemory(latency = "100ns"),
+                cache_line_size = block_size)
+system.clk_domain = SrcClockDomain(clock =  options.sys_clock)
 
 def make_level(spec, prototypes, attach_obj, attach_port):
      fanout = spec[0]
      parent = attach_obj # use attach obj as config parent too
      if len(spec) > 1 and (fanout > 1 or options.force_bus):
           port = getattr(attach_obj, attach_port)
-          new_bus = CoherentBus(clock="500MHz", width=16)
+          new_bus = CoherentBus(width=16)
           if (port.role == 'MASTER'):
                new_bus.slave = port
                attach_port = "master"

@@ -51,6 +51,7 @@
 #ifndef __MEM_COHERENT_BUS_HH__
 #define __MEM_COHERENT_BUS_HH__
 
+#include "base/hashmap.hh"
 #include "mem/bus.hh"
 #include "params/CoherentBus.hh"
 
@@ -71,12 +72,15 @@ class CoherentBus : public BaseBus
   protected:
 
     /**
-     * Declare the three layers of this bus, one for requests, one
+     * Declare the layers of this bus, one vector for requests, one
      * for responses, and one for snoop responses
      */
-    Layer<SlavePort> reqLayer;
-    Layer<MasterPort> respLayer;
-    Layer<SlavePort> snoopRespLayer;
+    typedef Layer<SlavePort,MasterPort> ReqLayer;
+    typedef Layer<MasterPort,SlavePort> RespLayer;
+    typedef Layer<SlavePort,MasterPort> SnoopLayer;
+    std::vector<ReqLayer*> reqLayers;
+    std::vector<RespLayer*> respLayers;
+    std::vector<SnoopLayer*> snoopLayers;
 
     /**
      * Declaration of the coherent bus slave port type, one will be
@@ -135,12 +139,6 @@ class CoherentBus : public BaseBus
          */
         virtual AddrRangeList getAddrRanges() const
         { return bus.getAddrRanges(); }
-
-        /**
-         * Get the maximum block size as seen by the bus.
-         */
-        virtual unsigned deviceBlockSize() const
-        { return bus.deviceBlockSize(); }
 
     };
 
@@ -207,13 +205,55 @@ class CoherentBus : public BaseBus
         virtual void recvRetry()
         { bus.recvRetry(id); }
 
-        // Ask the bus to ask everyone on the bus what their block size is and
-        // take the max of it. This might need to be changed a bit if we ever
-        // support multiple block sizes.
-        virtual unsigned deviceBlockSize() const
-        { return bus.deviceBlockSize(); }
+    };
+
+    /**
+     * Internal class to bridge between an incoming snoop response
+     * from a slave port and forwarding it through an outgoing slave
+     * port. It is effectively a dangling master port.
+     */
+    class SnoopRespPort : public MasterPort
+    {
+
+      private:
+
+        /** The port which we mirror internally. */
+        SlavePort& slavePort;
+
+      public:
+
+        /**
+         * Create a snoop response port that mirrors a given slave port.
+         */
+        SnoopRespPort(SlavePort& slave_port, CoherentBus& _bus) :
+            MasterPort(slave_port.name() + ".snoopRespPort", &_bus),
+            slavePort(slave_port) { }
+
+        /**
+         * Override the sending of retries and pass them on through
+         * the mirrored slave port.
+         */
+        void sendRetry() {
+            slavePort.sendRetry();
+        }
+
+        /**
+         * Provided as necessary.
+         */
+        void recvRetry() { panic("SnoopRespPort should never see retry\n"); }
+
+        /**
+         * Provided as necessary.
+         */
+        bool recvTimingResp(PacketPtr pkt)
+        {
+            panic("SnoopRespPort should never see timing response\n");
+            return false;
+        }
 
     };
+
+    std::vector<SnoopRespPort*> snoopRespPorts;
 
     std::vector<SlavePort*> snoopPorts;
 
@@ -222,7 +262,7 @@ class CoherentBus : public BaseBus
      * we generated and which ones were merely forwarded. This is used
      * in the coherent bus when coherency responses come back.
      */
-    std::set<RequestPtr> outstandingReq;
+    m5::hash_set<RequestPtr> outstandingReq;
 
     /**
      * Keep a pointer to the system to be allow to querying memory system
@@ -299,13 +339,20 @@ class CoherentBus : public BaseBus
      */
     void forwardFunctional(PacketPtr pkt, PortID exclude_slave_port_id);
 
+    Stats::Scalar dataThroughBus;
+    Stats::Scalar snoopDataThroughBus;
+
   public:
 
     virtual void init();
 
     CoherentBus(const CoherentBusParams *p);
 
+    virtual ~CoherentBus();
+
     unsigned int drain(DrainManager *dm);
+
+    virtual void regStats();
 };
 
 #endif //__MEM_COHERENT_BUS_HH__

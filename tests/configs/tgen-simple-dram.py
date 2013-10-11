@@ -48,8 +48,11 @@ require_sim_object("CommMonitor")
 cpu = TrafficGen(config_file = "tests/quick/se/70.tgen/tgen-simple-dram.cfg")
 
 # system simulated
-system = System(cpu = cpu, physmem = SimpleDDR3(),
-                membus = NoncoherentBus(clock="1GHz", width = 16))
+system = System(cpu = cpu, physmem = DDR3_1600_x64(),
+                membus = NoncoherentBus(width = 16),
+                clk_domain = SrcClockDomain(clock = '1GHz',
+                                            voltage_domain =
+                                            VoltageDomain()))
 
 # add a communication monitor
 system.monitor = CommMonitor()

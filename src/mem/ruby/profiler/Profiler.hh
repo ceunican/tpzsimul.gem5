@@ -52,7 +52,6 @@
 
 #include "base/hashmap.hh"
 #include "mem/protocol/AccessType.hh"
-#include "mem/protocol/GenericMachineType.hh"
 #include "mem/protocol/PrefetchBit.hh"
 #include "mem/protocol/RubyAccessMode.hh"
 #include "mem/protocol/RubyRequestType.hh"
@@ -108,29 +107,9 @@ class Profiler : public SimObject
         m_average_latency_estimate.add(latency);
     }
 
-    void recordPrediction(bool wasGood, bool wasPredicted);
-
-    void startTransaction(int cpu);
-    void endTransaction(int cpu);
-    void profilePFWait(Cycles waitTime);
-
     void controllerBusy(MachineID machID);
     void bankBusy();
-
-    void missLatency(Cycles t, RubyRequestType type,
-                     const GenericMachineType respondingMach);
-
-    void missLatencyWcc(Cycles issuedTime, Cycles initialRequestTime,
-                        Cycles forwardRequestTime, Cycles firstResponseTime,
-                        Cycles completionTime);
     
-    void missLatencyDir(Cycles issuedTime, Cycles initialRequestTime,
-                        Cycles forwardRequestTime, Cycles firstResponseTime,
-                        Cycles completionTime);
-    
-    void swPrefetchLatency(Cycles t, RubyRequestType type,
-                           const GenericMachineType respondingMach);
-
     void print(std::ostream& out) const;
 
     void rubyWatch(int proc);
@@ -147,6 +126,7 @@ class Profiler : public SimObject
     void printRequestProfile(std::ostream &out) const;
     void printDelayProfile(std::ostream &out) const;
     void printOutstandingReqProfile(std::ostream &out) const;
+    void printMissLatencyProfile(std::ostream &out) const;
 
   private:
     // Private copy constructor and assignment operator
@@ -156,49 +136,16 @@ class Profiler : public SimObject
     AddressProfiler* m_address_profiler_ptr;
     AddressProfiler* m_inst_profiler_ptr;
 
-    std::vector<int64> m_instructions_executed_at_start;
-    std::vector<int64> m_cycles_executed_at_start;
-
-    std::ostream* m_periodic_output_file_ptr;
-    int64_t m_stats_period;
-
     Cycles m_ruby_start;
     time_t m_real_time_start_time;
 
     int64_t m_busyBankCount;
-    Histogram m_multicast_retry_histogram;
-
-    Histogram m_filter_action_histogram;
-    Histogram m_tbeProfile;
 
     Histogram m_read_sharing_histogram;
     Histogram m_write_sharing_histogram;
     Histogram m_all_sharing_histogram;
     int64 m_cache_to_cache;
     int64 m_memory_to_cache;
-
-    Histogram m_prefetchWaitHistogram;
-
-    std::vector<Histogram> m_missLatencyHistograms;
-    std::vector<Histogram> m_machLatencyHistograms;
-    std::vector< std::vector<Histogram> > m_missMachLatencyHistograms;
-    Histogram m_wCCIssueToInitialRequestHistogram;
-    Histogram m_wCCInitialRequestToForwardRequestHistogram;
-    Histogram m_wCCForwardRequestToFirstResponseHistogram;
-    Histogram m_wCCFirstResponseToCompleteHistogram;
-    int64 m_wCCIncompleteTimes;
-    Histogram m_dirIssueToInitialRequestHistogram;
-    Histogram m_dirInitialRequestToForwardRequestHistogram;
-    Histogram m_dirForwardRequestToFirstResponseHistogram;
-    Histogram m_dirFirstResponseToCompleteHistogram;
-    int64 m_dirIncompleteTimes;
-
-    Histogram m_allMissLatencyHistogram;
-
-    Histogram m_allSWPrefetchLatencyHistogram;
-    Histogram m_SWPrefetchL2MissLatencyHistogram;
-    std::vector<Histogram> m_SWPrefetchLatencyHistograms;
-    std::vector<Histogram> m_SWPrefetchMachLatencyHistograms;
 
     Histogram m_average_latency_estimate;
     m5::hash_set<Address> m_watch_address_set;
@@ -208,20 +155,6 @@ class Profiler : public SimObject
     bool m_all_instructions;
 
     int m_num_of_sequencers;
-
-  protected:
-    class ProfileEvent : public Event
-    {
-        public:
-            ProfileEvent(Profiler *_profiler)
-            {
-                profiler = _profiler;
-            }
-        private:
-            void process() { profiler->wakeup(); }
-            Profiler *profiler;
-    };
-    ProfileEvent m_event;
 };
 
 inline std::ostream&

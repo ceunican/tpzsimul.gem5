@@ -52,12 +52,12 @@
 #define __MEM_BUS_HH__
 
 #include <deque>
-#include <set>
 
 #include "base/addr_range_map.hh"
 #include "base/types.hh"
 #include "mem/mem_object.hh"
 #include "params/BaseBus.hh"
+#include "sim/stats.hh"
 
 /**
  * The base bus contains the common elements of the non-coherent and
@@ -93,7 +93,7 @@ class BaseBus : public MemObject
      * a request layer has a retry list containing slave ports,
      * whereas a response layer holds master ports.
      */
-    template <typename PortClass>
+    template <typename SrcType, typename DstType>
     class Layer : public Drainable
     {
 
@@ -103,11 +103,11 @@ class BaseBus : public MemObject
          * Create a bus layer and give it a name. The bus layer uses
          * the bus an event manager.
          *
+         * @param _port destination port the layer converges at
          * @param _bus the bus this layer belongs to
          * @param _name the layer's name
-         * @param num_dest_ports number of destination ports
          */
-        Layer(BaseBus& _bus, const std::string& _name, uint16_t num_dest_ports);
+        Layer(DstType& _port, BaseBus& _bus, const std::string& _name);
 
         /**
          * Drain according to the normal semantics, so that the bus
@@ -130,15 +130,13 @@ class BaseBus : public MemObject
          * Determine if the bus layer accepts a packet from a specific
          * port. If not, the port in question is also added to the
          * retry list. In either case the state of the layer is
-         * updated accordingly. To ignore checking the destination
-         * port (used by snoops), pass InvalidPortID.
+         * updated accordingly.
          *
          * @param port Source port presenting the packet
-         * @param dest_port_id Destination port id
          *
          * @return True if the bus layer accepts the packet
          */
-        bool tryTiming(PortClass* port, PortID dest_port_id);
+        bool tryTiming(SrcType* src_port);
 
         /**
          * Deal with a destination port accepting a packet by potentially
@@ -156,11 +154,9 @@ class BaseBus : public MemObject
          * accordingly.
          *
          * @param src_port Source port
-         * @param dest_port_id Destination port id
          * @param busy_time Time to spend as a result of a failed send
          */
-        void failedTiming(PortClass* src_port, PortID dest_port_id,
-                          Tick busy_time);
+        void failedTiming(SrcType* src_port, Tick busy_time);
 
         /** Occupy the bus layer until until */
         void occupyLayer(Tick until);
@@ -175,12 +171,18 @@ class BaseBus : public MemObject
          * Handle a retry from a neighbouring module. This wraps
          * retryWaiting by verifying that there are ports waiting
          * before calling retryWaiting.
-         *
-         * @param port_id Id of the port that received the retry
          */
-        void recvRetry(PortID port_id);
+        void recvRetry();
+
+        /**
+         * Register stats for the layer
+         */
+        void regStats();
 
       private:
+
+        /** The destination port this layer converges at. */
+        DstType& port;
 
         /** The bus this layer is a part of. */
         BaseBus& bus;
@@ -216,7 +218,7 @@ class BaseBus : public MemObject
          * A deque of ports that retry should be called on because
          * the original send was delayed due to a busy layer.
          */
-        std::deque<PortClass*> waitingForLayer;
+        std::deque<SrcType*> waitingForLayer;
 
         /**
          * Port that we are currently in the process of telling to
@@ -224,18 +226,13 @@ class BaseBus : public MemObject
          * transaction. This is a valid port when in the retry state,
          * and NULL when in busy or idle.
          */
-        PortClass* retryingPort;
+        SrcType* retryingPort;
 
         /**
-         * A vector that tracks who is waiting for the retry when
-         * receiving it from a peer. The vector indices are port ids
-         * of the outgoing ports for the specific layer. The values
-         * are the incoming ports that tried to forward something to
-         * the outgoing port, but was told to wait and is now waiting
-         * for a retry. If no port is waiting NULL is stored on the
-         * location in question.
+         * Track who is waiting for the retry when receiving it from a
+         * peer. If no port is waiting NULL is stored.
          */
-        std::vector<PortClass*> waitingForPeer;
+        SrcType* waitingForPeer;
 
         /**
          * Release the bus layer after being occupied and return to an
@@ -246,6 +243,14 @@ class BaseBus : public MemObject
 
         /** event used to schedule a release of the layer */
         EventWrapper<Layer, &Layer::releaseLayer> releaseEvent;
+
+        /**
+         * Stats for occupancy and utilization. These stats capture
+         * the time the bus spends in the busy state and are thus only
+         * relevant when the memory system is in timing mode.
+         */
+        Stats::Scalar occupancy;
+        Stats::Formula utilization;
 
     };
 
@@ -340,15 +345,6 @@ class BaseBus : public MemObject
     void calcPacketTiming(PacketPtr pkt);
 
     /**
-     * Ask everyone on the bus what their size is and determine the
-     * bus size as either the maximum, or if no device specifies a
-     * block size return the default.
-     *
-     * @return the max of all the sizes or the default if none is set
-     */
-    unsigned deviceBlockSize() const;
-
-    /**
      * Remember for each of the master ports of the bus if we got an
      * address range from the connected slave. For convenience, also
      * keep track of if we got ranges from all the slave modules or
@@ -376,11 +372,23 @@ class BaseBus : public MemObject
        addresses not handled by another port to default device. */
     const bool useDefaultRange;
 
-    uint32_t blockSize;
-
     BaseBus(const BaseBusParams *p);
 
     virtual ~BaseBus();
+
+    /**
+     * Stats for transaction distribution and data passing through the
+     * bus. The transaction distribution is globally counting
+     * different types of commands. The packet count and total packet
+     * size are two-dimensional vectors that are indexed by the bus
+     * slave port and master port id (thus the neighbouring master and
+     * neighbouring slave), summing up both directions (request and
+     * response).
+     */
+    Stats::Formula throughput;
+    Stats::Vector transDist;
+    Stats::Vector2d pktCount;
+    Stats::Vector2d totPktSize;
 
   public:
 
@@ -393,6 +401,8 @@ class BaseBus : public MemObject
                                 PortID idx = InvalidPortID);
 
     virtual unsigned int drain(DrainManager *dm) = 0;
+
+    virtual void regStats();
 
 };
 

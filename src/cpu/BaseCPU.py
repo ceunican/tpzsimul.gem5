@@ -51,7 +51,7 @@ from Bus import CoherentBus
 from InstTracer import InstTracer
 from ExeTracer import ExeTracer
 from MemObject import MemObject
-from BranchPredictor import BranchPredictor
+from ClockDomain import *
 
 default_tracer = ExeTracer()
 
@@ -99,6 +99,8 @@ class BaseCPU(MemObject):
     bool switchedOut();
     void flushTLBs();
     Counter totalInsts();
+    void scheduleInstStop(ThreadID tid, Counter insts, const char *cause);
+    void scheduleLoadStop(ThreadID tid, Counter loads, const char *cause);
 ''')
 
     @classmethod
@@ -207,8 +209,6 @@ class BaseCPU(MemObject):
     dcache_port = MasterPort("Data Port")
     _cached_ports = ['icache_port', 'dcache_port']
 
-    branchPred = Param.BranchPredictor(NULL, "Branch Predictor")
-
     if buildEnv['TARGET_ISA'] in ['x86', 'arm']:
         _cached_ports += ["itb.walker.port", "dtb.walker.port"]
 
@@ -224,7 +224,10 @@ class BaseCPU(MemObject):
         elif buildEnv['TARGET_ISA'] == 'alpha':
             self.interrupts = AlphaInterrupts()
         elif buildEnv['TARGET_ISA'] == 'x86':
-            self.interrupts = X86LocalApic(clock = Parent.clock * 16,
+            self.apic_clk_domain = DerivedClockDomain(clk_domain =
+                                                      Parent.clk_domain,
+                                                      clk_divider = 16)
+            self.interrupts = X86LocalApic(clk_domain = self.apic_clk_domain,
                                            pio_addr=0x2000000000000000)
             _localApic = self.interrupts
         elif buildEnv['TARGET_ISA'] == 'mips':
@@ -279,10 +282,10 @@ class BaseCPU(MemObject):
 
     def addTwoLevelCacheHierarchy(self, ic, dc, l2c, iwc = None, dwc = None):
         self.addPrivateSplitL1Caches(ic, dc, iwc, dwc)
-        # Override the default bus clock of 1 GHz and uses the CPU
-        # clock for the L1-to-L2 bus, and also set a width of 32 bytes
-        # (256-bits), which is four times that of the default bus.
-        self.toL2Bus = CoherentBus(clock = Parent.clock, width = 32)
+        # Set a width of 32 bytes (256-bits), which is four times that
+        # of the default bus. The clock of the CPU is inherited by
+        # default.
+        self.toL2Bus = CoherentBus(width = 32)
         self.connectCachedPorts(self.toL2Bus)
         self.l2cache = l2c
         self.toL2Bus.master = self.l2cache.cpu_side

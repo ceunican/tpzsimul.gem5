@@ -95,12 +95,11 @@ namespace X86ISA
         void demapPage(Addr va, uint64_t asn);
 
       protected:
-        int size;
+        uint32_t size;
 
         TlbEntry * tlb;
 
         EntryList freeList;
-        EntryList entryList;
 
         TlbEntryTrie trie;
         uint64_t lruSeq;
@@ -128,6 +127,22 @@ namespace X86ISA
          *  not support Checker model at the moment
          */
         Fault translateFunctional(RequestPtr req, ThreadContext *tc, Mode mode);
+
+        /**
+         * Do post-translation physical address finalization.
+         *
+         * Some addresses, for example requests going to the APIC,
+         * need post-translation updates. Such physical addresses are
+         * remapped into a "magic" part of the physical address space
+         * by this method.
+         *
+         * @param req Request to updated in-place.
+         * @param tc Thread context that created the request.
+         * @param mode Request type (read/write/execute).
+         * @return A fault on failure, NoFault otherwise.
+         */
+        Fault finalizePhysical(RequestPtr req, ThreadContext *tc,
+                               Mode mode) const;
 
         TlbEntry * insert(Addr vpn, TlbEntry &entry);
 

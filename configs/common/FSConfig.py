@@ -55,7 +55,7 @@ class MemBus(CoherentBus):
     default = Self.badaddr_responder.pio
 
 
-def makeLinuxAlphaSystem(mem_mode, MemClass, mdesc = None):
+def makeLinuxAlphaSystem(mem_mode, mdesc = None):
     IO_address_space_base = 0x80000000000
     class BaseTsunami(Tsunami):
         ethernet = NSGigE(pci_bus=0, pci_dev=1, pci_func=0)
@@ -73,11 +73,9 @@ def makeLinuxAlphaSystem(mem_mode, MemClass, mdesc = None):
     # base address (including the PCI config space)
     self.bridge = Bridge(delay='50ns',
                          ranges = [AddrRange(IO_address_space_base, Addr.max)])
-    self.physmem = MemClass(range = AddrRange(mdesc.mem()))
-    self.mem_ranges = [self.physmem.range]
+    self.mem_ranges = [AddrRange(mdesc.mem())]
     self.bridge.master = self.iobus.slave
     self.bridge.slave = self.membus.master
-    self.physmem.port = self.membus.master
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
     self.disk0.childImage(mdesc.disk())
@@ -104,15 +102,13 @@ def makeLinuxAlphaSystem(mem_mode, MemClass, mdesc = None):
 
     return self
 
-def makeLinuxAlphaRubySystem(mem_mode, MemClass, mdesc = None):
+def makeLinuxAlphaRubySystem(mem_mode, mdesc = None):
     class BaseTsunami(Tsunami):
         ethernet = NSGigE(pci_bus=0, pci_dev=1, pci_func=0)
         ide = IdeController(disks=[Parent.disk0, Parent.disk2],
                             pci_func=0, pci_dev=0, pci_bus=0)
-        
-    physmem = MemClass(range = AddrRange(mdesc.mem()))
-    self = LinuxAlphaSystem(physmem = physmem)
-    self.mem_ranges = [self.physmem.range]
+    self = LinuxAlphaSystem()
+    self.mem_ranges = [AddrRange(mdesc.mem())]
     if not mdesc:
         # generic system
         mdesc = SysConfig()
@@ -120,13 +116,6 @@ def makeLinuxAlphaRubySystem(mem_mode, MemClass, mdesc = None):
 
     # Create pio bus to connect all device pio ports to rubymem's pio port
     self.piobus = NoncoherentBus()
-
-    #
-    # Pio functional accesses from devices need direct access to memory
-    # RubyPort currently does support functional accesses.  Therefore provide
-    # the piobus a direct connection to physical memory
-    #
-    self.piobus.master = physmem.port
 
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
@@ -157,7 +146,7 @@ def makeLinuxAlphaRubySystem(mem_mode, MemClass, mdesc = None):
 
     return self
 
-def makeSparcSystem(mem_mode, MemClass, mdesc = None):
+def makeSparcSystem(mem_mode, mdesc = None):
     # Constants from iob.cc and uart8250.cc
     iob_man_addr = 0x9800000000
     uart_pio_size = 8
@@ -180,15 +169,10 @@ def makeSparcSystem(mem_mode, MemClass, mdesc = None):
     self.t1000 = T1000()
     self.t1000.attachOnChipIO(self.membus)
     self.t1000.attachIO(self.iobus)
-    self.physmem = MemClass(range = AddrRange(Addr('1MB'), size = '64MB'),
-                            zero = True)
-    self.physmem2 = MemClass(range = AddrRange(Addr('2GB'), size ='256MB'),
-                             zero = True)
-    self.mem_ranges = [self.physmem.range, self.physmem2.range]
+    self.mem_ranges = [AddrRange(Addr('1MB'), size = '64MB'),
+                       AddrRange(Addr('2GB'), size ='256MB')]
     self.bridge.master = self.iobus.slave
     self.bridge.slave = self.membus.master
-    self.physmem.port = self.membus.master
-    self.physmem2.port = self.membus.master
     self.rom.port = self.membus.master
     self.nvram.port = self.membus.master
     self.hypervisor_desc.port = self.membus.master
@@ -227,7 +211,7 @@ def makeSparcSystem(mem_mode, MemClass, mdesc = None):
 
     return self
 
-def makeArmSystem(mem_mode, machine_type, MemClass, mdesc = None,
+def makeArmSystem(mem_mode, machine_type, mdesc = None,
                   dtb_filename = None, bare_metal=False):
     assert machine_type
 
@@ -275,9 +259,8 @@ def makeArmSystem(mem_mode, machine_type, MemClass, mdesc = None,
     if bare_metal:
         # EOT character on UART will end the simulation
         self.realview.uart.end_on_eot = True
-        self.physmem = MemClass(range = AddrRange(Addr(mdesc.mem())),
-                                zero = True)
-        self.mem_ranges = [self.physmem.range]
+        self.mem_ranges = [AddrRange(self.realview.mem_start_addr,
+                                     size = mdesc.mem())]
     else:
         self.kernel = binary('vmlinux.arm.smp.fb.2.6.38.8')
         if dtb_filename is not None:
@@ -291,11 +274,8 @@ def makeArmSystem(mem_mode, machine_type, MemClass, mdesc = None,
 
         boot_flags = 'earlyprintk console=ttyAMA0 lpj=19988480 norandmaps ' + \
                      'rw loglevel=8 mem=%s root=/dev/sda1' % mdesc.mem()
-
-        self.physmem = MemClass(range = AddrRange(self.realview.mem_start_addr,
-                                                  size = mdesc.mem()),
-                                conf_table_reported = True)
-        self.mem_ranges = [self.physmem.range]
+        self.mem_ranges = [AddrRange(self.realview.mem_start_addr,
+                                     size = mdesc.mem())]
         self.realview.setupBootLoader(self.membus, self, binary)
         self.gic_cpu_addr = self.realview.gic.cpu_addr
         self.flags_addr = self.realview.realview_io.pio_addr + 0x30
@@ -303,8 +283,6 @@ def makeArmSystem(mem_mode, machine_type, MemClass, mdesc = None,
         if mdesc.disk().lower().count('android'):
             boot_flags += " init=/init "
         self.boot_osflags = boot_flags
-
-    self.physmem.port = self.membus.master
     self.realview.attachOnChipIO(self.membus, self.bridge)
     self.realview.attachIO(self.iobus)
     self.intrctrl = IntrControl()
@@ -316,7 +294,7 @@ def makeArmSystem(mem_mode, machine_type, MemClass, mdesc = None,
     return self
 
 
-def makeLinuxMipsSystem(mem_mode, MemClass, mdesc = None):
+def makeLinuxMipsSystem(mem_mode, mdesc = None):
     class BaseMalta(Malta):
         ethernet = NSGigE(pci_bus=0, pci_dev=1, pci_func=0)
         ide = IdeController(disks=[Parent.disk0, Parent.disk2],
@@ -330,11 +308,9 @@ def makeLinuxMipsSystem(mem_mode, MemClass, mdesc = None):
     self.iobus = NoncoherentBus()
     self.membus = MemBus()
     self.bridge = Bridge(delay='50ns')
-    self.physmem = MemClass(range = AddrRange('1GB'))
-    self.mem_ranges = [self.physmem.range]
+    self.mem_ranges = [AddrRange('1GB')]
     self.bridge.master = self.iobus.slave
     self.bridge.slave = self.membus.master
-    self.physmem.port = self.membus.master
     self.disk0 = CowIdeDisk(driveID='master')
     self.disk2 = CowIdeDisk(driveID='master')
     self.disk0.childImage(mdesc.disk())
@@ -372,7 +348,6 @@ def connectX86ClassicSystem(x86_sys, numCPUs):
     APIC_range_size = 1 << 12;
 
     x86_sys.membus = MemBus()
-    x86_sys.physmem.port = x86_sys.membus.master
 
     # North Bridge
     x86_sys.iobus = NoncoherentBus()
@@ -412,19 +387,13 @@ def connectX86RubySystem(x86_sys):
     # North Bridge
     x86_sys.piobus = NoncoherentBus()
 
-    #
-    # Pio functional accesses from devices need direct access to memory
-    # RubyPort currently does support functional accesses.  Therefore provide
-    # the piobus a direct connection to physical memory
-    #
-    x86_sys.piobus.master = x86_sys.physmem.port
     # add the ide to the list of dma devices that later need to attach to
     # dma controllers
     x86_sys._dma_ports = [x86_sys.pc.south_bridge.ide.dma]
     x86_sys.pc.attachIO(x86_sys.piobus, x86_sys._dma_ports)
 
 
-def makeX86System(mem_mode, MemClass, numCPUs = 1, mdesc = None, self = None,
+def makeX86System(mem_mode, numCPUs = 1, mdesc = None, self = None,
                   Ruby = False):
     if self == None:
         self = X86System()
@@ -437,8 +406,7 @@ def makeX86System(mem_mode, MemClass, numCPUs = 1, mdesc = None, self = None,
     self.mem_mode = mem_mode
 
     # Physical memory
-    self.physmem = MemClass(range = AddrRange(mdesc.mem()))
-    self.mem_ranges = [self.physmem.range]
+    self.mem_ranges = [AddrRange(mdesc.mem())]
 
     # Platform
     self.pc = Pc()
@@ -521,17 +489,16 @@ def makeX86System(mem_mode, MemClass, numCPUs = 1, mdesc = None, self = None,
     self.intel_mp_table.base_entries = base_entries
     self.intel_mp_table.ext_entries = ext_entries
 
-def makeLinuxX86System(mem_mode, MemClass, numCPUs = 1, mdesc = None,
+def makeLinuxX86System(mem_mode, numCPUs = 1, mdesc = None,
                        Ruby = False):
     self = LinuxX86System()
 
     # Build up the x86 system and then specialize it for Linux
-    makeX86System(mem_mode, MemClass, numCPUs, mdesc, self, Ruby)
+    makeX86System(mem_mode, numCPUs, mdesc, self, Ruby)
 
     # We assume below that there's at least 1MB of memory. We'll require 2
     # just to avoid corner cases.
-    phys_mem_size = sum(map(lambda mem: mem.range.size(),
-                            self.memories.unproxy(self)))
+    phys_mem_size = sum(map(lambda r: r.size(), self.mem_ranges))
     assert(phys_mem_size >= 0x200000)
 
     self.e820_table.entries = \
@@ -542,7 +509,10 @@ def makeLinuxX86System(mem_mode, MemClass, numCPUs = 1, mdesc = None,
         # Mark the rest as available
         X86E820Entry(addr = 0x100000,
                 size = '%dB' % (phys_mem_size - 0x100000),
-                range_type = 1)
+                range_type = 1),
+        # Reserve the last 16kB of the 32-bit address space for the
+        # m5op interface
+        X86E820Entry(addr=0xFFFF0000, size='64kB', range_type=2),
         ]
 
     # Command line

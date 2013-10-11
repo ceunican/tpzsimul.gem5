@@ -140,20 +140,9 @@ RubySystem::printStats(ostream& out)
     tm *localTime = localtime(&T);
     char buf[100];
     strftime(buf, 100, "%b/%d/%Y %H:%M:%S", localTime);
-
     out << "Real time: " << buf << endl;
 
     m_profiler_ptr->printStats(out);
-    m_network_ptr->printStats(out);
-
-    for (uint32_t i = 0;i < g_abs_controls.size(); ++i) {
-        for (map<uint32_t, AbstractController *>::iterator it =
-                g_abs_controls[i].begin();
-             it != g_abs_controls[i].end(); ++it) {
-
-            ((*it).second)->printStats(out);
-        }
-    }
 }
 
 void
@@ -419,7 +408,6 @@ void
 RubySystem::resetStats()
 {
     m_profiler_ptr->clearStats();
-    m_network_ptr->clearStats();
     for (uint32_t cntrl = 0; cntrl < m_abs_cntrl_vec.size(); cntrl++) {
         m_abs_cntrl_vec[cntrl]->clearStats();
     }

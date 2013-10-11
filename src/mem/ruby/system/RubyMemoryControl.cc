@@ -221,6 +221,7 @@ RubyMemoryControl::init()
         m_tfaw_count[i] = 0;
     }
 }
+
 void
 RubyMemoryControl::reset()
 {
@@ -280,7 +281,7 @@ RubyMemoryControl::enqueue(const MsgPtr& message, Cycles latency)
 {
     Cycles arrival_time = curCycle() + latency;
     const MemoryMsg* memMess = safe_cast<const MemoryMsg*>(message.get());
-    physical_address_t addr = memMess->getAddress().getAddress();
+    physical_address_t addr = memMess->getAddr().getAddress();
     MemoryRequestType type = memMess->getType();
     bool is_mem_read = (type == MemoryRequestType_MEMORY_READ);
     MemoryNode thisReq(arrival_time, message, addr, is_mem_read, !is_mem_read);
@@ -357,18 +358,6 @@ RubyMemoryControl::setConsumer(Consumer* consumer_ptr)
 void
 RubyMemoryControl::print(ostream& out) const
 {
-}
-
-void
-RubyMemoryControl::clearStats() const
-{
-    m_profiler_ptr->clearStats();
-}
-
-void
-RubyMemoryControl::printStats(ostream& out) const
-{
-    m_profiler_ptr->printStats(out);
 }
 
 // Queue up a completed request to send back to directory
@@ -787,6 +776,12 @@ RubyMemoryControl::functionalWriteBuffers(Packet *pkt)
     }
 
     return num_functional_writes;
+}
+
+void
+RubyMemoryControl::regStats()
+{
+    m_profiler_ptr->regStats();
 }
 
 RubyMemoryControl *

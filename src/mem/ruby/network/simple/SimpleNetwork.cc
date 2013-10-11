@@ -83,7 +83,7 @@ SimpleNetwork::SimpleNetwork(const Params *p)
     for (vector<BasicRouter*>::const_iterator i = p->routers.begin();
          i != p->routers.end(); ++i) {
         Switch* s = safe_cast<Switch*>(*i);
-        m_switch_ptr_vector.push_back(s);
+        m_switches.push_back(s);
         s->init_net_ptr(this);
     }
 }
@@ -96,23 +96,7 @@ SimpleNetwork::init()
     // The topology pointer should have already been initialized in
     // the parent class network constructor.
     assert(m_topology_ptr != NULL);
-    // false because this isn't a reconfiguration
-    m_topology_ptr->createLinks(this, false);
-}
-
-void
-SimpleNetwork::reset()
-{
-    for (int node = 0; node < m_nodes; node++) {
-        for (int j = 0; j < m_virtual_networks; j++) {
-            m_toNetQueues[node][j]->clear();
-            m_fromNetQueues[node][j]->clear();
-        }
-    }
-
-    for(int i = 0; i < m_switch_ptr_vector.size(); i++){
-        m_switch_ptr_vector[i]->clearBuffers();
-    }
+    m_topology_ptr->createLinks(this);
 }
 
 SimpleNetwork::~SimpleNetwork()
@@ -121,7 +105,7 @@ SimpleNetwork::~SimpleNetwork()
         deletePointers(m_toNetQueues[i]);
         deletePointers(m_fromNetQueues[i]);
     }
-    deletePointers(m_switch_ptr_vector);
+    deletePointers(m_switches);
     deletePointers(m_buffers_to_free);
     // delete m_topology_ptr;
 }
@@ -130,56 +114,38 @@ SimpleNetwork::~SimpleNetwork()
 void
 SimpleNetwork::makeOutLink(SwitchID src, NodeID dest, BasicLink* link, 
                            LinkDirection direction, 
-                           const NetDest& routing_table_entry, 
-                           bool isReconfiguration)
+                           const NetDest& routing_table_entry)
 {
     assert(dest < m_nodes);
-    assert(src < m_switch_ptr_vector.size());
-    assert(m_switch_ptr_vector[src] != NULL);
-
-    if (isReconfiguration) {
-        m_switch_ptr_vector[src]->reconfigureOutPort(routing_table_entry);
-        return;
-    }
+    assert(src < m_switches.size());
+    assert(m_switches[src] != NULL);
 
     SimpleExtLink *simple_link = safe_cast<SimpleExtLink*>(link);
 
-    m_switch_ptr_vector[src]->addOutPort(m_fromNetQueues[dest],
+    m_switches[src]->addOutPort(m_fromNetQueues[dest],
                                          routing_table_entry,
                                          simple_link->m_latency,
                                          simple_link->m_bw_multiplier);
 
-    m_endpoint_switches[dest] = m_switch_ptr_vector[src];
+    m_endpoint_switches[dest] = m_switches[src];
 }
 
 // From an endpoint node to a switch
 void
 SimpleNetwork::makeInLink(NodeID src, SwitchID dest, BasicLink* link, 
                           LinkDirection direction, 
-                          const NetDest& routing_table_entry, 
-                          bool isReconfiguration)
+                          const NetDest& routing_table_entry)
 {
     assert(src < m_nodes);
-    if (isReconfiguration) {
-        // do nothing
-        return;
-    }
-
-    m_switch_ptr_vector[dest]->addInPort(m_toNetQueues[src]);
+    m_switches[dest]->addInPort(m_toNetQueues[src]);
 }
 
 // From a switch to a switch
 void
 SimpleNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link, 
                                 LinkDirection direction, 
-                                const NetDest& routing_table_entry,
-                                bool isReconfiguration)
+                                const NetDest& routing_table_entry)
 {
-    if (isReconfiguration) {
-        m_switch_ptr_vector[src]->reconfigureOutPort(routing_table_entry);
-        return;
-    }
-
     // Create a set of new MessageBuffers
     std::vector<MessageBuffer*> queues;
     for (int i = 0; i < m_virtual_networks; i++) {
@@ -196,8 +162,8 @@ SimpleNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
     // Connect it to the two switches
     SimpleIntLink *simple_link = safe_cast<SimpleIntLink*>(link);
 
-    m_switch_ptr_vector[dest]->addInPort(queues);
-    m_switch_ptr_vector[src]->addOutPort(queues, routing_table_entry,
+    m_switches[dest]->addInPort(queues);
+    m_switches[src]->addOutPort(queues, routing_table_entry,
                                          simple_link->m_latency, 
                                          simple_link->m_bw_multiplier);
 }
@@ -240,76 +206,36 @@ SimpleNetwork::getThrottles(NodeID id) const
 }
 
 void
-SimpleNetwork::printStats(ostream& out) const
+SimpleNetwork::regStats()
 {
-    out << endl;
-    out << "Network Stats" << endl;
-    out << "-------------" << endl;
-    out << endl;
+    for (MessageSizeType type = MessageSizeType_FIRST;
+         type < MessageSizeType_NUM; ++type) {
+        m_msg_counts[(unsigned int) type]
+            .name(name() + ".msg_count." + MessageSizeType_to_string(type))
+            .flags(Stats::nozero)
+            ;
+        m_msg_bytes[(unsigned int) type]
+            .name(name() + ".msg_byte." + MessageSizeType_to_string(type))
+            .flags(Stats::nozero)
+            ;
 
-    //
-    // Determine total counts before printing out each switch's stats
-    //
-    std::vector<uint64> total_msg_counts;
-    total_msg_counts.resize(MessageSizeType_NUM);
-    for (MessageSizeType type = MessageSizeType_FIRST; 
-         type < MessageSizeType_NUM; 
-         ++type) {
-        total_msg_counts[type] = 0;
-    }
-    
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        const std::vector<Throttle*>* throttles = 
-            m_switch_ptr_vector[i]->getThrottles();
-        
-        for (int p = 0; p < throttles->size(); p++) {
-            
-            const std::vector<std::vector<int> >& message_counts = 
-                ((*throttles)[p])->getCounters();
-            
-            for (MessageSizeType type = MessageSizeType_FIRST; 
-                 type < MessageSizeType_NUM; 
-                 ++type) {
+        // Now state what the formula is.
+        for (int i = 0; i < m_switches.size(); i++) {
+            m_msg_counts[(unsigned int) type] +=
+                sum(m_switches[i]->getMsgCount(type));
+        }
 
-                const std::vector<int> &mct = message_counts[type];
-                int sum = accumulate(mct.begin(), mct.end(), 0);
-                total_msg_counts[type] += uint64(sum);
-            }
-        }
-    }
-    uint64 total_msgs = 0;
-    uint64 total_bytes = 0;
-    for (MessageSizeType type = MessageSizeType_FIRST; 
-         type < MessageSizeType_NUM; 
-         ++type) {
-        
-        if (total_msg_counts[type] > 0) {
-            out << "total_msg_count_" << type << ": " << total_msg_counts[type] 
-                << " " << total_msg_counts[type] *
-                uint64(MessageSizeType_to_int(type))
-                << endl;
-            
-            total_msgs += total_msg_counts[type];
-            
-            total_bytes += total_msg_counts[type] * 
-                uint64(MessageSizeType_to_int(type));
-        }
-    }
-    
-    out << "total_msgs: " << total_msgs 
-        << " total_bytes: " << total_bytes << endl;
-    
-    out << endl;
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        m_switch_ptr_vector[i]->printStats(out);
+        m_msg_bytes[(unsigned int) type] =
+            m_msg_counts[(unsigned int) type] * Stats::constant(
+                    Network::MessageSizeType_to_int(type));
     }
 }
 
 void
-SimpleNetwork::clearStats()
+SimpleNetwork::collateStats()
 {
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        m_switch_ptr_vector[i]->clearStats();
+    for (int i = 0; i < m_switches.size(); i++) {
+        m_switches[i]->collateStats();
     }
 }
 
@@ -333,8 +259,8 @@ SimpleNetworkParams::create()
 bool
 SimpleNetwork::functionalRead(Packet *pkt)
 {
-    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        if (m_switch_ptr_vector[i]->functionalRead(pkt)) {
+    for (unsigned int i = 0; i < m_switches.size(); i++) {
+        if (m_switches[i]->functionalRead(pkt)) {
             return true;
         }
     }
@@ -353,8 +279,8 @@ SimpleNetwork::functionalWrite(Packet *pkt)
 {
     uint32_t num_functional_writes = 0;
 
-    for (unsigned int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        num_functional_writes += m_switch_ptr_vector[i]->functionalWrite(pkt);
+    for (unsigned int i = 0; i < m_switches.size(); i++) {
+        num_functional_writes += m_switches[i]->functionalWrite(pkt);
     }
 
     for (unsigned int i = 0; i < m_buffers_to_free.size(); ++i) {

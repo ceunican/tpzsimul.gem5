@@ -10,6 +10,9 @@
 # unmodified and in its entirety in all distributions of the software,
 # modified or unmodified, in source code or in binary form.
 #
+# Copyright (c) 2013 Amin Farmahini-Farahani
+# All rights reserved.
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
 # met: redistributions of source code must retain the above copyright
@@ -61,38 +64,6 @@ class SimpleDRAM(AbstractMemory):
     type = 'SimpleDRAM'
     cxx_header = "mem/simple_dram.hh"
 
-    @classmethod
-    def makeMultiChannel(cls, nbr_mem_ctrls, mem_start_addr, mem_size,
-                         intlv_high_bit = 11):
-        """
-        Make a multi-channel configuration of this class.
-
-        Create multiple instances of the specific class and set their
-        parameters such that the address range is interleaved between
-        them.
-
-        Returns a list of controllers.
-        """
-        import math
-        from m5.util import fatal
-        intlv_bits = int(math.log(nbr_mem_ctrls, 2))
-        if 2 ** intlv_bits != nbr_mem_ctrls:
-            fatal("Number of memory channels must be a power of 2")
-        mem_ctrls = []
-        for i in xrange(nbr_mem_ctrls):
-            # The default interleaving granularity is tuned to match a
-            # row buffer size of 32 cache lines of 64 bytes (starting
-            # at bit 11 for 2048 bytes). There is unfortunately no
-            # good way of checking this at instantiation time.
-            mem_ctrls.append(cls(range = AddrRange(mem_start_addr,
-                                                   size = mem_size,
-                                                   intlvHighBit = \
-                                                       intlv_high_bit,
-                                                   intlvBits = intlv_bits,
-                                                   intlvMatch = i),
-                                 channels = nbr_mem_ctrls))
-        return mem_ctrls
-
     # single-ported on the system interface side, instantiate with a
     # bus in front of the controller for multiple ports
     port = SlavePort("Slave port")
@@ -110,8 +81,20 @@ class SimpleDRAM(AbstractMemory):
     addr_mapping = Param.AddrMap('RaBaChCo', "Address mapping policy")
     page_policy = Param.PageManage('open', "Page closure management policy")
 
+    # pipeline latency of the controller and PHY, split into a
+    # frontend part and a backend part, with reads and writes serviced
+    # by the queues only seeing the frontend contribution, and reads
+    # serviced by the memory seeing the sum of the two
+    static_frontend_latency = Param.Latency("10ns", "Static frontend latency")
+    static_backend_latency = Param.Latency("10ns", "Static backend latency")
+
     # the physical organisation of the DRAM
-    lines_per_rowbuffer = Param.Unsigned("Row buffer size in cache lines")
+    device_bus_width = Param.Unsigned("data bus width in bits for each DRAM "\
+                                      "device/chip")
+    burst_length = Param.Unsigned("Burst lenght (BL) in beats")
+    device_rowbuffer_size = Param.MemorySize("Page (row buffer) size per "\
+                                           "device/chip")
+    devices_per_rank = Param.Unsigned("Number of devices/chips per rank")
     ranks_per_channel = Param.Unsigned("Number of ranks per channel")
     banks_per_rank = Param.Unsigned("Number of banks per rank")
     # only used for the address mapping as the controller by
@@ -134,9 +117,9 @@ class SimpleDRAM(AbstractMemory):
     # time to complete a burst transfer, typically the burst length
     # divided by two due to the DDR bus, but by making it a parameter
     # it is easier to also evaluate SDR memories like WideIO.
-    # This parameter has to account for bus width and burst length.
-    # Adjustment also necessary if cache line size is greater than
-    # data size read/written by one full burst.
+    # This parameter has to account for burst length.
+    # Read/Write requests with data size larger than one full burst are broken
+    # down into multiple requests in the SimpleDRAM controller
     tBURST = Param.Latency("Burst duration (for DDR burst length / 2 cycles)")
 
     # time taken to complete one refresh cycle (N rows in all banks)
@@ -163,16 +146,22 @@ class SimpleDRAM(AbstractMemory):
 
     # tRC  - assumed to be 4 * tRP
 
-    # burst length for an access derived from peerBlockSize
+# A single DDR3 x64 interface (one command and address bus), with
+# default timings based on DDR3-1600 4 Gbit parts in an 8x8
+# configuration, which would amount to 4 Gbyte of memory.
+class DDR3_1600_x64(SimpleDRAM):
+    # 8x8 configuration, 8 devices each with an 8-bit interface
+    device_bus_width = 8
 
-# High-level model of a single DDR3 x64 interface (one command and
-# address bus), with default timings based on a DDR3-1600 4 Gbit part,
-# which would amount to 4 Gbyte of memory in 8x8 or 8 GByte in 16x4
-# configuration.
-class SimpleDDR3(SimpleDRAM):
-    # Assuming 64 byte cache lines, use a 2kbyte page size, this
-    # depends on the memory density
-    lines_per_rowbuffer = 32
+    # DDR3 is a BL8 device
+    burst_length = 8
+
+    # Each device has a page (row buffer) size of 1KB
+    # (this depends on the memory density)
+    device_rowbuffer_size = '1kB'
+
+    # 8x8 configuration, so 8 devices
+    devices_per_rank = 8
 
     # Use two ranks
     ranks_per_channel = 2
@@ -185,11 +174,11 @@ class SimpleDDR3(SimpleDRAM):
     tCL = '13.75ns'
     tRP = '13.75ns'
 
-    # Assuming 64 byte cache lines, across an x64 (8x8 or 16x4)
-    # interface, translates to BL8, 4 clocks @ 800 MHz
+    # 8 beats across an x64 interface translates to 4 clocks @ 800 MHz.
+    # Note this is a BL8 DDR device.
     tBURST = '5ns'
 
-    # DDR3, 4 Gb has a tRFC of 240 CK and tCK = 1.25 ns
+    # DDR3, 4 Gbit has a tRFC of 240 CK and tCK = 1.25 ns
     tRFC = '300ns'
 
     # DDR3, <=85C, half for >85C
@@ -203,17 +192,25 @@ class SimpleDDR3(SimpleDRAM):
     activation_limit = 4
 
 
-# High-level model of a single LPDDR2-S4 x64 interface (one
-# command/address bus), with default timings based on a LPDDR2-1066
-# 4Gbit part, which whould amount to 1 GByte of memory in 2x32 or
-# 2GByte in 4x16 configuration.
-class SimpleLPDDR2_S4(SimpleDRAM):
-    # Assuming 64 byte cache lines, use a 2kbyte page size, this
-    # depends on the memory density
-    lines_per_rowbuffer = 32
+# A single LPDDR2-S4 x32 interface (one command/address bus), with
+# default timings based on a LPDDR2-1066 4 Gbit part in a 1x32
+# configuration.
+class LPDDR2_S4_1066_x32(SimpleDRAM):
+    # 1x32 configuration, 1 device with a 32-bit interface
+    device_bus_width = 32
 
-    # Use two ranks
-    ranks_per_channel = 2
+    # LPDDR2_S4 is a BL4 and BL8 device
+    burst_length = 8
+
+    # Each device has a page (row buffer) size of 1KB
+    # (this depends on the memory density)
+    device_rowbuffer_size = '1kB'
+
+    # 1x32 configuration, so 1 device
+    devices_per_rank = 1
+
+    # Use a single rank
+    ranks_per_channel = 1
 
     # LPDDR2-S4 has 8 banks in all configurations
     banks_per_rank = 8
@@ -224,31 +221,41 @@ class SimpleLPDDR2_S4(SimpleDRAM):
     # 8 CK read latency, 4 CK write latency @ 533 MHz, 1.876 ns cycle time
     tCL = '15ns'
 
-    # Pre-charge one bank 15 ns and all banks 18 ns
-    tRP = '18ns'
+    # Pre-charge one bank 15 ns (all banks 18 ns)
+    tRP = '15ns'
 
-    # Assuming 64 byte cache lines, across a x64 interface (2x32 or
-    # 4x16), translates to BL8, 4 clocks @ 533 MHz
+    # 8 beats across an x32 DDR interface translates to 4 clocks @ 533 MHz.
+    # Note this is a BL8 DDR device.
+    # Requests larger than 32 bytes are broken down into multiple requests
+    # in the SimpleDRAM controller
     tBURST = '7.5ns'
 
-    # LPDDR2-S4, 4 Gb
+    # LPDDR2-S4, 4 Gbit
     tRFC = '130ns'
     tREFI = '3.9us'
 
     # Irrespective of speed grade, tWTR is 7.5 ns
     tWTR = '7.5ns'
 
-    # Irrespective of size, tFAW is 50 ns
+    # Irrespective of density, tFAW is 50 ns
     tXAW = '50ns'
     activation_limit = 4
 
-# High-level model of a single WideIO x128 interface (one command and
-# address bus), with default timings based on an estimated WIO-200 8
-# Gbit part.
-class SimpleWideIO(SimpleDRAM):
-    # Assuming 64 byte cache lines, use a 4kbyte page size, this
-    # depends on the memory density
-    lines_per_rowbuffer = 64
+# A single WideIO x128 interface (one command and address bus), with
+# default timings based on an estimated WIO-200 8 Gbit part.
+class WideIO_200_x128(SimpleDRAM):
+    # 1x128 configuration, 1 device with a 128-bit interface
+    device_bus_width = 128
+
+    # This is a BL4 device
+    burst_length = 4
+
+    # Each device has a page (row buffer) size of 4KB
+    # (this depends on the memory density)
+    device_rowbuffer_size = '4kB'
+
+    # 1x128 configuration, so 1 device
+    devices_per_rank = 1
 
     # Use one rank for a one-high die stack
     ranks_per_channel = 1
@@ -261,8 +268,8 @@ class SimpleWideIO(SimpleDRAM):
     tCL = '18ns'
     tRP = '18ns'
 
-    # Assuming 64 byte cache lines, across an x128 SDR interface,
-    # translates to BL4, 4 clocks @ 200 MHz
+    # 4 beats across an x128 SDR interface translates to 4 clocks @ 200 MHz.
+    # Note this is a BL4 SDR device.
     tBURST = '20ns'
 
     # WIO 8 Gb
@@ -277,3 +284,52 @@ class SimpleWideIO(SimpleDRAM):
     # Two instead of four activation window
     tXAW = '50ns'
     activation_limit = 2
+
+# A single LPDDR3 x32 interface (one command/address bus), with
+# default timings based on a LPDDR3-1600 4 Gbit part in a 1x32
+# configuration
+class LPDDR3_1600_x32(SimpleDRAM):
+    # 1x32 configuration, 1 device with a 32-bit interface
+    device_bus_width = 32
+
+    # LPDDR3 is a BL8 device
+    burst_length = 8
+
+    # Each device has a page (row buffer) size of 1KB
+    # (this depends on the memory density)
+    device_rowbuffer_size = '1kB'
+
+    # 1x32 configuration, so 1 device
+    devices_per_rank = 1
+
+    # Use a single rank
+    ranks_per_channel = 1
+
+    # LPDDR3 has 8 banks in all configurations
+    banks_per_rank = 8
+
+    # Fixed at 15 ns
+    tRCD = '15ns'
+
+    # 12 CK read latency, 6 CK write latency @ 800 MHz, 1.25 ns cycle time
+    tCL = '15ns'
+
+    # Pre-charge one bank 15 ns (all banks 18 ns)
+    tRP = '15ns'
+
+    # 8 beats across a x32 DDR interface translates to 4 clocks @ 800 MHz.
+    # Note this is a BL8 DDR device.
+    # Requests larger than 32 bytes are broken down into multiple requests
+    # in the SimpleDRAM controller
+    tBURST = '5ns'
+
+    # LPDDR3, 4 Gb
+    tRFC = '130ns'
+    tREFI = '3.9us'
+
+    # Irrespective of speed grade, tWTR is 7.5 ns
+    tWTR = '7.5ns'
+
+    # Irrespective of size, tFAW is 50 ns
+    tXAW = '50ns'
+    activation_limit = 4

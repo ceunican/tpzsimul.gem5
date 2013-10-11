@@ -63,9 +63,9 @@
 #include "sim/sim_exit.hh"
 
 template<class TagStore>
-Cache<TagStore>::Cache(const Params *p, TagStore *tags)
+Cache<TagStore>::Cache(const Params *p)
     : BaseCache(p),
-      tags(tags),
+      tags(dynamic_cast<TagStore*>(p->tags)),
       prefetcher(p->prefetcher),
       doFastWrites(true),
       prefetchOnAccess(p->prefetch_on_access)
@@ -84,11 +84,20 @@ Cache<TagStore>::Cache(const Params *p, TagStore *tags)
 }
 
 template<class TagStore>
+Cache<TagStore>::~Cache()
+{
+    delete [] tempBlock->data;
+    delete tempBlock;
+
+    delete cpuSidePort;
+    delete memSidePort;
+}
+
+template<class TagStore>
 void
 Cache<TagStore>::regStats()
 {
     BaseCache::regStats();
-    tags->regStats(name());
 }
 
 template<class TagStore>
@@ -322,8 +331,7 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
                 incMissCount(pkt);
                 return false;
             }
-            int master_id = pkt->req->masterId();
-            tags->insertBlock(pkt->getAddr(), blk, master_id);
+            tags->insertBlock(pkt, blk);
             blk->status = BlkValid | BlkReadable;
         }
         std::memcpy(blk->data, pkt->getPtr<uint8_t>(), blkSize);
@@ -644,7 +652,7 @@ Cache<TagStore>::getBusPacket(PacketPtr cpu_pkt, BlkType *blk,
 
 
 template<class TagStore>
-Cycles
+Tick
 Cache<TagStore>::recvAtomic(PacketPtr pkt)
 {
     Cycles lat = hitLatency;
@@ -678,7 +686,7 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
                     pkt->cmdString(), pkt->getAddr());
         }
 
-        return lat;
+        return lat * clockPeriod();
     }
 
     // should assert here that there are no outstanding MSHRs or
@@ -763,7 +771,7 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
         pkt->makeAtomicResponse();
     }
 
-    return lat;
+    return lat * clockPeriod();
 }
 
 
@@ -929,7 +937,7 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
                 // responseLatency is the latency of the return path
                 // from lower level caches/memory to an upper level cache or
                 // the core.
-                completion_time = curTick() + responseLatency * clockPeriod() +
+                completion_time = clockEdge(responseLatency) +
                     (transfer_offset ? pkt->busLastWordDelay :
                      pkt->busFirstWordDelay);
 
@@ -946,14 +954,14 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
                 // responseLatency is the latency of the return path
                 // from lower level caches/memory to an upper level cache or
                 // the core.
-                completion_time = curTick() + responseLatency * clockPeriod() +
+                completion_time = clockEdge(responseLatency) +
                     pkt->busLastWordDelay;
                 target->pkt->req->setExtraData(0);
             } else {
                 // not a cache fill, just forwarding response
                 // responseLatency is the latency of the return path
                 // from lower level cahces/memory to the core.
-                completion_time = curTick() + responseLatency * clockPeriod() +
+                completion_time = clockEdge(responseLatency) +
                     pkt->busLastWordDelay;
                 if (pkt->isRead() && !is_error) {
                     target->pkt->setData(pkt->getPtr<uint8_t>());
@@ -1021,7 +1029,7 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
         }
         mq = mshr->queue;
         mq->markPending(mshr);
-        requestMemSideBus((RequestCause)mq->index, curTick() +
+        requestMemSideBus((RequestCause)mq->index, clockEdge() +
                           pkt->busLastWordDelay);
     } else {
         mq->deallocate(mshr);
@@ -1219,8 +1227,7 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
             tempBlock->tag = tags->extractTag(addr);
             DPRINTF(Cache, "using temp block for %x\n", addr);
         } else {
-            int id = pkt->req->masterId();
-            tags->insertBlock(pkt->getAddr(), blk, id);
+            tags->insertBlock(pkt, blk);
         }
 
         // we should never be overwriting a valid block
@@ -1257,7 +1264,7 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
         std::memcpy(blk->data, pkt->getPtr<uint8_t>(), blkSize);
     }
 
-    blk->whenReady = curTick() + responseLatency * clockPeriod() +
+    blk->whenReady = clockEdge() + responseLatency * clockPeriod() +
         pkt->busLastWordDelay;
 
     return blk;
@@ -1510,7 +1517,7 @@ Cache<TagStore>::CpuSidePort::recvTimingSnoopResp(PacketPtr pkt)
 }
 
 template<class TagStore>
-Cycles
+Tick
 Cache<TagStore>::recvAtomicSnoop(PacketPtr pkt)
 {
     // Snoops shouldn't happen when bypassing caches
@@ -1519,12 +1526,12 @@ Cache<TagStore>::recvAtomicSnoop(PacketPtr pkt)
     if (pkt->req->isUncacheable() || pkt->cmd == MemCmd::Writeback) {
         // Can't get a hit on an uncacheable address
         // Revisit this for multi level coherence
-        return hitLatency;
+        return 0;
     }
 
     BlkType *blk = tags->findBlock(pkt->getAddr());
     handleSnoop(pkt, blk, false, false, false);
-    return hitLatency;
+    return hitLatency * clockPeriod();
 }
 
 
@@ -1655,23 +1662,22 @@ Cache<TagStore>::getTimingPacket()
             // that, and then we'll have to figure out what to do.
             assert(blk == NULL);
 
-            // We need to check the caches above us to verify that they don't have
-            // a copy of this block in the dirty state at the moment. Without this
-            // check we could get a stale copy from memory  that might get used
-            // in place of the dirty one.
-            PacketPtr snoop_pkt = new Packet(tgt_pkt, true);
-            snoop_pkt->setExpressSnoop();
-            snoop_pkt->senderState = mshr;
-            cpuSidePort->sendTimingSnoopReq(snoop_pkt);
+            // We need to check the caches above us to verify that
+            // they don't have a copy of this block in the dirty state
+            // at the moment. Without this check we could get a stale
+            // copy from memory that might get used in place of the
+            // dirty one.
+            Packet snoop_pkt(tgt_pkt, true);
+            snoop_pkt.setExpressSnoop();
+            snoop_pkt.senderState = mshr;
+            cpuSidePort->sendTimingSnoopReq(&snoop_pkt);
 
-            if (snoop_pkt->memInhibitAsserted()) {
-                markInService(mshr, snoop_pkt);
+            if (snoop_pkt.memInhibitAsserted()) {
+                markInService(mshr, &snoop_pkt);
                 DPRINTF(Cache, "Upward snoop of prefetch for addr %#x hit\n",
                         tgt_pkt->getAddr());
-                delete snoop_pkt;
                 return NULL;
             }
-            delete snoop_pkt;
         }
 
         pkt = getBusPacket(tgt_pkt, blk, mshr->needsExclusive());
@@ -1778,8 +1784,6 @@ template<class TagStore>
 Tick
 Cache<TagStore>::CpuSidePort::recvAtomic(PacketPtr pkt)
 {
-    // @todo: Note that this is currently using cycles instead of
-    // ticks and will be fixed in a future patch
     return cache->recvAtomic(pkt);
 }
 
@@ -1826,8 +1830,6 @@ template<class TagStore>
 Tick
 Cache<TagStore>::MemSidePort::recvAtomicSnoop(PacketPtr pkt)
 {
-    // @todo: Note that this is using cycles and not ticks and will be
-    // fixed in a future patch
     return cache->recvAtomicSnoop(pkt);
 }
 

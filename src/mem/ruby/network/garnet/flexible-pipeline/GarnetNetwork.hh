@@ -58,28 +58,22 @@ class GarnetNetwork : public BaseGarnetNetwork
 
     int getBufferSize() { return m_buffer_size; }
     int getNumPipeStages() {return m_number_of_pipe_stages; }
-
     int getNumNodes(){ return m_nodes; }
 
-    void reset();
-
-    void printLinkStats(std::ostream& out) const;
-    void printPowerStats(std::ostream& out) const;
+    void collateStats();
+    void regStats();
     void print(std::ostream& out) const;
 
     // Methods used by Topology to setup the network
     void makeOutLink(SwitchID src, NodeID dest, BasicLink* link, 
                      LinkDirection direction, 
-                     const NetDest& routing_table_entry, 
-                     bool isReconfiguration);
+                     const NetDest& routing_table_entry);
     void makeInLink(NodeID src, SwitchID dest, BasicLink* link, 
                     LinkDirection direction, 
-                    const NetDest& routing_table_entry, 
-                    bool isReconfiguration);
+                    const NetDest& routing_table_entry);
     void makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
                           LinkDirection direction, 
-                          const NetDest& routing_table_entry, 
-                          bool isReconfiguration);
+                          const NetDest& routing_table_entry);
 
     //! Function for performing a functional read. The return value
     //! indicates if a message was found that had the required address.
@@ -96,12 +90,16 @@ class GarnetNetwork : public BaseGarnetNetwork
     GarnetNetwork(const GarnetNetwork& obj);
     GarnetNetwork& operator=(const GarnetNetwork& obj);
 
-    std::vector<Router *> m_router_ptr_vector;   // All Routers in Network
-    std::vector<NetworkLink *> m_link_ptr_vector; // All links in network
-    std::vector<NetworkInterface *> m_ni_ptr_vector; // All NI's in Network
+    std::vector<Router *> m_routers;   // All Routers in Network
+    std::vector<NetworkLink *> m_links; // All links in network
+    std::vector<NetworkInterface *> m_nis; // All NI's in Network
 
     int m_buffer_size;
     int m_number_of_pipe_stages;
+
+    // Statistical variables
+    Stats::Scalar m_average_link_utilization;
+    Stats::Vector m_average_vc_load;
 };
 
 inline std::ostream&

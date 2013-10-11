@@ -30,15 +30,11 @@
 
 Import('*')
 
-if env['TARGET_ISA'] == 'no':
-    Return()
-
 SimObject('BaseCache.py')
 
 Source('base.cc')
 Source('cache.cc')
 Source('blk.cc')
-Source('builder.cc')
 Source('mshr.cc')
 Source('mshr_queue.cc')
 

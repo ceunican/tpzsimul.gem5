@@ -59,6 +59,7 @@
 #include "cpu/quiesce_event.hh"
 #include "cpu/thread_context.hh"
 #include "debug/Loader.hh"
+#include "debug/PseudoInst.hh"
 #include "debug/Quiesce.hh"
 #include "debug/WorkItems.hh"
 #include "params/BaseCPU.hh"
@@ -90,13 +91,17 @@ pseudoInst(ThreadContext *tc, uint8_t func, uint8_t subfunc)
 {
     uint64_t args[4];
 
+    DPRINTF(PseudoInst, "PseudoInst::pseudoInst(%i, %i)\n", func, subfunc);
+
     // We need to do this in a slightly convoluted way since
     // getArgument() might have side-effects on arg_num. We could have
     // used the Argument class, but due to the possible side effects
     // from getArgument, it'd most likely break.
     int arg_num(0);
-    for (int i = 0; i < sizeof(args) / sizeof(*args); ++i)
-        args[arg_num++] = getArgument(tc, arg_num, sizeof(uint64_t), false);
+    for (int i = 0; i < sizeof(args) / sizeof(*args); ++i) {
+        args[arg_num] = getArgument(tc, arg_num, sizeof(uint64_t), false);
+        ++arg_num;
+    }
 
     switch (func) {
       case 0x00: // arm_func
@@ -204,6 +209,7 @@ pseudoInst(ThreadContext *tc, uint8_t func, uint8_t subfunc)
 void
 arm(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::arm()\n");
     if (!FullSystem)
         panicFsOnlyPseudoInst("arm");
 
@@ -214,6 +220,7 @@ arm(ThreadContext *tc)
 void
 quiesce(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::quiesce()\n");
     if (!FullSystem)
         panicFsOnlyPseudoInst("quiesce");
 
@@ -230,6 +237,7 @@ quiesce(ThreadContext *tc)
 void
 quiesceSkip(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::quiesceSkip()\n");
     if (!FullSystem)
         panicFsOnlyPseudoInst("quiesceSkip");
 
@@ -255,6 +263,7 @@ quiesceSkip(ThreadContext *tc)
 void
 quiesceNs(ThreadContext *tc, uint64_t ns)
 {
+    DPRINTF(PseudoInst, "PseudoInst::quiesceNs(%i)\n", ns);
     if (!FullSystem)
         panicFsOnlyPseudoInst("quiesceNs");
 
@@ -280,6 +289,7 @@ quiesceNs(ThreadContext *tc, uint64_t ns)
 void
 quiesceCycles(ThreadContext *tc, uint64_t cycles)
 {
+    DPRINTF(PseudoInst, "PseudoInst::quiesceCycles(%i)\n", cycles);
     if (!FullSystem)
         panicFsOnlyPseudoInst("quiesceCycles");
 
@@ -305,6 +315,7 @@ quiesceCycles(ThreadContext *tc, uint64_t cycles)
 uint64_t
 quiesceTime(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::quiesceTime()\n");
     if (!FullSystem) {
         panicFsOnlyPseudoInst("quiesceTime");
         return 0;
@@ -317,12 +328,14 @@ quiesceTime(ThreadContext *tc)
 uint64_t
 rpns(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::rpns()\n");
     return curTick() / SimClock::Int::ns;
 }
 
 void
 wakeCPU(ThreadContext *tc, uint64_t cpuid)
 {
+    DPRINTF(PseudoInst, "PseudoInst::wakeCPU(%i)\n", cpuid);
     System *sys = tc->getSystemPtr();
     ThreadContext *other_tc = sys->threadContexts[cpuid];
     if (other_tc->status() == ThreadContext::Suspended)
@@ -332,6 +345,7 @@ wakeCPU(ThreadContext *tc, uint64_t cpuid)
 void
 m5exit(ThreadContext *tc, Tick delay)
 {
+    DPRINTF(PseudoInst, "PseudoInst::m5exit(%i)\n", delay);
     Tick when = curTick() + delay * SimClock::Int::ns;
     exitSimLoop("m5_exit instruction encountered", 0, when);
 }
@@ -339,6 +353,7 @@ m5exit(ThreadContext *tc, Tick delay)
 void
 m5fail(ThreadContext *tc, Tick delay, uint64_t code)
 {
+    DPRINTF(PseudoInst, "PseudoInst::m5fail(%i, %i)\n", delay, code);
     Tick when = curTick() + delay * SimClock::Int::ns;
     exitSimLoop("m5_fail instruction encountered", code, when);
 }
@@ -346,6 +361,7 @@ m5fail(ThreadContext *tc, Tick delay, uint64_t code)
 void
 loadsymbol(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::loadsymbol()\n");
     if (!FullSystem)
         panicFsOnlyPseudoInst("loadsymbol");
 
@@ -397,6 +413,8 @@ loadsymbol(ThreadContext *tc)
 void
 addsymbol(ThreadContext *tc, Addr addr, Addr symbolAddr)
 {
+    DPRINTF(PseudoInst, "PseudoInst::addsymbol(0x%x, 0x%x)\n",
+            addr, symbolAddr);
     if (!FullSystem)
         panicFsOnlyPseudoInst("addSymbol");
 
@@ -413,6 +431,7 @@ addsymbol(ThreadContext *tc, Addr addr, Addr symbolAddr)
 uint64_t
 initParam(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::initParam()\n");
     if (!FullSystem) {
         panicFsOnlyPseudoInst("initParam");
         return 0;
@@ -425,6 +444,7 @@ initParam(ThreadContext *tc)
 void
 resetstats(ThreadContext *tc, Tick delay, Tick period)
 {
+    DPRINTF(PseudoInst, "PseudoInst::resetstats(%i, %i)\n", delay, period);
     if (!tc->getCpuPtr()->params()->do_statistics_insts)
         return;
 
@@ -438,6 +458,7 @@ resetstats(ThreadContext *tc, Tick delay, Tick period)
 void
 dumpstats(ThreadContext *tc, Tick delay, Tick period)
 {
+    DPRINTF(PseudoInst, "PseudoInst::dumpstats(%i, %i)\n", delay, period);
     if (!tc->getCpuPtr()->params()->do_statistics_insts)
         return;
 
@@ -451,6 +472,7 @@ dumpstats(ThreadContext *tc, Tick delay, Tick period)
 void
 dumpresetstats(ThreadContext *tc, Tick delay, Tick period)
 {
+    DPRINTF(PseudoInst, "PseudoInst::dumpresetstats(%i, %i)\n", delay, period);
     if (!tc->getCpuPtr()->params()->do_statistics_insts)
         return;
 
@@ -464,6 +486,7 @@ dumpresetstats(ThreadContext *tc, Tick delay, Tick period)
 void
 m5checkpoint(ThreadContext *tc, Tick delay, Tick period)
 {
+    DPRINTF(PseudoInst, "PseudoInst::m5checkpoint(%i, %i)\n", delay, period);
     if (!tc->getCpuPtr()->params()->do_checkpoint_insts)
         return;
 
@@ -476,6 +499,8 @@ m5checkpoint(ThreadContext *tc, Tick delay, Tick period)
 uint64_t
 readfile(ThreadContext *tc, Addr vaddr, uint64_t len, uint64_t offset)
 {
+    DPRINTF(PseudoInst, "PseudoInst::readfile(0x%x, 0x%x, 0x%x)\n",
+            vaddr, len, offset);
     if (!FullSystem) {
         panicFsOnlyPseudoInst("readfile");
         return 0;
@@ -517,6 +542,8 @@ uint64_t
 writefile(ThreadContext *tc, Addr vaddr, uint64_t len, uint64_t offset,
             Addr filename_addr)
 {
+    DPRINTF(PseudoInst, "PseudoInst::writefile(0x%x, 0x%x, 0x%x, 0x%x)\n",
+            vaddr, len, offset, filename_addr);
     ostream *os;
 
     // copy out target filename
@@ -558,12 +585,14 @@ writefile(ThreadContext *tc, Addr vaddr, uint64_t len, uint64_t offset,
 void
 debugbreak(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::debugbreak()\n");
     Debug::breakpoint();
 }
 
 void
 switchcpu(ThreadContext *tc)
 {
+    DPRINTF(PseudoInst, "PseudoInst::switchcpu()\n");
     exitSimLoop("switchcpu");
 }
 
@@ -575,6 +604,7 @@ switchcpu(ThreadContext *tc)
 void
 workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
 {
+    DPRINTF(PseudoInst, "PseudoInst::workbegin(%i, %i)\n", workid, threadid);
     tc->getCpuPtr()->workItemBegin();
     System *sys = tc->getSystemPtr();
     const System::Params *params = sys->params();
@@ -632,6 +662,7 @@ workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
 void
 workend(ThreadContext *tc, uint64_t workid, uint64_t threadid)
 {
+    DPRINTF(PseudoInst, "PseudoInst::workend(%i, %i)\n", workid, threadid);
     tc->getCpuPtr()->workItemEnd();
     System *sys = tc->getSystemPtr();
     const System::Params *params = sys->params();
