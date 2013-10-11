@@ -368,6 +368,7 @@ void TopazSwitchFlow::wakeUpTopaz() {
         }
         messagesOnNets=m_network_ptr->getTopazMessages();
     }
+
     if ( messagesOnNets!=0)
         scheduleEvent(Cycles(1));
     else
