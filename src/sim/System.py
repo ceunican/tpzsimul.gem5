@@ -43,12 +43,6 @@ class System(MemObject):
     cxx_header = "sim/system.hh"
     system_port = MasterPort("System port")
 
-    # Override the clock from the ClockedObject which looks at the
-    # parent clock by default. The 1 GHz default system clock serves
-    # as a start for the modules that rely on the parent to provide
-    # the clock.
-    clock = '1GHz'
-
     @classmethod
     def export_method_cxx_predecls(cls, code):
         code('#include "sim/system.hh"')
@@ -68,6 +62,8 @@ class System(MemObject):
     # such that these can be passed from the I/O subsystem through an
     # I/O bridge or cache
     mem_ranges = VectorParam.AddrRange([], "Ranges that constitute main memory")
+
+    cache_line_size = Param.Unsigned(64, "Cache line size in bytes")
 
     work_item_id = Param.Int(-1, "specific work item id")
     num_work_ids = Param.Int(16, "Number of distinct work item types")

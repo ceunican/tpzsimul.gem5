@@ -1,4 +1,4 @@
-# Copyright (c) 2012 ARM Limited
+# Copyright (c) 2012-2013 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -42,13 +42,12 @@ from m5.params import *
 from m5.proxy import *
 from MemObject import MemObject
 from Prefetcher import BasePrefetcher
-
+from Tags import *
 
 class BaseCache(MemObject):
     type = 'BaseCache'
     cxx_header = "mem/cache/base.hh"
     assoc = Param.Int("associativity")
-    block_size = Param.Int("block size in bytes")
     hit_latency = Param.Cycles("The hit latency for this cache")
     response_latency = Param.Cycles(
             "Additional cache latency for the return path to core on a miss");
@@ -70,3 +69,4 @@ class BaseCache(MemObject):
     mem_side = MasterPort("Port on side closer to MEM")
     addr_ranges = VectorParam.AddrRange([AllMemory], "The address range for the CPU-side port")
     system = Param.System(Parent.any, "System we belong to")
+    tags = Param.BaseTags(LRU(), "Tag Store for LRU caches")

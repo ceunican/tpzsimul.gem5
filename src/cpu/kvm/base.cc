@@ -46,9 +46,11 @@
 #include <csignal>
 #include <ostream>
 
+#include "arch/mmapped_ipr.hh"
 #include "arch/utility.hh"
 #include "cpu/kvm/base.hh"
 #include "debug/Checkpoint.hh"
+#include "debug/Drain.hh"
 #include "debug/Kvm.hh"
 #include "debug/KvmIO.hh"
 #include "debug/KvmRun.hh"
@@ -56,16 +58,12 @@
 #include "sim/process.hh"
 #include "sim/system.hh"
 
+#include <signal.h>
+
 /* Used by some KVM macros */
 #define PAGE_SIZE pageSize
 
 volatile bool timerOverflowed = false;
-
-static void
-onTimerOverflow(int signo, siginfo_t *si, void *data)
-{
-    timerOverflowed = true;
-}
 
 BaseKvmCPU::BaseKvmCPU(BaseKvmCPUParams *params)
     : BaseCPU(params),
@@ -79,8 +77,12 @@ BaseKvmCPU::BaseKvmCPU(BaseKvmCPUParams *params)
       _kvmRun(NULL), mmioRing(NULL),
       pageSize(sysconf(_SC_PAGE_SIZE)),
       tickEvent(*this),
+      activeInstPeriod(0),
       perfControlledByTimer(params->usePerfOverflow),
-      hostFactor(params->hostFactor)
+      hostFreq(params->hostFreq),
+      hostFactor(params->hostFactor),
+      drainManager(NULL),
+      ctrInsts(0)
 {
     if (pageSize == -1)
         panic("KVM: Failed to determine host page size (%i)\n",
@@ -93,17 +95,16 @@ BaseKvmCPU::BaseKvmCPU(BaseKvmCPUParams *params)
     threadContexts.push_back(tc);
 
     setupCounters();
-    setupSignalHandler();
 
     if (params->usePerfOverflow)
         runTimer.reset(new PerfKvmTimer(hwCycles,
                                         KVM_TIMER_SIGNAL,
                                         params->hostFactor,
-                                        params->clock));
+                                        params->hostFreq));
     else
         runTimer.reset(new PosixKvmTimer(KVM_TIMER_SIGNAL, CLOCK_MONOTONIC,
                                          params->hostFactor,
-                                         params->clock));
+                                         params->hostFreq));
 }
 
 BaseKvmCPU::~BaseKvmCPU()
@@ -150,6 +151,10 @@ BaseKvmCPU::startup()
     // point. Initialize virtual CPUs here instead.
     vcpuFD = vm.createVCPU(vcpuID);
 
+    // Setup signal handlers. This has to be done after the vCPU is
+    // created since it manipulates the vCPU signal mask.
+    setupSignalHandler();
+
     // Map the KVM run structure */
     vcpuMMapSize = kvm.getVCPUMMapSize();
     _kvmRun = (struct kvm_run *)mmap(0, vcpuMMapSize,
@@ -171,6 +176,8 @@ BaseKvmCPU::startup()
     } else {
         inform("KVM: Coalesced not supported by host OS\n");
     }
+
+    thread->startup();
 }
 
 void
@@ -188,6 +195,16 @@ BaseKvmCPU::regStats()
     numVMExits
         .name(name() + ".numVMExits")
         .desc("total number of KVM exits")
+        ;
+
+    numVMHalfEntries
+        .name(name() + ".numVMHalfEntries")
+        .desc("number of KVM entries to finalize pending operations")
+        ;
+
+    numExitSignal
+        .name(name() + ".numExitSignal")
+        .desc("exits due to signal delivery")
         ;
 
     numMMIO
@@ -229,9 +246,6 @@ BaseKvmCPU::serializeThread(std::ostream &os, ThreadID tid)
         dump();
     }
 
-    // Update the thread context so we have something to serialize.
-    syncThreadContext();
-
     assert(tid == 0);
     assert(_status == Idle);
     thread->serialize(os);
@@ -255,15 +269,62 @@ BaseKvmCPU::drain(DrainManager *dm)
     if (switchedOut())
         return 0;
 
-    DPRINTF(Kvm, "drain\n");
+    DPRINTF(Drain, "BaseKvmCPU::drain\n");
+    switch (_status) {
+      case Running:
+        // The base KVM code is normally ready when it is in the
+        // Running state, but the architecture specific code might be
+        // of a different opinion. This may happen when the CPU been
+        // notified of an event that hasn't been accepted by the vCPU
+        // yet.
+        if (!archIsDrained()) {
+            drainManager = dm;
+            return 1;
+        }
 
-    // De-schedule the tick event so we don't insert any more MMIOs
-    // into the system while it is draining.
-    if (tickEvent.scheduled())
-        deschedule(tickEvent);
+        // The state of the CPU is consistent, so we don't need to do
+        // anything special to drain it. We simply de-schedule the
+        // tick event and enter the Idle state to prevent nasty things
+        // like MMIOs from happening.
+        if (tickEvent.scheduled())
+            deschedule(tickEvent);
+        _status = Idle;
 
-    _status = Idle;
-    return 0;
+        /** FALLTHROUGH */
+      case Idle:
+        // Idle, no need to drain
+        assert(!tickEvent.scheduled());
+
+        // Sync the thread context here since we'll need it when we
+        // switch CPUs or checkpoint the CPU.
+        syncThreadContext();
+
+        return 0;
+
+      case RunningServiceCompletion:
+        // The CPU has just requested a service that was handled in
+        // the RunningService state, but the results have still not
+        // been reported to the CPU. Now, we /could/ probably just
+        // update the register state ourselves instead of letting KVM
+        // handle it, but that would be tricky. Instead, we enter KVM
+        // and let it do its stuff.
+        drainManager = dm;
+
+        DPRINTF(Drain, "KVM CPU is waiting for service completion, "
+                "requesting drain.\n");
+        return 1;
+
+      case RunningService:
+        // We need to drain since the CPU is waiting for service (e.g., MMIOs)
+        drainManager = dm;
+
+        DPRINTF(Drain, "KVM CPU is waiting for service, requesting drain.\n");
+        return 1;
+
+      default:
+        panic("KVM: Unhandled CPU state in drain()\n");
+        return 0;
+    }
 }
 
 void
@@ -294,10 +355,6 @@ BaseKvmCPU::switchOut()
 {
     DPRINTF(Kvm, "switchOut\n");
 
-    // Make sure to update the thread context in case, the new CPU
-    // will need to access it.
-    syncThreadContext();
-
     BaseCPU::switchOut();
 
     // We should have drained prior to executing a switchOut, which
@@ -321,9 +378,12 @@ BaseKvmCPU::takeOverFrom(BaseCPU *cpu)
     assert(_status == Idle);
     assert(threadContexts.size() == 1);
 
-    // The BaseCPU updated the thread context, make sure that we
-    // synchronize next time we enter start the CPU.
-    threadContextDirty = true;
+    // Force an update of the KVM state here instead of flagging the
+    // TC as dirty. This is not ideal from a performance point of
+    // view, but it makes debugging easier as it allows meaningful KVM
+    // state to be dumped before and after a takeover.
+    updateKvmState();
+    threadContextDirty = false;
 }
 
 void
@@ -357,8 +417,7 @@ BaseKvmCPU::activateContext(ThreadID thread_num, Cycles delay)
     assert(_status == Idle);
     assert(!tickEvent.scheduled());
 
-    numCycles += ticksToCycles(thread->lastActivate - thread->lastSuspend)
-        * hostFactor;
+    numCycles += ticksToCycles(thread->lastActivate - thread->lastSuspend);
 
     schedule(tickEvent, clockEdge(delay));
     _status = Running;
@@ -414,14 +473,14 @@ BaseKvmCPU::getContext(int tn)
 Counter
 BaseKvmCPU::totalInsts() const
 {
-    return hwInstructions.read();
+    return ctrInsts;
 }
 
 Counter
 BaseKvmCPU::totalOps() const
 {
     hack_once("Pretending totalOps is equivalent to totalInsts()\n");
-    return hwInstructions.read();
+    return ctrInsts;
 }
 
 void
@@ -433,88 +492,184 @@ BaseKvmCPU::dump()
 void
 BaseKvmCPU::tick()
 {
-    assert(_status == Running);
-
-    DPRINTF(KvmRun, "Entering KVM...\n");
-
-    Tick ticksToExecute(mainEventQueue.nextTick() - curTick());
-    Tick ticksExecuted(kvmRun(ticksToExecute));
-
-    Tick delay(ticksExecuted + handleKvmExit());
+    Tick delay(0);
+    assert(_status != Idle);
 
     switch (_status) {
-      case Running:
-        schedule(tickEvent, clockEdge(ticksToCycles(delay)));
+      case RunningService:
+        // handleKvmExit() will determine the next state of the CPU
+        delay = handleKvmExit();
+
+        if (tryDrain())
+            _status = Idle;
         break;
 
+      case RunningServiceCompletion:
+      case Running: {
+          Tick ticksToExecute(mainEventQueue.nextTick() - curTick());
+
+          // We might need to update the KVM state.
+          syncKvmState();
+
+          // Setup any pending instruction count breakpoints using
+          // PerfEvent.
+          setupInstStop();
+
+          DPRINTF(KvmRun, "Entering KVM...\n");
+          if (drainManager) {
+              // Force an immediate exit from KVM after completing
+              // pending operations. The architecture-specific code
+              // takes care to run until it is in a state where it can
+              // safely be drained.
+              delay = kvmRunDrain();
+          } else {
+              delay = kvmRun(ticksToExecute);
+          }
+
+          // Entering into KVM implies that we'll have to reload the thread
+          // context from KVM if we want to access it. Flag the KVM state as
+          // dirty with respect to the cached thread context.
+          kvmStateDirty = true;
+
+          // Enter into the RunningService state unless the
+          // simulation was stopped by a timer.
+          if (_kvmRun->exit_reason !=  KVM_EXIT_INTR) {
+              _status = RunningService;
+          } else {
+              ++numExitSignal;
+              _status = Running;
+          }
+
+          // Service any pending instruction events. The vCPU should
+          // have exited in time for the event using the instruction
+          // counter configured by setupInstStop().
+          comInstEventQueue[0]->serviceEvents(ctrInsts);
+          system->instEventQueue.serviceEvents(system->totalNumInsts);
+
+          if (tryDrain())
+              _status = Idle;
+      } break;
+
       default:
-        /* The CPU is halted or waiting for an interrupt from a
-         * device. Don't start it. */
-        break;
+        panic("BaseKvmCPU entered tick() in an illegal state (%i)\n",
+              _status);
     }
+
+    // Schedule a new tick if we are still running
+    if (_status != Idle)
+        schedule(tickEvent, clockEdge(ticksToCycles(delay)));
+}
+
+Tick
+BaseKvmCPU::kvmRunDrain()
+{
+    // By default, the only thing we need to drain is a pending IO
+    // operation which assumes that we are in the
+    // RunningServiceCompletion state.
+    assert(_status == RunningServiceCompletion);
+
+    // Deliver the data from the pending IO operation and immediately
+    // exit.
+    return kvmRun(0);
+}
+
+uint64_t
+BaseKvmCPU::getHostCycles() const
+{
+    return hwCycles.read();
 }
 
 Tick
 BaseKvmCPU::kvmRun(Tick ticks)
 {
-    uint64_t baseCycles(hwCycles.read());
-    uint64_t baseInstrs(hwInstructions.read());
-
-    // We might need to update the KVM state.
-    syncKvmState();
-    // Entering into KVM implies that we'll have to reload the thread
-    // context from KVM if we want to access it. Flag the KVM state as
-    // dirty with respect to the cached thread context.
-    kvmStateDirty = true;
-
-    if (ticks < runTimer->resolution()) {
-        DPRINTF(KvmRun, "KVM: Adjusting tick count (%i -> %i)\n",
-                ticks, runTimer->resolution());
-        ticks = runTimer->resolution();
-    }
-
+    Tick ticksExecuted;
     DPRINTF(KvmRun, "KVM: Executing for %i ticks\n", ticks);
     timerOverflowed = false;
 
-    // Arm the run timer and start the cycle timer if it isn't
-    // controlled by the overflow timer. Starting/stopping the cycle
-    // timer automatically starts the other perf timers as they are in
-    // the same counter group.
-    runTimer->arm(ticks);
-    if (!perfControlledByTimer)
-        hwCycles.start();
+    if (ticks == 0) {
+        // Settings ticks == 0 is a special case which causes an entry
+        // into KVM that finishes pending operations (e.g., IO) and
+        // then immediately exits.
+        DPRINTF(KvmRun, "KVM: Delivering IO without full guest entry\n");
 
-    if (ioctl(KVM_RUN) == -1) {
-        if (errno != EINTR)
-            panic("KVM: Failed to start virtual CPU (errno: %i)\n",
-                  errno);
+        ++numVMHalfEntries;
+
+        // This signal is always masked while we are executing in gem5
+        // and gets unmasked temporarily as soon as we enter into
+        // KVM. See setSignalMask() and setupSignalHandler().
+        raise(KVM_TIMER_SIGNAL);
+
+        // Enter into KVM. KVM will check for signals after completing
+        // pending operations (IO). Since the KVM_TIMER_SIGNAL is
+        // pending, this forces an immediate exit into gem5 again. We
+        // don't bother to setup timers since this shouldn't actually
+        // execute any code in the guest.
+        ioctlRun();
+
+        // We always execute at least one cycle to prevent the
+        // BaseKvmCPU::tick() to be rescheduled on the same tick
+        // twice.
+        ticksExecuted = clockPeriod();
+    } else {
+        if (ticks < runTimer->resolution()) {
+            DPRINTF(KvmRun, "KVM: Adjusting tick count (%i -> %i)\n",
+                    ticks, runTimer->resolution());
+            ticks = runTimer->resolution();
+        }
+
+        // Get hardware statistics after synchronizing contexts. The KVM
+        // state update might affect guest cycle counters.
+        uint64_t baseCycles(getHostCycles());
+        uint64_t baseInstrs(hwInstructions.read());
+
+        // Arm the run timer and start the cycle timer if it isn't
+        // controlled by the overflow timer. Starting/stopping the cycle
+        // timer automatically starts the other perf timers as they are in
+        // the same counter group.
+        runTimer->arm(ticks);
+        if (!perfControlledByTimer)
+            hwCycles.start();
+
+        ioctlRun();
+
+        runTimer->disarm();
+        if (!perfControlledByTimer)
+            hwCycles.stop();
+
+        // The timer signal may have been delivered after we exited
+        // from KVM. It will be pending in that case since it is
+        // masked when we aren't executing in KVM. Discard it to make
+        // sure we don't deliver it immediately next time we try to
+        // enter into KVM.
+        discardPendingSignal(KVM_TIMER_SIGNAL);
+        discardPendingSignal(KVM_INST_SIGNAL);
+
+        const uint64_t hostCyclesExecuted(getHostCycles() - baseCycles);
+        const uint64_t simCyclesExecuted(hostCyclesExecuted * hostFactor);
+        const uint64_t instsExecuted(hwInstructions.read() - baseInstrs);
+        ticksExecuted = runTimer->ticksFromHostCycles(hostCyclesExecuted);
+
+        if (ticksExecuted < ticks &&
+            timerOverflowed &&
+            _kvmRun->exit_reason == KVM_EXIT_INTR) {
+            // TODO: We should probably do something clever here...
+            warn("KVM: Early timer event, requested %i ticks but got %i ticks.\n",
+                 ticks, ticksExecuted);
+        }
+
+        /* Update statistics */
+        numCycles += simCyclesExecuted;;
+        numInsts += instsExecuted;
+        ctrInsts += instsExecuted;
+        system->totalNumInsts += instsExecuted;
+
+        DPRINTF(KvmRun,
+                "KVM: Executed %i instructions in %i cycles "
+                "(%i ticks, sim cycles: %i).\n",
+                instsExecuted, hostCyclesExecuted, ticksExecuted, simCyclesExecuted);
     }
 
-    runTimer->disarm();
-    if (!perfControlledByTimer)
-        hwCycles.stop();
-
-
-    const uint64_t hostCyclesExecuted(hwCycles.read() - baseCycles);
-    const uint64_t simCyclesExecuted(hostCyclesExecuted * hostFactor);
-    const uint64_t instsExecuted(hwInstructions.read() - baseInstrs);
-    const Tick ticksExecuted(runTimer->ticksFromHostCycles(hostCyclesExecuted));
-
-    if (ticksExecuted < ticks &&
-        timerOverflowed &&
-        _kvmRun->exit_reason == KVM_EXIT_INTR) {
-        // TODO: We should probably do something clever here...
-        warn("KVM: Early timer event, requested %i ticks but got %i ticks.\n",
-             ticks, ticksExecuted);
-    }
-
-    /* Update statistics */
-    numCycles += simCyclesExecuted;;
     ++numVMExits;
-    numInsts += instsExecuted;
-
-    DPRINTF(KvmRun, "KVM: Executed %i instructions in %i cycles (%i ticks, sim cycles: %i).\n",
-            instsExecuted, hostCyclesExecuted, ticksExecuted, simCyclesExecuted);
 
     return ticksExecuted + flushCoalescedMMIO();
 }
@@ -687,7 +842,11 @@ Tick
 BaseKvmCPU::handleKvmExit()
 {
     DPRINTF(KvmRun, "handleKvmExit (exit_reason: %i)\n", _kvmRun->exit_reason);
+    assert(_status == RunningService);
 
+    // Switch into the running state by default. Individual handlers
+    // can override this.
+    _status = Running;
     switch (_kvmRun->exit_reason) {
       case KVM_EXIT_UNKNOWN:
         return handleKvmExitUnknown();
@@ -696,6 +855,7 @@ BaseKvmCPU::handleKvmExit()
         return handleKvmExitException();
 
       case KVM_EXIT_IO:
+        _status = RunningServiceCompletion;
         ++numIO;
         return handleKvmExitIO();
 
@@ -715,6 +875,7 @@ BaseKvmCPU::handleKvmExit()
         return 0;
 
       case KVM_EXIT_MMIO:
+        _status = RunningServiceCompletion;
         /* Service memory mapped IO requests */
         DPRINTF(KvmIO, "KVM: Handling MMIO (w: %u, addr: 0x%x, len: %u)\n",
                 _kvmRun->mmio.is_write,
@@ -795,12 +956,53 @@ BaseKvmCPU::handleKvmExitFailEntry()
 Tick
 BaseKvmCPU::doMMIOAccess(Addr paddr, void *data, int size, bool write)
 {
+    ThreadContext *tc(thread->getTC());
+    syncThreadContext();
+
     mmio_req.setPhys(paddr, size, Request::UNCACHEABLE, dataMasterId());
+    // Some architectures do need to massage physical addresses a bit
+    // before they are inserted into the memory system. This enables
+    // APIC accesses on x86 and m5ops where supported through a MMIO
+    // interface.
+    BaseTLB::Mode tlb_mode(write ? BaseTLB::Write : BaseTLB::Read);
+    Fault fault(tc->getDTBPtr()->finalizePhysical(&mmio_req, tc, tlb_mode));
+    if (fault != NoFault)
+        warn("Finalization of MMIO address failed: %s\n", fault->name());
+
 
     const MemCmd cmd(write ? MemCmd::WriteReq : MemCmd::ReadReq);
     Packet pkt(&mmio_req, cmd);
     pkt.dataStatic(data);
-    return dataPort.sendAtomic(&pkt);
+
+    if (mmio_req.isMmappedIpr()) {
+        const Cycles ipr_delay(write ?
+                             TheISA::handleIprWrite(tc, &pkt) :
+                             TheISA::handleIprRead(tc, &pkt));
+        return clockEdge(ipr_delay);
+    } else {
+        return dataPort.sendAtomic(&pkt);
+    }
+}
+
+void
+BaseKvmCPU::setSignalMask(const sigset_t *mask)
+{
+    std::unique_ptr<struct kvm_signal_mask> kvm_mask;
+
+    if (mask) {
+        kvm_mask.reset((struct kvm_signal_mask *)operator new(
+                           sizeof(struct kvm_signal_mask) + sizeof(*mask)));
+        // The kernel and the user-space headers have different ideas
+        // about the size of sigset_t. This seems like a massive hack,
+        // but is actually what qemu does.
+        assert(sizeof(*mask) >= 8);
+        kvm_mask->len = 8;
+        memcpy(kvm_mask->sigset, mask, kvm_mask->len);
+    }
+
+    if (ioctl(KVM_SET_SIGNAL_MASK, (void *)kvm_mask.get()) == -1)
+        panic("KVM: Failed to set vCPU signal mask (errno: %i)\n",
+              errno);
 }
 
 int
@@ -839,6 +1041,26 @@ BaseKvmCPU::flushCoalescedMMIO()
     return ticks;
 }
 
+/**
+ * Cycle timer overflow when running in KVM. Forces the KVM syscall to
+ * exit with EINTR and allows us to run the event queue.
+ */
+static void
+onTimerOverflow(int signo, siginfo_t *si, void *data)
+{
+    timerOverflowed = true;
+}
+
+/**
+ * Instruction counter overflow when running in KVM. Forces the KVM
+ * syscall to exit with EINTR and allows us to handle instruction
+ * count events.
+ */
+static void
+onInstEvent(int signo, siginfo_t *si, void *data)
+{
+}
+
 void
 BaseKvmCPU::setupSignalHandler()
 {
@@ -848,7 +1070,58 @@ BaseKvmCPU::setupSignalHandler()
     sa.sa_sigaction = onTimerOverflow;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     if (sigaction(KVM_TIMER_SIGNAL, &sa, NULL) == -1)
-        panic("KVM: Failed to setup vCPU signal handler\n");
+        panic("KVM: Failed to setup vCPU timer signal handler\n");
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = onInstEvent;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    if (sigaction(KVM_INST_SIGNAL, &sa, NULL) == -1)
+        panic("KVM: Failed to setup vCPU instruction signal handler\n");
+
+    sigset_t sigset;
+    if (sigprocmask(SIG_BLOCK, NULL, &sigset) == -1)
+        panic("KVM: Failed get signal mask\n");
+
+    // Request KVM to setup the same signal mask as we're currently
+    // running with. We'll sometimes need to mask the KVM_TIMER_SIGNAL
+    // to cause immediate exits from KVM after servicing IO
+    // requests. See kvmRun().
+    setSignalMask(&sigset);
+
+    // Mask our control signals so they aren't delivered unless we're
+    // actually executing inside KVM.
+    sigaddset(&sigset, KVM_TIMER_SIGNAL);
+    sigaddset(&sigset, KVM_INST_SIGNAL);
+    if (sigprocmask(SIG_SETMASK, &sigset, NULL) == -1)
+        panic("KVM: Failed mask the KVM control signals\n");
+}
+
+bool
+BaseKvmCPU::discardPendingSignal(int signum) const
+{
+    int discardedSignal;
+
+    // Setting the timeout to zero causes sigtimedwait to return
+    // immediately.
+    struct timespec timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_nsec = 0;
+
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, signum);
+
+    do {
+        discardedSignal = sigtimedwait(&sigset, NULL, &timeout);
+    } while (discardedSignal == -1 && errno == EINTR);
+
+    if (discardedSignal == signum)
+        return true;
+    else if (discardedSignal == -1 && errno == EAGAIN)
+        return false;
+    else
+        panic("Unexpected return value from sigtimedwait: %i (errno: %i)\n",
+              discardedSignal, errno);
 }
 
 void
@@ -873,10 +1146,83 @@ BaseKvmCPU::setupCounters()
     hwCycles.attach(cfgCycles,
                     0); // TID (0 => currentThread)
 
-    DPRINTF(Kvm, "Attaching instruction counter...\n");
+    setupInstCounter();
+}
+
+bool
+BaseKvmCPU::tryDrain()
+{
+    if (!drainManager)
+        return false;
+
+    if (!archIsDrained()) {
+        DPRINTF(Drain, "tryDrain: Architecture code is not ready.\n");
+        return false;
+    }
+
+    if (_status == Idle || _status == Running) {
+        DPRINTF(Drain,
+                "tryDrain: CPU transitioned into the Idle state, drain done\n");
+        drainManager->signalDrainDone();
+        drainManager = NULL;
+        return true;
+    } else {
+        DPRINTF(Drain, "tryDrain: CPU not ready.\n");
+        return false;
+    }
+}
+
+void
+BaseKvmCPU::ioctlRun()
+{
+    if (ioctl(KVM_RUN) == -1) {
+        if (errno != EINTR)
+            panic("KVM: Failed to start virtual CPU (errno: %i)\n",
+                  errno);
+    }
+}
+
+void
+BaseKvmCPU::setupInstStop()
+{
+    if (comInstEventQueue[0]->empty()) {
+        setupInstCounter(0);
+    } else {
+        const uint64_t next(comInstEventQueue[0]->nextTick());
+
+        assert(next > ctrInsts);
+        setupInstCounter(next - ctrInsts);
+    }
+}
+
+void
+BaseKvmCPU::setupInstCounter(uint64_t period)
+{
+    // No need to do anything if we aren't attaching for the first
+    // time or the period isn't changing.
+    if (period == activeInstPeriod && hwInstructions.attached())
+        return;
+
     PerfKvmCounterConfig cfgInstructions(PERF_TYPE_HARDWARE,
-                                      PERF_COUNT_HW_INSTRUCTIONS);
+                                         PERF_COUNT_HW_INSTRUCTIONS);
+
+    if (period) {
+        // Setup a sampling counter if that has been requested.
+        cfgInstructions.wakeupEvents(1)
+            .samplePeriod(period);
+    }
+
+    // We need to detach and re-attach the counter to reliably change
+    // sampling settings. See PerfKvmCounter::period() for details.
+    if (hwInstructions.attached())
+        hwInstructions.detach();
+    assert(hwCycles.attached());
     hwInstructions.attach(cfgInstructions,
                           0, // TID (0 => currentThread)
                           hwCycles);
+
+    if (period)
+        hwInstructions.enableSignals(KVM_INST_SIGNAL);
+
+    activeInstPeriod = period;
 }

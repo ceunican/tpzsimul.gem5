@@ -39,6 +39,7 @@
 
 #include <cstring>
 
+#include "arch/generic/mmapped_ipr.hh"
 #include "arch/x86/insts/microldstop.hh"
 #include "arch/x86/regs/misc.hh"
 #include "arch/x86/regs/msr.hh"
@@ -226,6 +227,47 @@ TLB::translateInt(RequestPtr req, ThreadContext *tc)
 }
 
 Fault
+TLB::finalizePhysical(RequestPtr req, ThreadContext *tc, Mode mode) const
+{
+    Addr paddr = req->getPaddr();
+
+    // Check for an access to the local APIC
+    if (FullSystem) {
+        LocalApicBase localApicBase =
+            tc->readMiscRegNoEffect(MISCREG_APIC_BASE);
+        AddrRange apicRange(localApicBase.base * PageBytes,
+                            (localApicBase.base + 1) * PageBytes - 1);
+
+        AddrRange m5opRange(0xFFFF0000, 0xFFFFFFFF);
+
+        if (apicRange.contains(paddr)) {
+            // The Intel developer's manuals say the below restrictions apply,
+            // but the linux kernel, because of a compiler optimization, breaks
+            // them.
+            /*
+            // Check alignment
+            if (paddr & ((32/8) - 1))
+                return new GeneralProtection(0);
+            // Check access size
+            if (req->getSize() != (32/8))
+                return new GeneralProtection(0);
+            */
+            // Force the access to be uncacheable.
+            req->setFlags(Request::UNCACHEABLE);
+            req->setPaddr(x86LocalAPICAddress(tc->contextId(),
+                                              paddr - apicRange.start()));
+        } else if (m5opRange.contains(paddr)) {
+            req->setFlags(Request::MMAPPED_IPR);
+            req->setPaddr(GenericISA::iprAddressPseudoInst(
+                              (paddr >> 8) & 0xFF,
+                              paddr & 0xFF));
+        }
+    }
+
+    return NoFault;
+}
+
+Fault
 TLB::translate(RequestPtr req, ThreadContext *tc, Translation *translation,
         Mode mode, bool &delayedResponse, bool timing)
 {
@@ -366,31 +408,8 @@ TLB::translate(RequestPtr req, ThreadContext *tc, Translation *translation,
         DPRINTF(TLB, "Translated %#x -> %#x.\n", vaddr, vaddr);
         req->setPaddr(vaddr);
     }
-    // Check for an access to the local APIC
-    if (FullSystem) {
-        LocalApicBase localApicBase =
-            tc->readMiscRegNoEffect(MISCREG_APIC_BASE);
-        Addr baseAddr = localApicBase.base * PageBytes;
-        Addr paddr = req->getPaddr();
-        if (baseAddr <= paddr && baseAddr + PageBytes > paddr) {
-            // The Intel developer's manuals say the below restrictions apply,
-            // but the linux kernel, because of a compiler optimization, breaks
-            // them.
-            /*
-            // Check alignment
-            if (paddr & ((32/8) - 1))
-                return new GeneralProtection(0);
-            // Check access size
-            if (req->getSize() != (32/8))
-                return new GeneralProtection(0);
-            */
-            // Force the access to be uncacheable.
-            req->setFlags(Request::UNCACHEABLE);
-            req->setPaddr(x86LocalAPICAddress(tc->contextId(),
-                        paddr - baseAddr));
-        }
-    }
-    return NoFault;
+
+    return finalizePhysical(req, tc, mode);
 }
 
 Fault
@@ -428,11 +447,42 @@ TLB::getWalker()
 void
 TLB::serialize(std::ostream &os)
 {
+    // Only store the entries in use.
+    uint32_t _size = size - freeList.size();
+    SERIALIZE_SCALAR(_size);
+    SERIALIZE_SCALAR(lruSeq);
+
+    uint32_t _count = 0;
+
+    for (uint32_t x = 0; x < size; x++) {
+        if (tlb[x].trieHandle != NULL) {
+            os << "\n[" << csprintf("%s.Entry%d", name(), _count) << "]\n";
+            tlb[x].serialize(os);
+            _count++;
+        }
+    }
 }
 
 void
 TLB::unserialize(Checkpoint *cp, const std::string &section)
 {
+    // Do not allow to restore with a smaller tlb.
+    uint32_t _size;
+    UNSERIALIZE_SCALAR(_size);
+    if (_size > size) {
+        fatal("TLB size less than the one in checkpoint!");
+    }
+
+    UNSERIALIZE_SCALAR(lruSeq);
+
+    for (uint32_t x = 0; x < _size; x++) {
+        TlbEntry *newEntry = freeList.front();
+        freeList.pop_front();
+
+        newEntry->unserialize(cp, csprintf("%s.Entry%d", name(), x));
+        newEntry->trieHandle = trie.insert(newEntry->vaddr,
+            TlbEntryTrie::MaxBits - newEntry->logBytes, newEntry);
+    }
 }
 
 BaseMasterPort *

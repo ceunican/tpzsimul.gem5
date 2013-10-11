@@ -48,6 +48,15 @@ def define_options(parser):
     # By default, ruby uses the simple timing cpu
     parser.set_defaults(cpu_type="timing")
 
+    parser.add_option("--ruby-clock", action="store", type="string",
+                      default='2GHz',
+                      help="Clock for blocks running at Ruby system's speed")
+
+    # Options related to cache structure
+    parser.add_option("--ports", action="store", type="int", default=4,
+                      help="used of transitions per cycle which is a proxy \
+                            for the number of ports.")
+
     # ruby network options
     parser.add_option("--topology", type="string", default="Crossbar",
                  help="check src/mem/ruby/network/topologies for complete set")
@@ -110,8 +119,7 @@ def create_topology(controllers, options):
 
 def create_system(options, system, piobus = None, dma_ports = []):
 
-    system.ruby = RubySystem(clock = options.clock,
-                             stats_filename = options.ruby_stats,
+    system.ruby = RubySystem(stats_filename = options.ruby_stats,
                              no_mem_vec = options.use_map)
     ruby = system.ruby
 
@@ -161,17 +169,12 @@ def create_system(options, system, piobus = None, dma_ports = []):
         class ExtLinkClass(SimpleExtLink): pass
         class RouterClass(Switch): pass
 
-    #
-    # Important: the topology must be instantiated before the network and after
-    # the controllers. Hence the separation between topology definition and
-    # instantiation.
-    #
 
-    routers, int_links, ext_links = topology.makeTopology(options,
-                                    IntLinkClass, ExtLinkClass, RouterClass)
-    network = NetworkClass(ruby_system = ruby, routers = routers,
-                           int_links = int_links, ext_links = ext_links,
-                           topology = topology.description)
+    # Create the network topology
+    network = NetworkClass(ruby_system = ruby, topology = topology.description,
+                           routers = [], ext_links = [], int_links = [])
+    topology.makeTopology(options, network, IntLinkClass, ExtLinkClass,
+                          RouterClass)
 
     if options.network_fault_model:
         assert(options.garnet_network == "fixed")
@@ -216,8 +219,7 @@ def create_system(options, system, piobus = None, dma_ports = []):
         total_mem_size.value += dir_cntrl.directory.size.value
         dir_cntrl.directory.numa_high_bit = numa_bit
 
-    phys_mem_size = sum(map(lambda mem: mem.range.size(),
-                            system.memories.unproxy(system)))
+    phys_mem_size = sum(map(lambda r: r.size(), system.mem_ranges))
     assert(total_mem_size.value == phys_mem_size)
 
     ruby_profiler = RubyProfiler(ruby_system = ruby,

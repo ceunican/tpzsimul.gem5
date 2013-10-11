@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 ARM Limited
+# Copyright (c) 2010-2013 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -53,6 +53,7 @@ from SysPaths import *
 from Benchmarks import *
 import Simulation
 import CacheConfig
+import MemConfig
 from Caches import *
 import Options
 
@@ -81,9 +82,6 @@ def is_kvm_cpu(cpu_class):
 # system under test can be any CPU
 (TestCPUClass, test_mem_mode, FutureClass) = Simulation.setCPUClass(options)
 
-TestCPUClass.clock = options.clock
-DriveCPUClass.clock = options.clock
-
 # Match the memories with the CPUs, the driver system always simple,
 # and based on the options for the test system
 DriveMemClass = SimpleMemory
@@ -105,20 +103,34 @@ else:
 np = options.num_cpus
 
 if buildEnv['TARGET_ISA'] == "alpha":
-    test_sys = makeLinuxAlphaSystem(test_mem_mode, TestMemClass, bm[0])
+    test_sys = makeLinuxAlphaSystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "mips":
-    test_sys = makeLinuxMipsSystem(test_mem_mode, TestMemClass, bm[0])
+    test_sys = makeLinuxMipsSystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "sparc":
-    test_sys = makeSparcSystem(test_mem_mode, TestMemClass, bm[0])
+    test_sys = makeSparcSystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "x86":
-    test_sys = makeLinuxX86System(test_mem_mode, TestMemClass,
-                                  options.num_cpus, bm[0])
+    test_sys = makeLinuxX86System(test_mem_mode, options.num_cpus, bm[0])
 elif buildEnv['TARGET_ISA'] == "arm":
-    test_sys = makeArmSystem(test_mem_mode, options.machine_type,
-                             TestMemClass, bm[0], options.dtb_filename,
+    test_sys = makeArmSystem(test_mem_mode, options.machine_type, bm[0],
+                             options.dtb_filename,
                              bare_metal=options.bare_metal)
 else:
     fatal("Incapable of building %s full system!", buildEnv['TARGET_ISA'])
+
+# Create a top-level voltage domain
+test_sys.voltage_domain = VoltageDomain(voltage = options.sys_voltage)
+
+# Create a source clock for the system and set the clock period
+test_sys.clk_domain = SrcClockDomain(clock =  options.sys_clock,
+                                     voltage_domain = test_sys.voltage_domain)
+
+# Create a CPU voltage domain
+test_sys.cpu_voltage_domain = VoltageDomain()
+
+# Create a source clock for the CPUs and set the clock period
+test_sys.cpu_clk_domain = SrcClockDomain(clock = options.cpu_clock,
+                                         voltage_domain =
+                                         test_sys.cpu_voltage_domain)
 
 if options.kernel is not None:
     test_sys.kernel = binary(options.kernel)
@@ -128,14 +140,16 @@ if options.script is not None:
 
 test_sys.init_param = options.init_param
 
-test_sys.cpu = [TestCPUClass(cpu_id=i) for i in xrange(np)]
+# For now, assign all the CPUs to the same clock domain
+test_sys.cpu = [TestCPUClass(clk_domain=test_sys.cpu_clk_domain, cpu_id=i)
+                for i in xrange(np)]
 
 if is_kvm_cpu(TestCPUClass) or is_kvm_cpu(FutureClass):
     test_sys.vm = KvmVM()
 
 if options.caches or options.l2cache:
-    test_sys.iocache = IOCache(clock = '1GHz',
-                               addr_ranges = test_sys.mem_ranges)
+    # By default the IOCache runs at the system clock
+    test_sys.iocache = IOCache(addr_ranges = test_sys.mem_ranges)
     test_sys.iocache.cpu_side = test_sys.iobus.master
     test_sys.iocache.mem_side = test_sys.membus.slave
 else:
@@ -158,21 +172,36 @@ for i in xrange(np):
     test_sys.cpu[i].createThreads()
 
 CacheConfig.config_cache(options, test_sys)
+MemConfig.config_mem(options, test_sys)
 
 if len(bm) == 2:
     if buildEnv['TARGET_ISA'] == 'alpha':
-        drive_sys = makeLinuxAlphaSystem(drive_mem_mode, DriveMemClass, bm[1])
+        drive_sys = makeLinuxAlphaSystem(drive_mem_mode, bm[1])
     elif buildEnv['TARGET_ISA'] == 'mips':
-        drive_sys = makeLinuxMipsSystem(drive_mem_mode, DriveMemClass, bm[1])
+        drive_sys = makeLinuxMipsSystem(drive_mem_mode, bm[1])
     elif buildEnv['TARGET_ISA'] == 'sparc':
-        drive_sys = makeSparcSystem(drive_mem_mode, DriveMemClass, bm[1])
+        drive_sys = makeSparcSystem(drive_mem_mode, bm[1])
     elif buildEnv['TARGET_ISA'] == 'x86':
-        drive_sys = makeX86System(drive_mem_mode, DriveMemClass, np, bm[1])
+        drive_sys = makeX86System(drive_mem_mode, np, bm[1])
     elif buildEnv['TARGET_ISA'] == 'arm':
-        drive_sys = makeArmSystem(drive_mem_mode, options.machine_type,
-                                  DriveMemClass, bm[1])
+        drive_sys = makeArmSystem(drive_mem_mode, options.machine_type, bm[1])
 
-    drive_sys.cpu = DriveCPUClass(cpu_id=0)
+    # Create a top-level voltage domain
+    drive_sys.voltage_domain = VoltageDomain(voltage = options.sys_voltage)
+
+    # Create a source clock for the system and set the clock period
+    drive_sys.clk_domain = SrcClockDomain(clock =  options.sys_clock)
+
+    # Create a CPU voltage domain
+    drive_sys.cpu_voltage_domain = VoltageDomain()
+
+    # Create a source clock for the CPUs and set the clock period
+    drive_sys.cpu_clk_domain = SrcClockDomain(clock = options.cpu_clock,
+                                              voltage_domain =
+                                              drive_sys.cpu_voltage_domain)
+
+    drive_sys.cpu = DriveCPUClass(clk_domain=drive_sys.cpu_clk_domain,
+                                  cpu_id=0)
     drive_sys.cpu.createThreads()
     drive_sys.cpu.createInterruptController()
     drive_sys.cpu.connectAllPorts(drive_sys.membus)
@@ -188,6 +217,13 @@ if len(bm) == 2:
                                 ranges = drive_sys.mem_ranges)
     drive_sys.iobridge.slave = drive_sys.iobus.master
     drive_sys.iobridge.master = drive_sys.membus.slave
+
+    # Create the appropriate memory controllers and connect them to the
+    # memory bus
+    drive_sys.mem_ctrls = [DriveMemClass(range = r)
+                           for r in drive_sys.mem_ranges]
+    for i in xrange(len(drive_sys.mem_ctrls)):
+        drive_sys.mem_ctrls[i].port = drive_sys.membus.master
 
     drive_sys.init_param = options.init_param
     root = makeDualRoot(True, test_sys, drive_sys, options.etherdump)

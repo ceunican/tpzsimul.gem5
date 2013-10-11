@@ -1,4 +1,4 @@
-# Copyright (c) 2012 ARM Limited
+# Copyright (c) 2012-2013 ARM Limited
 # All rights reserved
 # 
 # The license below extends only to copyright in the software and shall
@@ -59,28 +59,29 @@ def config_cache(options, system):
         dcache_class, icache_class, l2_cache_class = \
             L1Cache, L1Cache, L2Cache
 
+    # Set the cache line size of the system
+    system.cache_line_size = options.cacheline_size
+
     if options.l2cache:
         # Provide a clock for the L2 and the L1-to-L2 bus here as they
         # are not connected using addTwoLevelCacheHierarchy. Use the
         # same clock as the CPUs, and set the L1-to-L2 bus width to 32
         # bytes (256 bits).
-        system.l2 = l2_cache_class(clock=options.clock,
+        system.l2 = l2_cache_class(clk_domain=system.cpu_clk_domain,
                                    size=options.l2_size,
-                                   assoc=options.l2_assoc,
-                                   block_size=options.cacheline_size)
+                                   assoc=options.l2_assoc)
 
-        system.tol2bus = CoherentBus(clock = options.clock, width = 32)
+        system.tol2bus = CoherentBus(clk_domain = system.cpu_clk_domain,
+                                     width = 32)
         system.l2.cpu_side = system.tol2bus.master
         system.l2.mem_side = system.membus.slave
 
     for i in xrange(options.num_cpus):
         if options.caches:
             icache = icache_class(size=options.l1i_size,
-                                  assoc=options.l1i_assoc,
-                                  block_size=options.cacheline_size)
+                                  assoc=options.l1i_assoc)
             dcache = dcache_class(size=options.l1d_size,
-                                  assoc=options.l1d_assoc,
-                                  block_size=options.cacheline_size)
+                                  assoc=options.l1d_assoc)
 
             # When connecting the caches, the clock is also inherited
             # from the CPU in question

@@ -107,15 +107,13 @@ TopazNetwork::TopazNetwork(const Params *p)
     m_toNetQueues.resize(m_nodes);
     m_fromNetQueues.resize(m_nodes);
     for (int node = 0; node < m_nodes; node++) {
-       m_toNetQueues[node].resize(m_virtual_networks);
-       m_fromNetQueues[node].resize(m_virtual_networks);
-       for (int j = 0; j < m_virtual_networks; j++) {
-            m_toNetQueues[node][j] = new
-                    MessageBuffer(csprintf("toNet node %d j %d", node, j));
-            m_toNetQueues[node][j]->setToNet();
-            m_fromNetQueues[node][j] = new
-                    MessageBuffer(csprintf("fromNet node %d j %d", node, j));
-             m_fromNetQueues[node][j]->setFromNet();
+        m_toNetQueues[node].resize(m_virtual_networks);
+        m_fromNetQueues[node].resize(m_virtual_networks);
+        for (int j = 0; j < m_virtual_networks; j++) {
+            m_toNetQueues[node][j] =
+                new MessageBuffer(csprintf("toNet node %d j %d", node, j));
+            m_fromNetQueues[node][j] =
+                new MessageBuffer(csprintf("fromNet node %d j %d", node, j));
         }
     }
     // record the routers
@@ -141,9 +139,7 @@ TopazNetwork::init()
     // The topology pointer should have already been initialized in
     // the parent class network constructor.
     assert(m_topology_ptr != NULL);
-
-    // false because this isn't a reconfiguration
-    m_topology_ptr->createLinks(this, false);
+    m_topology_ptr->createLinks(this);
     //
     //  TOPAZ INITIALIZATION AND INSTALLERS
     //
@@ -285,20 +281,6 @@ TopazNetwork::getFromSimNetQueue(NodeID id, bool ordered, int network_num)
   return m_fromNetQueues[id][network_num];
 }
 
-void
-TopazNetwork::reset()
-{
-    for (int node = 0; node < m_nodes; node++) {
-        for (int j = 0; j < m_virtual_networks; j++) {
-            m_toNetQueues[node][j]->clear();
-            m_fromNetQueues[node][j]->clear();
-        }
-    }
-
-    for(int i = 0; i < m_switch_ptr_vector.size(); i++){
-        m_switch_ptr_vector[i]->clearBuffers();
-    }
-}
 
 TopazNetwork::~TopazNetwork()
 {
@@ -315,17 +297,11 @@ TopazNetwork::~TopazNetwork()
 void
 TopazNetwork::makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
                            LinkDirection direction,
-                           const NetDest& routing_table_entry,
-                           bool isReconfiguration)
+                           const NetDest& routing_table_entry)
 {
     assert(dest < m_nodes);
     assert(src < m_switch_ptr_vector.size());
     assert(m_switch_ptr_vector[src] != NULL);
-
-    if (isReconfiguration) {
-        m_switch_ptr_vector[src]->reconfigureOutPort(routing_table_entry);
-        return;
-    }
 
     SimpleExtLink *simple_link = safe_cast<SimpleExtLink*>(link);
 
@@ -341,15 +317,9 @@ TopazNetwork::makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
 void
 TopazNetwork::makeInLink(NodeID src, SwitchID dest, BasicLink* link,
                           LinkDirection direction,
-                          const NetDest& routing_table_entry,
-                          bool isReconfiguration)
+                          const NetDest& routing_table_entry)
 {
     assert(src < m_nodes);
-    if (isReconfiguration) {
-        // do nothing
-        return;
-    }
-
     m_switch_ptr_vector[dest]->addInPort(m_toNetQueues[src]);
 }
 
@@ -357,14 +327,8 @@ TopazNetwork::makeInLink(NodeID src, SwitchID dest, BasicLink* link,
 void
 TopazNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
                                 LinkDirection direction,
-                                const NetDest& routing_table_entry,
-                                bool isReconfiguration)
+                                const NetDest& routing_table_entry)
 {
-    if (isReconfiguration) {
-        m_switch_ptr_vector[src]->reconfigureOutPort(routing_table_entry);
-        return;
-    }
-
     // Create a set of new MessageBuffers
     std::vector<MessageBuffer*> queues;
     for (int i = 0; i < m_virtual_networks; i++) {
@@ -424,99 +388,63 @@ TopazNetwork::getThrottles(NodeID id) const
     return m_endpoint_switches[id]->getThrottles();
 }
 
+
 void
-TopazNetwork::printStats(ostream& out) const
+TopazNetwork::regStats()
 {
-    out<<"<TOPAZ>"<<endl;
-    out<<"Ratio Processor Clock/Network Clock = "<<m_processorClockRatio<<endl;
-    out<<"Flit size in bytes                  = "<<m_flitSize<<" bytes"<<endl;
-    for(unsigned currentVnet=1;currentVnet<=m_unify;currentVnet++){
-        TPZSIMULATOR()->getSimulation(currentVnet)->writeSimulationStatus(out);
-        TPZSIMULATOR()->getSimulation(currentVnet)->
-                        getNetwork()->writeComponentStatus(out);
+    for (MessageSizeType type = MessageSizeType_FIRST;
+         type < MessageSizeType_NUM; ++type) {
+        m_msg_counts[(unsigned int) type]
+            .name(name() + ".msg_count." + MessageSizeType_to_string(type))
+            .flags(Stats::nozero)
+            ;
+        m_msg_bytes[(unsigned int) type]
+            .name(name() + ".msg_byte." + MessageSizeType_to_string(type))
+            .flags(Stats::nozero)
+            ;
+
+        // Now state what the formula is.
+        for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
+            m_msg_counts[(unsigned int) type] +=
+                sum(m_switch_ptr_vector[i]->getMsgCount(type));
+        }
+
+        m_msg_bytes[(unsigned int) type] =
+            m_msg_counts[(unsigned int) type] * Stats::constant(
+                    Network::MessageSizeType_to_int(type));
     }
-    out << endl;
+}
+
+
+void
+TopazNetwork::collateStats()
+{
+    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
+        m_switch_ptr_vector[i]->collateStats();
+    }
+    cout<<"<TOPAZ>"<<endl;
+    cout<<"Ratio Processor Clock/Network Clock = "<<m_processorClockRatio<<endl;
+    cout<<"Flit size in bytes                  = "<<m_flitSize<<" bytes"<<endl;
+    for(unsigned currentVnet=1;currentVnet<=m_unify;currentVnet++){
+        TPZSIMULATOR()->getSimulation(currentVnet)->writeSimulationStatus(cout);
+        TPZSIMULATOR()->getSimulation(currentVnet)->
+                        getNetwork()->writeComponentStatus(cout);
+    }
+    cout << endl;
     TopazNetwork* net=static_cast<TopazNetwork*>(g_system_ptr->getNetwork());
     long int Topaz_messages=net->getTotalTopazMsg();
     int percent = 100*Topaz_messages/(Topaz_messages+net->getTotalMsg()+1);
-    out << "TOPAZ NETWORK USAGE" << endl;
-    out << "Usage TOPAZ network: " << percent << "%" << endl;
-    out << "Total TOPAZ messages: " << Topaz_messages << endl;
-    out << "Total Number of messages: " << Topaz_messages+net->getTotalMsg() << endl;
-    out << endl;
-    out <<"</TOPAZ>"<<endl;
-    out << endl;
-    out << "SimpleNetwork Stats: The traffic you see here should be null"<< endl;
-    out << "if your are not using the adaptive-interfaz)"<<endl;
-    out << "-------------" << endl;
-    out << endl;
-    //
-    // Determine total counts before printing out each switch's stats
-    //
-    std::vector<uint64> total_msg_counts;
-    total_msg_counts.resize(MessageSizeType_NUM);
-    for (MessageSizeType type = MessageSizeType_FIRST;
-         type < MessageSizeType_NUM;
-         ++type) {
-        total_msg_counts[type] = 0;
-    }
-
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        const std::vector<Throttle*>* throttles =
-            m_switch_ptr_vector[i]->getThrottles();
-
-        for (int p = 0; p < throttles->size(); p++) {
-
-            const std::vector<std::vector<int> >& message_counts =
-                ((*throttles)[p])->getCounters();
-
-            for (MessageSizeType type = MessageSizeType_FIRST;
-                 type < MessageSizeType_NUM;
-                 ++type) {
-
-                const std::vector<int> &mct = message_counts[type];
-                int sum = accumulate(mct.begin(), mct.end(), 0);
-                total_msg_counts[type] += uint64(sum);
-            }
-        }
-    }
-    uint64 total_msgs = 0;
-    uint64 total_bytes = 0;
-    for (MessageSizeType type = MessageSizeType_FIRST;
-         type < MessageSizeType_NUM;
-         ++type) {
-
-        if (total_msg_counts[type] > 0) {
-            out << "total_msg_count_" << type << ": " << total_msg_counts[type]
-                << " " << total_msg_counts[type] *
-                uint64(MessageSizeType_to_int(type))
-                << endl;
-
-            total_msgs += total_msg_counts[type];
-
-            total_bytes += total_msg_counts[type] *
-                uint64(MessageSizeType_to_int(type));
-
-        }
-    }
-
-    out << "total_msgs: " << total_msgs
-        << " total_bytes: " << total_bytes << endl;
-
-    out << endl;
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        m_switch_ptr_vector[i]->printStats(out);
-    }
-    //m_topology_ptr->printStats(out);
-}
-
-void
-TopazNetwork::clearStats()
-{
-    for (int i = 0; i < m_switch_ptr_vector.size(); i++) {
-        m_switch_ptr_vector[i]->clearStats();
-    }
-    //m_topology_ptr->clearStats();
+    cout << "TOPAZ NETWORK USAGE" << endl;
+    cout << "Usage TOPAZ network: " << percent << "%" << endl;
+    cout << "Total TOPAZ messages: " << Topaz_messages << endl;
+    cout << "Total Number of messages: " << Topaz_messages+net->getTotalMsg() << endl;
+    cout << endl;
+    cout <<"</TOPAZ>"<<endl;
+    cout << endl;
+    cout << "SimpleNetwork Stats: The traffic you see here should be null"<< endl;
+    cout << "if your are not using the adaptive-interfaz)"<<endl;
+    cout << "-------------" << endl;
+    cout << endl;
 }
 
 void
@@ -554,6 +482,29 @@ void
 TopazNetwork::print(ostream& out) const
 {
     out << "[TopazNetwork]";
+    out<<"<TOPAZ>"<<endl;
+    out<<"Ratio Processor Clock/Network Clock = "<<m_processorClockRatio<<endl;
+    out<<"Flit size in bytes                  = "<<m_flitSize<<" bytes"<<endl;
+    for(unsigned currentVnet=1;currentVnet<=m_unify;currentVnet++){
+        TPZSIMULATOR()->getSimulation(currentVnet)->writeSimulationStatus(cout);
+        TPZSIMULATOR()->getSimulation(currentVnet)->
+                        getNetwork()->writeComponentStatus(cout);
+    }
+    out << endl;
+    TopazNetwork* net=static_cast<TopazNetwork*>(g_system_ptr->getNetwork());
+    long int Topaz_messages=net->getTotalTopazMsg();
+    int percent = 100*Topaz_messages/(Topaz_messages+net->getTotalMsg()+1);
+    out << "TOPAZ NETWORK USAGE" << endl;
+    out << "Usage TOPAZ network: " << percent << "%" << endl;
+    out << "Total TOPAZ messages: " << Topaz_messages << endl;
+    out << "Total Number of messages: " << Topaz_messages+net->getTotalMsg() << endl;
+    out << endl;
+    out <<"</TOPAZ>"<<endl;
+    out << endl;
+    out << "SimpleNetwork Stats: The traffic you see here should be null"<< endl;
+    out << "if your are not using the adaptive-interfaz)"<<endl;
+    out << "-------------" << endl;
+    out << endl;
 }
 
 void TopazNetwork::increaseNumMsg(int num){

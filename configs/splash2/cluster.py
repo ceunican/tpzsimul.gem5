@@ -139,7 +139,6 @@ class Water_spatial(LiveProcess):
 
 class L1(BaseCache):
     latency = options.l1latency
-    block_size = 64
     mshrs = 12
     tgts_per_mshr = 8
 
@@ -148,7 +147,6 @@ class L1(BaseCache):
 # ----------------------
 
 class L2(BaseCache):
-    block_size = 64
     latency = options.l2latency
     mshrs = 92
     tgts_per_mshr = 16
@@ -214,6 +212,7 @@ else:
 system = System(cpu = all_cpus, l1_ = all_l1s, l1bus_ = all_l1buses,
                 physmem = SimpleMemory(),
                 membus = CoherentBus(clock = busFrequency))
+system.clock = '1GHz'
 
 system.toL2bus = CoherentBus(clock = busFrequency)
 system.l2 = L2(size = options.l2size, assoc = 8)

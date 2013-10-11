@@ -45,11 +45,12 @@
  * Definition of BaseCache functions.
  */
 
-#include "cpu/base.hh"
-#include "cpu/smt.hh"
 #include "debug/Cache.hh"
 #include "debug/Drain.hh"
+#include "mem/cache/tags/fa_lru.hh"
+#include "mem/cache/tags/lru.hh"
 #include "mem/cache/base.hh"
+#include "mem/cache/cache.hh"
 #include "mem/cache/mshr.hh"
 #include "sim/full_system.hh"
 
@@ -68,7 +69,7 @@ BaseCache::BaseCache(const Params *p)
       mshrQueue("MSHRs", p->mshrs, 4, MSHRQueue_MSHRs),
       writeBuffer("write buffer", p->write_buffers, p->mshrs+1000,
                   MSHRQueue_WriteBuffer),
-      blkSize(p->block_size),
+      blkSize(p->system->cacheLineSize()),
       hitLatency(p->hit_latency),
       responseLatency(p->response_latency),
       numTarget(p->tgts_per_mshr),
@@ -765,4 +766,24 @@ BaseCache::drain(DrainManager *dm)
 
     setDrainState(Drainable::Drained);
     return 0;
+}
+
+BaseCache *
+BaseCacheParams::create()
+{
+    unsigned numSets = size / (assoc * system->cacheLineSize());
+
+    assert(tags);
+
+    if (dynamic_cast<FALRU*>(tags)) {
+        if (numSets != 1)
+            fatal("Got FALRU tags with more than one set\n");
+        return new Cache<FALRU>(this);
+    } else if (dynamic_cast<LRU*>(tags)) {
+        if (numSets == 1)
+            warn("Consider using FALRU tags for a fully associative cache\n");
+        return new Cache<LRU>(this);
+    } else {
+        fatal("No suitable tags selected\n");
+    }
 }

@@ -40,6 +40,12 @@ AbstractController::AbstractController(const Params *p)
     m_recycle_latency = p->recycle_latency;
     m_number_of_TBEs = p->number_of_TBEs;
     m_is_blocking = false;
+
+    if (m_version == 0) {
+        // Combine the statistics from all controllers
+        // of this particular type.
+        Stats::registerDumpCallback(new StatsCallback(this));
+    }
 }
 
 void
@@ -174,5 +180,21 @@ AbstractController::wakeUpAllBuffers()
         }
 
         m_waiting_buffers.clear();
+    }
+}
+
+void
+AbstractController::blockOnQueue(Address addr, MessageBuffer* port)
+{
+    m_is_blocking = true;
+    m_block_map[addr] = port;
+}
+
+void
+AbstractController::unblock(Address addr)
+{
+    m_block_map.erase(addr);
+    if (m_block_map.size() == 0) {
+       m_is_blocking = false;
     }
 }

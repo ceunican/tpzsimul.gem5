@@ -32,13 +32,32 @@ m5.util.addToPath('../configs/common')
 from FSConfig import *
 from Benchmarks import *
 
-test_sys = makeLinuxAlphaSystem('atomic', SimpleDDR3,
-                                 SysConfig('netperf-stream-client.rcS'))
+test_sys = makeLinuxAlphaSystem('atomic',
+                                SysConfig('netperf-stream-client.rcS'))
+
+# Dummy voltage domain for all test_sys clock domains
+test_sys.voltage_domain = VoltageDomain()
+
+# Create the system clock domain
+test_sys.clk_domain = SrcClockDomain(clock = '1GHz',
+                                     voltage_domain = test_sys.voltage_domain)
+
 test_sys.cpu = AtomicSimpleCPU(cpu_id=0)
 # create the interrupt controller
 test_sys.cpu.createInterruptController()
 test_sys.cpu.connectAllPorts(test_sys.membus)
-test_sys.cpu.clock = '2GHz'
+
+# Create a seperate clock domain for components that should run at
+# CPUs frequency
+test_sys.cpu.clk_domain = SrcClockDomain(clock = '2GHz',
+                                         voltage_domain =
+                                         test_sys.voltage_domain)
+
+# Create a separate clock domain for Ethernet
+test_sys.tsunami.ethernet.clk_domain = SrcClockDomain(clock = '500MHz',
+                                                      voltage_domain =
+                                                      test_sys.voltage_domain)
+
 # In contrast to the other (one-system) Tsunami configurations we do
 # not have an IO cache but instead rely on an IO bridge for accesses
 # from masters on the IO bus to the memory bus
@@ -46,16 +65,39 @@ test_sys.iobridge = Bridge(delay='50ns', ranges = test_sys.mem_ranges)
 test_sys.iobridge.slave = test_sys.iobus.master
 test_sys.iobridge.master = test_sys.membus.slave
 
-drive_sys = makeLinuxAlphaSystem('atomic', SimpleDDR3,
+test_sys.physmem = SimpleMemory(range = test_sys.mem_ranges[0])
+test_sys.physmem.port = test_sys.membus.master
+
+drive_sys = makeLinuxAlphaSystem('atomic',
                                  SysConfig('netperf-server.rcS'))
+# Dummy voltage domain for all drive_sys clock domains
+drive_sys.voltage_domain = VoltageDomain()
+# Create the system clock domain
+drive_sys.clk_domain = SrcClockDomain(clock = '1GHz',
+                                      voltage_domain =
+                                      drive_sys.voltage_domain)
 drive_sys.cpu = AtomicSimpleCPU(cpu_id=0)
 # create the interrupt controller
 drive_sys.cpu.createInterruptController()
 drive_sys.cpu.connectAllPorts(drive_sys.membus)
-drive_sys.cpu.clock = '4GHz'
+
+# Create a seperate clock domain for components that should run at
+# CPUs frequency
+drive_sys.cpu.clk_domain = SrcClockDomain(clock = '4GHz',
+                                          voltage_domain =
+                                          drive_sys.voltage_domain)
+
+# Create a separate clock domain for Ethernet
+drive_sys.tsunami.ethernet.clk_domain = SrcClockDomain(clock = '500MHz',
+                                                       voltage_domain =
+                                                       drive_sys.voltage_domain)
+
 drive_sys.iobridge = Bridge(delay='50ns', ranges = drive_sys.mem_ranges)
 drive_sys.iobridge.slave = drive_sys.iobus.master
 drive_sys.iobridge.master = drive_sys.membus.slave
+
+drive_sys.physmem = SimpleMemory(range = drive_sys.mem_ranges[0])
+drive_sys.physmem.port = drive_sys.membus.master
 
 root = makeDualRoot(True, test_sys, drive_sys, "ethertrace")
 

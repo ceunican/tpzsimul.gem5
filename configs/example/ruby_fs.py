@@ -80,18 +80,22 @@ if not (options.cpu_type == "detailed" or options.cpu_type == "timing"):
     sys.exit(1)
 (CPUClass, test_mem_mode, FutureClass) = Simulation.setCPUClass(options)
 
-CPUClass.clock = options.clock
-
 TestMemClass = Simulation.setMemClass(options)
 
 if buildEnv['TARGET_ISA'] == "alpha":
-    system = makeLinuxAlphaRubySystem(test_mem_mode, TestMemClass, bm[0])
+    system = makeLinuxAlphaRubySystem(test_mem_mode, bm[0])
 elif buildEnv['TARGET_ISA'] == "x86":
-    system = makeLinuxX86System(test_mem_mode, TestMemClass,
-                                options.num_cpus, bm[0], True)
+    system = makeLinuxX86System(test_mem_mode, options.num_cpus, bm[0], True)
     Simulation.setWorkCountOptions(system, options)
 else:
     fatal("incapable of building non-alpha or non-x86 full system!")
+system.cache_line_size = options.cacheline_size
+
+# Create a top-level voltage domain and clock domain
+system.voltage_domain = VoltageDomain(voltage = options.sys_voltage)
+
+system.clk_domain = SrcClockDomain(clock = options.sys_clock,
+                                   voltage_domain = system.voltage_domain)
 
 if options.kernel is not None:
     system.kernel = binary(options.kernel)
@@ -100,12 +104,22 @@ if options.script is not None:
     system.readfile = options.script
 
 system.cpu = [CPUClass(cpu_id=i) for i in xrange(options.num_cpus)]
+
+# Create a source clock for the CPUs and set the clock period
+system.cpu_clk_domain = SrcClockDomain(clock = options.cpu_clock,
+                                       voltage_domain = system.voltage_domain)
+
 Ruby.create_system(options, system, system.piobus, system._dma_ports)
+
+# Create a seperate clock domain for Ruby
+system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
+                                        voltage_domain = system.voltage_domain)
 
 for (i, cpu) in enumerate(system.cpu):
     #
     # Tie the cpu ports to the correct ruby system ports
     #
+    cpu.clk_domain = system.cpu_clk_domain
     cpu.createThreads()
     cpu.createInterruptController()
     cpu.icache_port = system.ruby._cpu_ruby_ports[i].slave
@@ -118,6 +132,12 @@ for (i, cpu) in enumerate(system.cpu):
         cpu.interrupts.int_slave = system.piobus.master
 
     system.ruby._cpu_ruby_ports[i].access_phys_mem = True
+
+# Create the appropriate memory controllers and connect them to the
+# PIO bus
+system.mem_ctrls = [TestMemClass(range = r) for r in system.mem_ranges]
+for i in xrange(len(system.mem_ctrls)):
+    system.mem_ctrls[i].port = system.piobus.master
 
 root = Root(full_system = True, system = system)
 Simulation.run(options, root, system, FutureClass)

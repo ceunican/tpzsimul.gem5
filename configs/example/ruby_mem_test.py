@@ -107,7 +107,9 @@ cpus = [ MemTest(atomic = False,
 system = System(cpu = cpus,
                 funcmem = SimpleMemory(in_addr_map = False),
                 funcbus = NoncoherentBus(),
-                physmem = SimpleMemory())
+                physmem = SimpleMemory(),
+                clk_domain = SrcClockDomain(clock = options.sys_clock),
+                mem_ranges = [AddrRange(options.mem_size)])
 
 if options.num_dmas > 0:
     dmas = [ MemTest(atomic = False,
@@ -127,6 +129,14 @@ dma_ports = []
 for (i, dma) in enumerate(dmas):
     dma_ports.append(dma.test)
 Ruby.create_system(options, system, dma_ports = dma_ports)
+
+# Create a top-level voltage domain and clock domain
+system.voltage_domain = VoltageDomain(voltage = options.sys_voltage)
+system.clk_domain = SrcClockDomain(clock = options.sys_clock,
+                                   voltage_domain = system.voltage_domain)
+# Create a seperate clock domain for Ruby
+system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
+                                        voltage_domain = system.voltage_domain)
 
 #
 # The tester is most effective when randomization is turned on and
@@ -179,6 +189,6 @@ m5.ticks.setGlobalFrequency('1ns')
 m5.instantiate()
 
 # simulate until program terminates
-exit_event = m5.simulate(options.maxtick)
+exit_event = m5.simulate(options.abs_max_tick)
 
 print 'Exiting @ tick', m5.curTick(), 'because', exit_event.getCause()

@@ -44,6 +44,7 @@
 #include "arch/x86/utility.hh"
 #include "arch/x86/x86_traits.hh"
 #include "cpu/base.hh"
+#include "fputils/fp80.h"
 #include "sim/system.hh"
 
 namespace X86ISA {
@@ -51,8 +52,25 @@ namespace X86ISA {
 uint64_t
 getArgument(ThreadContext *tc, int &number, uint16_t size, bool fp)
 {
-    panic("getArgument() not implemented for x86!\n");
-    M5_DUMMY_RETURN
+    if (!FullSystem) {
+        panic("getArgument() only implemented for full system mode.\n");
+    } else if (fp) {
+        panic("getArgument(): Floating point arguments not implemented\n");
+    } else if (size != 8) {
+        panic("getArgument(): Can only handle 64-bit arguments.\n");
+    }
+
+    // The first 6 integer arguments are passed in registers, the rest
+    // are passed on the stack.
+    const int int_reg_map[] = {
+        INTREG_RDI, INTREG_RSI, INTREG_RDX,
+        INTREG_RCX, INTREG_R8, INTREG_R9
+    };
+    if (number < sizeof(int_reg_map) / sizeof(*int_reg_map)) {
+        return tc->readIntReg(int_reg_map[number]);
+    } else {
+        panic("getArgument(): Don't know how to handle stack arguments.\n");
+    }
 }
 
 void initCPU(ThreadContext *tc, int cpuId)
@@ -209,6 +227,10 @@ copyMiscRegs(ThreadContext *src, ThreadContext *dest)
         dest->setMiscRegNoEffect(i, src->readMiscRegNoEffect(i));
     }
 
+    // The TSC has to be updated with side-effects if the CPUs in a
+    // CPU switch have different frequencies.
+    dest->setMiscReg(MISCREG_TSC, src->readMiscReg(MISCREG_TSC));
+
     dest->getITBPtr()->flushAll();
     dest->getDTBPtr()->flushAll();
 }
@@ -232,5 +254,118 @@ skipFunction(ThreadContext *tc)
     panic("Not implemented for x86\n");
 }
 
+uint64_t
+getRFlags(ThreadContext *tc)
+{
+    const uint64_t ncc_flags(tc->readMiscRegNoEffect(MISCREG_RFLAGS));
+    const uint64_t cc_flags(tc->readIntReg(X86ISA::INTREG_PSEUDO(0)));
+    const uint64_t cfof_bits(tc->readIntReg(X86ISA::INTREG_PSEUDO(1)));
+    const uint64_t df_bit(tc->readIntReg(X86ISA::INTREG_PSEUDO(2)));
+    // ecf (PSEUDO(3)) & ezf (PSEUDO(4)) are only visible to
+    // microcode, so we can safely ignore them.
+
+    // Reconstruct the real rflags state, mask out internal flags, and
+    // make sure reserved bits have the expected values.
+    return ((ncc_flags | cc_flags | cfof_bits | df_bit) & 0x3F7FD5)
+        | 0x2;
+}
+
+void
+setRFlags(ThreadContext *tc, uint64_t val)
+{
+    tc->setIntReg(X86ISA::INTREG_PSEUDO(0), val & ccFlagMask);
+    tc->setIntReg(X86ISA::INTREG_PSEUDO(1), val & cfofMask);
+    tc->setIntReg(X86ISA::INTREG_PSEUDO(2), val & DFBit);
+
+    // Internal microcode registers (ECF & EZF)
+    tc->setIntReg(X86ISA::INTREG_PSEUDO(3), 0);
+    tc->setIntReg(X86ISA::INTREG_PSEUDO(4), 0);
+
+    // Update the RFLAGS misc reg with whatever didn't go into the
+    // magic registers.
+    tc->setMiscReg(MISCREG_RFLAGS, val & ~(ccFlagMask | cfofMask | DFBit));
+}
+
+uint8_t
+convX87TagsToXTags(uint16_t ftw)
+{
+    uint8_t ftwx(0);
+    for (int i = 0; i < 8; ++i) {
+        // Extract the tag for the current element on the FP stack
+        const unsigned tag((ftw >> (2 * i)) & 0x3);
+
+        /*
+         * Check the type of the current FP element. Valid values are:
+         * 0 == Valid
+         * 1 == Zero
+         * 2 == Special (Nan, unsupported, infinity, denormal)
+         * 3 == Empty
+         */
+        // The xsave version of the tag word only keeps track of
+        // whether the element is empty or not. Set the corresponding
+        // bit in the ftwx if it's not empty,
+        if (tag != 0x3)
+            ftwx |= 1 << i;
+    }
+
+    return ftwx;
+}
+
+uint16_t
+convX87XTagsToTags(uint8_t ftwx)
+{
+    uint16_t ftw(0);
+    for (int i = 0; i < 8; ++i) {
+        const unsigned xtag(((ftwx >> i) & 0x1));
+
+        // The xtag for an x87 stack position is 0 for empty stack positions.
+        if (!xtag) {
+            // Set the tag word to 3 (empty) for the current element.
+            ftw |= 0x3 << (2 * i);
+        } else {
+            // TODO: We currently assume that non-empty elements are
+            // valid (0x0), but we should ideally reconstruct the full
+            // state (valid/zero/special).
+        }
+    }
+
+    return ftw;
+}
+
+uint16_t
+genX87Tags(uint16_t ftw, uint8_t top, int8_t spm)
+{
+    const uint8_t new_top((top + spm + 8) % 8);
+
+    if (spm > 0) {
+        // Removing elements from the stack. Flag the elements as empty.
+        for (int i = top; i != new_top; i = (i + 1 + 8) % 8)
+            ftw |= 0x3 << (2 * i);
+    } else if (spm < 0) {
+        // Adding elements to the stack. Flag the new elements as
+        // valid. We should ideally decode them and "do the right
+        // thing".
+        for (int i = new_top; i != top; i = (i + 1 + 8) % 8)
+            ftw &= ~(0x3 << (2 * i));
+    }
+
+    return ftw;
+}
+
+double
+loadFloat80(const void *_mem)
+{
+    const fp80_t *fp80((const fp80_t *)_mem);
+
+    return fp80_cvtd(*fp80);
+}
+
+void
+storeFloat80(void *_mem, double value)
+{
+    fp80_t *fp80((fp80_t *)_mem);
+
+    *fp80 = fp80_cvfd(value);
+}
 
 } // namespace X86_ISA

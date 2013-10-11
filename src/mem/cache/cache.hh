@@ -99,9 +99,6 @@ class Cache : public BaseCache
 
         virtual void recvFunctional(PacketPtr pkt);
 
-        virtual unsigned deviceBlockSize() const
-        { return cache->getBlockSize(); }
-
         virtual AddrRangeList getAddrRanges() const;
 
       public:
@@ -162,9 +159,6 @@ class Cache : public BaseCache
         virtual Tick recvAtomicSnoop(PacketPtr pkt);
 
         virtual void recvFunctionalSnoop(PacketPtr pkt);
-
-        virtual unsigned deviceBlockSize() const
-        { return cache->getBlockSize(); }
 
       public:
 
@@ -263,17 +257,17 @@ class Cache : public BaseCache
     /**
      * Performs the access specified by the request.
      * @param pkt The request to perform.
-     * @return The number of cycles required for the access.
+     * @return The number of ticks required for the access.
      */
-    Cycles recvAtomic(PacketPtr pkt);
+    Tick recvAtomic(PacketPtr pkt);
 
     /**
      * Snoop for the provided request in the cache and return the estimated
-     * time of completion.
+     * time taken.
      * @param pkt The memory request to snoop
-     * @return The number of cycles required for the snoop.
+     * @return The number of ticks required for the snoop.
      */
-    Cycles recvAtomicSnoop(PacketPtr pkt);
+    Tick recvAtomicSnoop(PacketPtr pkt);
 
     /**
      * Performs the access specified by the request.
@@ -409,7 +403,10 @@ class Cache : public BaseCache
 
   public:
     /** Instantiates a basic cache object. */
-    Cache(const Params *p, TagStore *tags);
+    Cache(const Params *p);
+
+    /** Non-default destructor is needed to deallocate memory. */
+    virtual ~Cache();
 
     void regStats();
 

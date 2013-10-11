@@ -1,5 +1,17 @@
 # -*- mode:python -*-
 
+# Copyright (c) 2013 ARM Limited
+# All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2011 Advanced Micro Devices, Inc.
 # Copyright (c) 2009 The Hewlett-Packard Development Company
 # Copyright (c) 2004-2005 The Regents of The University of Michigan
@@ -81,16 +93,15 @@ For more details, see:
 """
     raise
 
-# We ensure the python version early because we have stuff that
-# requires python 2.4
+# We ensure the python version early because because python-config
+# requires python 2.5
 try:
-    EnsurePythonVersion(2, 4)
+    EnsurePythonVersion(2, 5)
 except SystemExit, e:
     print """
 You can use a non-default installation of the Python interpreter by
-either (1) rearranging your PATH so that scons finds the non-default
-'python' first or (2) explicitly invoking an alternative interpreter
-on the scons script.
+rearranging your PATH so that scons finds the non-default 'python' and
+'python-config' first.
 
 For more details, see:
     http://gem5.org/wiki/index.php/Using_a_non-default_Python_installation
@@ -619,15 +630,10 @@ elif main['CLANG']:
     main.Append(TCMALLOC_CCFLAGS=['-fno-builtin'])
 
     # On Mac OS X/Darwin we need to also use libc++ (part of XCode) as
-    # opposed to libstdc++ to make the transition from TR1 to
-    # C++11. See http://libcxx.llvm.org. However, clang has chosen a
-    # strict implementation of the C++11 standard, and does not allow
-    # incomplete types in template arguments (besides unique_ptr and
-    # shared_ptr), and the libc++ STL containers create problems in
-    # combination with the current gem5 code. For now, we stick with
-    # libstdc++ and use the TR1 namespace.
-    # if sys.platform == "darwin":
-    #     main.Append(CXXFLAGS=['-stdlib=libc++'])
+    # opposed to libstdc++, as the later is dated.
+    if sys.platform == "darwin":
+        main.Append(CXXFLAGS=['-stdlib=libc++'])
+        main.Append(LIBS=['c++'])
 
 else:
     print termcap.Yellow + termcap.Bold + 'Error' + termcap.Normal,
@@ -724,14 +730,16 @@ if compareVersions(swig_version[2], min_swig_version) < 0:
     print '       Installed version:', swig_version[2]
     Exit(1)
 
-if swig_version[2] == "2.0.9":
+# Older versions of swig do not play well with more recent versions of
+# gcc due to assumptions on implicit includes (cstddef) and use of
+# namespaces
+if main['GCC'] and compareVersions(gcc_version, '4.6') > 0 and \
+        compareVersions(swig_version[2], '2') < 0:
     print '\n' + termcap.Yellow + termcap.Bold + \
-        'Warning: SWIG version 2.0.9 sometimes generates broken code.\n' + \
+        'Warning: SWIG 1.x cause issues with gcc 4.6 and later.\n' + \
         termcap.Normal + \
-        'This problem only affects some platforms and some Python\n' + \
-        'versions. See the following SWIG bug report for details:\n' + \
-        'http://sourceforge.net/p/swig/bugs/1297/\n'
-
+        'Use SWIG 2.x to avoid assumptions on implicit includes\n' + \
+        'and use of namespaces\n'
 
 # Set up SWIG flags & scanner
 swig_flags=Split('-c++ -python -modern -templatereduce $_CPPINCFLAGS')
@@ -827,55 +835,35 @@ if not conf:
 
     conf = NullConf(main)
 
-# Find Python include and library directories for embedding the
-# interpreter.  For consistency, we will use the same Python
-# installation used to run scons (and thus this script).  If you want
-# to link in an alternate version, see above for instructions on how
-# to invoke scons with a different copy of the Python interpreter.
-from distutils import sysconfig
-
-py_getvar = sysconfig.get_config_var
-
-py_debug = getattr(sys, 'pydebug', False)
-py_version = 'python' + py_getvar('VERSION') + (py_debug and "_d" or "")
-
-py_general_include = sysconfig.get_python_inc()
-py_platform_include = sysconfig.get_python_inc(plat_specific=True)
-py_includes = [ py_general_include ]
-if py_platform_include != py_general_include:
-    py_includes.append(py_platform_include)
-
-py_lib_path = [ py_getvar('LIBDIR') ]
-# add the prefix/lib/pythonX.Y/config dir, but only if there is no
-# shared library in prefix/lib/.
-if not py_getvar('Py_ENABLE_SHARED'):
-    py_lib_path.append(py_getvar('LIBPL'))
-    # Python requires the flags in LINKFORSHARED to be added the
-    # linker flags when linking with a statically with Python. Failing
-    # to do so can lead to errors from the Python's dynamic module
-    # loader at start up.
-    main.Append(LINKFLAGS=[py_getvar('LINKFORSHARED').split()])
-
-py_libs = []
-for lib in py_getvar('LIBS').split() + py_getvar('SYSLIBS').split():
-    if not lib.startswith('-l'):
-        # Python requires some special flags to link (e.g. -framework
-        # common on OS X systems), assume appending preserves order
-        main.Append(LINKFLAGS=[lib])
-    else:
-        lib = lib[2:]
-        if lib not in py_libs:
-            py_libs.append(lib)
-py_libs.append(py_version)
-
-main.Append(CPPPATH=py_includes)
-main.Append(LIBPATH=py_lib_path)
-
 # Cache build files in the supplied directory.
 if main['M5_BUILD_CACHE']:
     print 'Using build cache located at', main['M5_BUILD_CACHE']
     CacheDir(main['M5_BUILD_CACHE'])
 
+# Find Python include and library directories for embedding the
+# interpreter. We rely on python-config to resolve the appropriate
+# includes and linker flags. ParseConfig does not seem to understand
+# the more exotic linker flags such as -Xlinker and -export-dynamic so
+# we add them explicitly below. If you want to link in an alternate
+# version of python, see above for instructions on how to invoke
+# scons with the appropriate PATH set.
+py_includes = readCommand(['python-config', '--includes'],
+                          exception='').split()
+# Strip the -I from the include folders before adding them to the
+# CPPPATH
+main.Append(CPPPATH=map(lambda inc: inc[2:], py_includes))
+
+# Read the linker flags and split them into libraries and other link
+# flags. The libraries are added later through the call the CheckLib.
+py_ld_flags = readCommand(['python-config', '--ldflags'], exception='').split()
+py_libs = []
+for lib in py_ld_flags:
+     if not lib.startswith('-l'):
+         main.Append(LINKFLAGS=[lib])
+     else:
+         lib = lib[2:]
+         if lib not in py_libs:
+             py_libs.append(lib)
 
 # verify that this stuff works
 if not conf.CheckHeader('Python.h', '<>'):
@@ -925,6 +913,10 @@ have_posix_clock = \
     conf.CheckLibWithHeader('rt', 'time.h', 'C',
                             'clock_nanosleep(0,0,NULL,NULL);')
 
+have_posix_timers = \
+    conf.CheckLibWithHeader([None, 'rt'], [ 'time.h', 'signal.h' ], 'C',
+                            'timer_create(CLOCK_MONOTONIC, NULL, NULL);')
+
 if conf.CheckLib('tcmalloc'):
     main.Append(CCFLAGS=main['TCMALLOC_CCFLAGS'])
 elif conf.CheckLib('tcmalloc_minimal'):
@@ -944,16 +936,21 @@ if not have_fenv:
     print "Warning: Header file <fenv.h> not found."
     print "         This host has no IEEE FP rounding mode control."
 
-# Check if we should enable KVM-based hardware virtualization
-have_kvm = conf.CheckHeader('linux/kvm.h', '<>')
+# Check if we should enable KVM-based hardware virtualization. The API
+# we rely on exists since version 2.6.36 of the kernel, but somehow
+# the KVM_API_VERSION does not reflect the change. We test for one of
+# the types as a fall back.
+have_kvm = conf.CheckHeader('linux/kvm.h', '<>') and \
+    conf.CheckTypeSize('struct kvm_xsave', '#include <linux/kvm.h>') != 0
 if not have_kvm:
-    print "Info: Header file <linux/kvm.h> not found, " \
+    print "Info: Compatible header file <linux/kvm.h> not found, " \
         "disabling KVM support."
 
 # Check if the requested target ISA is compatible with the host
 def is_isa_kvm_compatible(isa):
     isa_comp_table = {
         "arm" : ( "armv7l" ),
+        "x86" : ( "x86_64" ),
         }
     try:
         import platform
@@ -1116,9 +1113,14 @@ main.SConscript('ext/libelf/SConscript',
 # gzstream build is shared across all configs in the build root.
 main.SConscript('ext/gzstream/SConscript',
                 variant_dir = joinpath(build_root, 'gzstream'))
+
 # libfdt build is shared across all configs in the build root.
 main.SConscript('ext/libfdt/SConscript',
                 variant_dir = joinpath(build_root, 'libfdt'))
+
+# fputils build is shared across all configs in the build root.
+main.SConscript('ext/fputils/SConscript',
+                variant_dir = joinpath(build_root, 'fputils'))
 
 # topaz build is shared across all configs in the build root.
 main.SConscript('ext/TOPAZ/SConscript',
@@ -1233,6 +1235,10 @@ for variant_path in variant_paths:
     if env['USE_KVM']:
         if not have_kvm:
             print "Warning: Can not enable KVM, host seems to lack KVM support"
+            env['USE_KVM'] = False
+        elif not have_posix_timers:
+            print "Warning: Can not enable KVM, host seems to lack support " \
+                "for POSIX timers"
             env['USE_KVM'] = False
         elif not is_isa_kvm_compatible(env['TARGET_ISA']):
             print "Info: KVM support disabled due to unsupported host and " \

@@ -40,18 +40,19 @@
  */
 
 #include "base/random.hh"
+#include "base/trace.hh"
 #include "cpu/testers/traffic_gen/generators.hh"
 #include "debug/TrafficGen.hh"
 #include "proto/packet.pb.h"
 
-BaseGen::BaseGen(QueuedMasterPort& _port, MasterID master_id, Tick _duration)
-    : port(_port), masterID(master_id), duration(_duration)
+BaseGen::BaseGen(const std::string& _name, MasterID master_id, Tick _duration)
+    : _name(_name), masterID(master_id), duration(_duration)
 {
 }
 
-void
-BaseGen::send(Addr addr, unsigned size, const MemCmd& cmd,
-              Request::FlagsType flags)
+PacketPtr
+BaseGen::getPacket(Addr addr, unsigned size, const MemCmd& cmd,
+                   Request::FlagsType flags)
 {
     // Create new request
     Request *req = new Request(addr, size, flags, masterID);
@@ -66,7 +67,7 @@ BaseGen::send(Addr addr, unsigned size, const MemCmd& cmd,
         memset(pkt_data, 0xA, req->getSize());
     }
 
-    port.schedTimingReq(pkt, curTick());
+    return pkt;
 }
 
 void
@@ -75,16 +76,10 @@ LinearGen::enter()
     // reset the address and the data counter
     nextAddr = startAddr;
     dataManipulated = 0;
-
-    // this test only needs to happen once, but cannot be performed
-    // before init() is called and the ports are connected
-    if (port.deviceBlockSize() && blocksize > port.deviceBlockSize())
-        fatal("TrafficGen %s block size (%d) is larger than port"
-              " block size (%d)\n", blocksize, port.deviceBlockSize());
 }
 
-void
-LinearGen::execute()
+PacketPtr
+LinearGen::getNextPacket()
 {
     // choose if we generate a read or a write here
     bool isRead = readPercent != 0 &&
@@ -93,29 +88,32 @@ LinearGen::execute()
     assert((readPercent == 0 && !isRead) || (readPercent == 100 && isRead) ||
            readPercent != 100);
 
-    DPRINTF(TrafficGen, "LinearGen::execute: %c to addr %x, size %d\n",
+    DPRINTF(TrafficGen, "LinearGen::getNextPacket: %c to addr %x, size %d\n",
             isRead ? 'r' : 'w', nextAddr, blocksize);
 
-    send(nextAddr, blocksize, isRead ? MemCmd::ReadReq : MemCmd::WriteReq);
+    // Add the amount of data manipulated to the total
+    dataManipulated += blocksize;
+
+    PacketPtr pkt = getPacket(nextAddr, blocksize,
+                              isRead ? MemCmd::ReadReq : MemCmd::WriteReq);
 
     // increment the address
     nextAddr += blocksize;
 
-    // Add the amount of data manipulated to the total
-    dataManipulated += blocksize;
-}
-
-Tick
-LinearGen::nextExecuteTick()
-{
     // If we have reached the end of the address space, reset the
     // address to the start of the range
-    if (nextAddr + blocksize > endAddr) {
+    if (nextAddr > endAddr) {
         DPRINTF(TrafficGen, "Wrapping address to the start of "
                 "the range\n");
         nextAddr = startAddr;
     }
 
+    return pkt;
+}
+
+Tick
+LinearGen::nextPacketTick(bool elastic, Tick delay) const
+{
     // Check to see if we have reached the data limit. If dataLimit is
     // zero we do not have a data limit and therefore we will keep
     // generating requests for the entire residency in this state.
@@ -125,7 +123,19 @@ LinearGen::nextExecuteTick()
         return MaxTick;
     } else {
         // return the time when the next request should take place
-        return curTick() + random_mt.random<Tick>(minPeriod, maxPeriod);
+        Tick wait = random_mt.random<Tick>(minPeriod, maxPeriod);
+
+        // compensate for the delay experienced to not be elastic, by
+        // default the value we generate is from the time we are
+        // asked, so the elasticity happens automatically
+        if (!elastic) {
+            if (wait < delay)
+                wait = 0;
+            else
+                wait -= delay;
+        }
+
+        return curTick() + wait;
     }
 }
 
@@ -134,16 +144,10 @@ RandomGen::enter()
 {
     // reset the counter to zero
     dataManipulated = 0;
-
-    // this test only needs to happen once, but cannot be performed
-    // before init() is called and the ports are connected
-    if (port.deviceBlockSize() && blocksize > port.deviceBlockSize())
-        fatal("TrafficGen %s block size (%d) is larger than port"
-              " block size (%d)\n", blocksize, port.deviceBlockSize());
 }
 
-void
-RandomGen::execute()
+PacketPtr
+RandomGen::getNextPacket()
 {
     // choose if we generate a read or a write here
     bool isRead = readPercent != 0 &&
@@ -158,18 +162,19 @@ RandomGen::execute()
     // round down to start address of block
     addr -= addr % blocksize;
 
-    DPRINTF(TrafficGen, "RandomGen::execute: %c to addr %x, size %d\n",
+    DPRINTF(TrafficGen, "RandomGen::getNextPacket: %c to addr %x, size %d\n",
             isRead ? 'r' : 'w', addr, blocksize);
 
-    // send a new request packet
-    send(addr, blocksize, isRead ? MemCmd::ReadReq : MemCmd::WriteReq);
-
-    // Add the amount of data manipulated to the total
+    // add the amount of data manipulated to the total
     dataManipulated += blocksize;
+
+    // create a new request packet
+    return getPacket(addr, blocksize,
+                     isRead ? MemCmd::ReadReq : MemCmd::WriteReq);
 }
 
 Tick
-RandomGen::nextExecuteTick()
+RandomGen::nextPacketTick(bool elastic, Tick delay) const
 {
     // Check to see if we have reached the data limit. If dataLimit is
     // zero we do not have a data limit and therefore we will keep
@@ -180,21 +185,39 @@ RandomGen::nextExecuteTick()
         // No more requests. Return MaxTick.
         return MaxTick;
     } else {
-        // Return the time when the next request should take place.
-        return curTick() + random_mt.random<Tick>(minPeriod, maxPeriod);
+        // return the time when the next request should take place
+        Tick wait = random_mt.random<Tick>(minPeriod, maxPeriod);
+
+        // compensate for the delay experienced to not be elastic, by
+        // default the value we generate is from the time we are
+        // asked, so the elasticity happens automatically
+        if (!elastic) {
+            if (wait < delay)
+                wait = 0;
+            else
+                wait -= delay;
+        }
+
+        return curTick() + wait;
     }
 }
 
 TraceGen::InputStream::InputStream(const std::string& filename)
     : trace(filename)
 {
+    init();
+}
+
+void
+TraceGen::InputStream::init()
+{
     // Create a protobuf message for the header and read it from the stream
     Message::PacketHeader header_msg;
     if (!trace.read(header_msg)) {
-        panic("Failed to read packet header from %s\n", filename);
+        panic("Failed to read packet header from trace\n");
 
         if (header_msg.tick_freq() != SimClock::Frequency) {
-            panic("Trace %s was recorded with a different tick frequency %d\n",
+            panic("Trace was recorded with a different tick frequency %d\n",
                   header_msg.tick_freq());
         }
     }
@@ -204,6 +227,7 @@ void
 TraceGen::InputStream::reset()
 {
     trace.reset();
+    init();
 }
 
 bool
@@ -224,41 +248,26 @@ TraceGen::InputStream::read(TraceElement& element)
 }
 
 Tick
-TraceGen::nextExecuteTick() {
-    if (traceComplete)
+TraceGen::nextPacketTick(bool elastic, Tick delay) const
+{
+    if (traceComplete) {
+        DPRINTF(TrafficGen, "No next tick as trace is finished\n");
         // We are at the end of the file, thus we have no more data in
         // the trace Return MaxTick to signal that there will be no
         // more transactions in this active period for the state.
         return MaxTick;
-
-
-    //Reset the nextElement to the default values
-    currElement = nextElement;
-    nextElement.clear();
-
-    // We need to look at the next line to calculate the next time an
-    // event occurs, or potentially return MaxTick to signal that
-    // nothing has to be done.
-    if (!trace.read(nextElement)) {
-        traceComplete = true;
-        return MaxTick;
     }
 
-    DPRINTF(TrafficGen, "currElement: %c addr %d size %d tick %d (%d)\n",
-            currElement.cmd.isRead() ? 'r' : 'w',
-            currElement.addr,
-            currElement.blocksize,
-            currElement.tick + tickOffset,
-            currElement.tick);
+    assert(nextElement.isValid());
 
-    DPRINTF(TrafficGen, "nextElement: %c addr %d size %d tick %d (%d)\n",
-            nextElement.cmd.isRead() ? 'r' : 'w',
-            nextElement.addr,
-            nextElement.blocksize,
-            nextElement.tick + tickOffset,
+    DPRINTF(TrafficGen, "Next packet tick is %d\n", tickOffset +
             nextElement.tick);
 
-    return tickOffset + nextElement.tick;
+    // if the playback is supposed to be elastic, add the delay
+    if (elastic)
+        tickOffset += delay;
+
+    return std::max(tickOffset + nextElement.tick, curTick());
 }
 
 void
@@ -268,28 +277,46 @@ TraceGen::enter()
     tickOffset = curTick();
 
     // clear everything
-    nextElement.clear();
     currElement.clear();
 
-    traceComplete = false;
+    // read the first element in the file and set the complete flag
+    traceComplete = !trace.read(nextElement);
 }
 
-void
-TraceGen::execute()
+PacketPtr
+TraceGen::getNextPacket()
 {
-    // it is the responsibility of nextExecuteTick to prevent the
-    // state graph from executing the state if it should not
+    // shift things one step forward
+    currElement = nextElement;
+    nextElement.clear();
+
+    // read the next element and set the complete flag
+    traceComplete = !trace.read(nextElement);
+
+    // it is the responsibility of the traceComplete flag to ensure we
+    // always have a valid element here
     assert(currElement.isValid());
 
-    DPRINTF(TrafficGen, "TraceGen::execute: %c %d %d %d 0x%x\n",
+    DPRINTF(TrafficGen, "TraceGen::getNextPacket: %c %d %d %d 0x%x\n",
             currElement.cmd.isRead() ? 'r' : 'w',
             currElement.addr,
             currElement.blocksize,
             currElement.tick,
             currElement.flags);
 
-    send(currElement.addr + addrOffset, currElement.blocksize,
-         currElement.cmd, currElement.flags);
+    PacketPtr pkt = getPacket(currElement.addr + addrOffset,
+                              currElement.blocksize,
+                              currElement.cmd, currElement.flags);
+
+    if (!traceComplete)
+        DPRINTF(TrafficGen, "nextElement: %c addr %d size %d tick %d (%d)\n",
+                nextElement.cmd.isRead() ? 'r' : 'w',
+                nextElement.addr,
+                nextElement.blocksize,
+                nextElement.tick + tickOffset,
+                nextElement.tick);
+
+    return pkt;
 }
 
 void

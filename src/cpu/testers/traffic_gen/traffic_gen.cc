@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -54,9 +54,15 @@ TrafficGen::TrafficGen(const TrafficGenParams* p)
     : MemObject(p),
       system(p->system),
       masterID(system->getMasterId(name())),
+      configFile(p->config_file),
+      elasticReq(p->elastic_req),
+      nextTransitionTick(0),
+      nextPacketTick(0),
       port(name() + ".port", *this),
-      stateGraph(*this, port, p->config_file, masterID),
-      updateStateGraphEvent(this)
+      retryPkt(NULL),
+      retryPktTick(0),
+      updateEvent(this),
+      drainManager(NULL)
 {
 }
 
@@ -86,8 +92,10 @@ TrafficGen::init()
     if (system->isTimingMode()) {
         DPRINTF(TrafficGen, "Timing mode, activating request generator\n");
 
+        parseConfig();
+
         // enter initial state
-        stateGraph.enterState(stateGraph.currState);
+        enterState(currState);
     } else {
         DPRINTF(TrafficGen,
                 "Traffic generator is only active in timing mode\n");
@@ -99,8 +107,9 @@ TrafficGen::initState()
 {
     // when not restoring from a checkpoint, make sure we kick things off
     if (system->isTimingMode()) {
-        Tick nextStateGraphEvent = stateGraph.nextEventTick();
-        schedule(updateStateGraphEvent, nextStateGraphEvent);
+        // call nextPacketTick on the state to advance it
+        nextPacketTick = states[currState]->nextPacketTick(elasticReq, 0);
+        schedule(updateEvent, std::min(nextPacketTick, nextTransitionTick));
     } else {
         DPRINTF(TrafficGen,
                 "Traffic generator is only active in timing mode\n");
@@ -110,9 +119,16 @@ TrafficGen::initState()
 unsigned int
 TrafficGen::drain(DrainManager *dm)
 {
-    // @todo we should also stop putting new requests in the queue and
-    // either interrupt the current state or wait for a transition
-    return port.drain(dm);
+    if (retryPkt == NULL) {
+        // shut things down
+        nextPacketTick = MaxTick;
+        nextTransitionTick = MaxTick;
+        deschedule(updateEvent);
+        return 0;
+    } else {
+        drainManager = dm;
+        return 1;
+    }
 }
 
 void
@@ -121,53 +137,72 @@ TrafficGen::serialize(ostream &os)
     DPRINTF(Checkpoint, "Serializing TrafficGen\n");
 
     // save ticks of the graph event if it is scheduled
-    Tick nextStateGraphEvent = updateStateGraphEvent.scheduled() ?
-        updateStateGraphEvent.when() : 0;
+    Tick nextEvent = updateEvent.scheduled() ? updateEvent.when() : 0;
 
-    DPRINTF(TrafficGen, "Saving nextStateGraphEvent=%llu\n",
-            nextStateGraphEvent);
+    DPRINTF(TrafficGen, "Saving nextEvent=%llu\n", nextEvent);
 
-    SERIALIZE_SCALAR(nextStateGraphEvent);
+    SERIALIZE_SCALAR(nextEvent);
 
-    Tick nextTransitionTick = stateGraph.nextTransitionTick;
     SERIALIZE_SCALAR(nextTransitionTick);
 
-    // @todo: also serialise the current state, figure out the best
-    // way to drain and restore
+    SERIALIZE_SCALAR(nextPacketTick);
+
+    SERIALIZE_SCALAR(currState);
 }
 
 void
 TrafficGen::unserialize(Checkpoint* cp, const string& section)
 {
     // restore scheduled events
-    Tick nextStateGraphEvent;
-    UNSERIALIZE_SCALAR(nextStateGraphEvent);
-    if (nextStateGraphEvent != 0) {
-        schedule(updateStateGraphEvent, nextStateGraphEvent);
+    Tick nextEvent;
+    UNSERIALIZE_SCALAR(nextEvent);
+    if (nextEvent != 0) {
+        schedule(updateEvent, nextEvent);
     }
 
-    Tick nextTransitionTick;
     UNSERIALIZE_SCALAR(nextTransitionTick);
-    stateGraph.nextTransitionTick = nextTransitionTick;
+
+    UNSERIALIZE_SCALAR(nextPacketTick);
+
+    // @todo In the case of a stateful generator state such as the
+    // trace player we would also have to restore the position in the
+    // trace playback and the tick offset
+    UNSERIALIZE_SCALAR(currState);
 }
 
 void
-TrafficGen::updateStateGraph()
+TrafficGen::update()
 {
-    // schedule next update event based on either the next execute
-    // tick or the next transition, which ever comes first
-    Tick nextStateGraphEvent = stateGraph.nextEventTick();
-    DPRINTF(TrafficGen, "Updating state graph, next event at %lld\n",
-            nextStateGraphEvent);
-    schedule(updateStateGraphEvent, nextStateGraphEvent);
+    // if we have reached the time for the next state transition, then
+    // perform the transition
+    if (curTick() >= nextTransitionTick) {
+        transition();
+    } else {
+        assert(curTick() >= nextPacketTick);
+        // get the next packet and try to send it
+        PacketPtr pkt = states[currState]->getNextPacket();
+        numPackets++;
+        if (!port.sendTimingReq(pkt)) {
+            retryPkt = pkt;
+            retryPktTick = curTick();
+        }
+    }
 
-    // perform the update associated with the current update event
-    stateGraph.update();
+    // if we are waiting for a retry, do not schedule any further
+    // events, in the case of a transition or a successful send, go
+    // ahead and determine when the next update should take place
+    if (retryPkt == NULL) {
+        // schedule next update event based on either the next execute
+        // tick or the next transition, which ever comes first
+        nextPacketTick = states[currState]->nextPacketTick(elasticReq, 0);
+        Tick nextEventTick = std::min(nextPacketTick, nextTransitionTick);
+        DPRINTF(TrafficGen, "Next event scheduled at %lld\n", nextEventTick);
+        schedule(updateEvent, nextEventTick);
+    }
 }
 
 void
-TrafficGen::StateGraph::parseConfig(const string& file_name,
-                                    MasterID master_id)
+TrafficGen::parseConfig()
 {
     // keep track of the transitions parsed to create the matrix when
     // done
@@ -175,10 +210,10 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
 
     // open input file
     ifstream infile;
-    infile.open(file_name.c_str(), ifstream::in);
+    infile.open(configFile.c_str(), ifstream::in);
     if (!infile.is_open()) {
         fatal("Traffic generator %s config file not found at %s\n",
-              owner.name(), file_name);
+              name(), configFile);
     }
 
     // read line by line and determine the action based on the first
@@ -209,11 +244,11 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
 
                     is >> traceFile >> addrOffset;
 
-                    states[id] = new TraceGen(port, master_id, duration,
+                    states[id] = new TraceGen(name(), masterID, duration,
                                               traceFile, addrOffset);
                     DPRINTF(TrafficGen, "State: %d TraceGen\n", id);
                 } else if (mode == "IDLE") {
-                    states[id] = new IdleGen(port, master_id, duration);
+                    states[id] = new IdleGen(name(), masterID, duration);
                     DPRINTF(TrafficGen, "State: %d IdleGen\n", id);
                 } else if (mode == "LINEAR" || mode == "RANDOM") {
                     uint32_t read_percent;
@@ -232,18 +267,27 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
                             mode, start_addr, end_addr, blocksize, min_period,
                             max_period, read_percent);
 
+
+                    if (blocksize > system->cacheLineSize())
+                        fatal("TrafficGen %s block size (%d) is larger than "
+                              "system block size (%d)\n", name(),
+                              blocksize, system->cacheLineSize());
+
                     if (read_percent > 100)
-                        panic("%s cannot have more than 100% reads", name());
+                        fatal("%s cannot have more than 100% reads", name());
+
+                    if (min_period > max_period)
+                        fatal("%s cannot have min_period > max_period", name());
 
                     if (mode == "LINEAR") {
-                        states[id] = new LinearGen(port, master_id,
+                        states[id] = new LinearGen(name(), masterID,
                                                    duration, start_addr,
                                                    end_addr, blocksize,
                                                    min_period, max_period,
                                                    read_percent, data_limit);
                         DPRINTF(TrafficGen, "State: %d LinearGen\n", id);
                     } else if (mode == "RANDOM") {
-                        states[id] = new RandomGen(port, master_id,
+                        states[id] = new RandomGen(name(), masterID,
                                                    duration, start_addr,
                                                    end_addr, blocksize,
                                                    min_period, max_period,
@@ -273,9 +317,9 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
     }
 
     // resize and populate state transition matrix
-    transitionMatrix.resize(transitions.size());
-    for (size_t i = 0; i < transitions.size(); i++) {
-        transitionMatrix[i].resize(transitions.size());
+    transitionMatrix.resize(states.size());
+    for (size_t i = 0; i < states.size(); i++) {
+        transitionMatrix[i].resize(states.size());
     }
 
     for (vector<Transition>::iterator t = transitions.begin();
@@ -285,9 +329,9 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
 
     // ensure the egress edges do not have a probability larger than
     // one
-    for (size_t i = 0; i < transitions.size(); i++) {
+    for (size_t i = 0; i < states.size(); i++) {
         double sum = 0;
-        for (size_t j = 0; j < transitions.size(); j++) {
+        for (size_t j = 0; j < states.size(); j++) {
             sum += transitionMatrix[i][j];
         }
 
@@ -302,20 +346,7 @@ TrafficGen::StateGraph::parseConfig(const string& file_name,
 }
 
 void
-TrafficGen::StateGraph::update()
-{
-    // if we have reached the time for the next state transition, then
-    // perform the transition
-    if (curTick() >= nextTransitionTick) {
-        transition();
-    } else {
-        // we are still in the current state and should execute it
-        states[currState]->execute();
-    }
-}
-
-void
-TrafficGen::StateGraph::transition()
+TrafficGen::transition()
 {
     // exit the current state
     states[currState]->exit();
@@ -334,13 +365,70 @@ TrafficGen::StateGraph::transition()
 }
 
 void
-TrafficGen::StateGraph::enterState(uint32_t newState)
+TrafficGen::enterState(uint32_t newState)
 {
     DPRINTF(TrafficGen, "Transition to state %d\n", newState);
 
     currState = newState;
-    nextTransitionTick += states[currState]->duration;
+    // we could have been delayed and not transitioned on the exact
+    // tick when we were supposed to (due to back pressure when
+    // sending a packet)
+    nextTransitionTick = curTick() + states[currState]->duration;
     states[currState]->enter();
+}
+
+void
+TrafficGen::recvRetry()
+{
+    assert(retryPkt != NULL);
+
+    DPRINTF(TrafficGen, "Received retry\n");
+    numRetries++;
+    // attempt to send the packet, and if we are successful start up
+    // the machinery again
+    if (port.sendTimingReq(retryPkt)) {
+        retryPkt = NULL;
+        // remember how much delay was incurred due to back-pressure
+        // when sending the request, we also use this to derive
+        // the tick for the next packet
+        Tick delay = curTick() - retryPktTick;
+        retryPktTick = 0;
+        retryTicks += delay;
+
+        if (drainManager == NULL) {
+            // packet is sent, so find out when the next one is due
+            nextPacketTick = states[currState]->nextPacketTick(elasticReq,
+                                                               delay);
+            Tick nextEventTick = std::min(nextPacketTick, nextTransitionTick);
+            schedule(updateEvent, std::max(curTick(), nextEventTick));
+        } else {
+            // shut things down
+            nextPacketTick = MaxTick;
+            nextTransitionTick = MaxTick;
+            drainManager->signalDrainDone();
+            // Clear the drain event once we're done with it.
+            drainManager = NULL;
+        }
+    }
+}
+
+void
+TrafficGen::regStats()
+{
+    // Initialise all the stats
+    using namespace Stats;
+
+    numPackets
+        .name(name() + ".numPackets")
+        .desc("Number of packets generated");
+
+    numRetries
+        .name(name() + ".numRetries")
+        .desc("Number of retries");
+
+    retryTicks
+        .name(name() + ".retryTicks")
+        .desc("Time spent waiting due to back-pressure (ticks)");
 }
 
 bool

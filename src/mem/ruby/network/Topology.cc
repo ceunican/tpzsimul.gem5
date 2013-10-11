@@ -89,7 +89,9 @@ Topology::Topology(uint32_t num_routers, vector<BasicExtLink *> ext_links,
         // Store the ExtLink pointers for later
         m_ext_link_vector.push_back(ext_link);
 
-        int ext_idx1 = abs_cntrl->params()->cntrl_id;
+        int machine_base_idx = MachineType_base_number(
+                string_to_MachineType(abs_cntrl->getName()));
+        int ext_idx1 = machine_base_idx + abs_cntrl->getVersion();
         int ext_idx2 = ext_idx1 + m_nodes;
         int int_idx = router->params()->router_id + 2*m_nodes;
 
@@ -121,7 +123,7 @@ Topology::Topology(uint32_t num_routers, vector<BasicExtLink *> ext_links,
 }
 
 void
-Topology::createLinks(Network *net, bool isReconfiguration)
+Topology::createLinks(Network *net)
 {
     // Find maximum switchID
     SwitchID max_switch_id = 0;
@@ -179,9 +181,9 @@ Topology::createLinks(Network *net, bool isReconfiguration)
         for (int j = 0; j < topology_weights[i].size(); j++) {
             int weight = topology_weights[i][j];
             if (weight > 0 && weight != INFINITE_LATENCY) {
-                NetDest destination_set = shortest_path_to_node(i, j,
-                                                     topology_weights, dist);
-                makeLink(net, i, j, destination_set, isReconfiguration);
+                NetDest destination_set =
+                        shortest_path_to_node(i, j, topology_weights, dist);
+                makeLink(net, i, j, destination_set);
             }
         }
     }
@@ -206,7 +208,7 @@ Topology::addLink(SwitchID src, SwitchID dest, BasicLink* link,
 
 void
 Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
-                   const NetDest& routing_table_entry, bool isReconfiguration)
+                   const NetDest& routing_table_entry)
 {
     // Make sure we're not trying to connect two end-point nodes
     // directly together
@@ -220,9 +222,7 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
         src_dest.second = dest;
         link_entry = m_link_map[src_dest];
         net->makeInLink(src, dest - (2 * m_nodes), link_entry.link,
-                        link_entry.direction,
-                        routing_table_entry,
-                        isReconfiguration);
+                        link_entry.direction, routing_table_entry);
     } else if (dest < 2*m_nodes) {
         assert(dest >= m_nodes);
         NodeID node = dest - m_nodes;
@@ -230,15 +230,7 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
         src_dest.second = dest;
         link_entry = m_link_map[src_dest];
         net->makeOutLink(src - (2 * m_nodes), node, link_entry.link,
-                         link_entry.direction, 
-                         routing_table_entry,
-                         isReconfiguration);
-        //Required to make TOPAZ aware of ruby Mapping
-        //When topaz needs to inject (after ruby "interception")
-        //a message should be know what router is
-        //connected to the destination machineID. This function
-        //constructs the maping between Topaz routers and ruby machineIds
-        net->setTopazMapping(dest-m_nodes, src);
+                         link_entry.direction, routing_table_entry);
     } else {
         assert((src >= 2 * m_nodes) && (dest >= 2 * m_nodes));
         src_dest.first = src;
@@ -246,7 +238,7 @@ Topology::makeLink(Network *net, SwitchID src, SwitchID dest,
         link_entry = m_link_map[src_dest];
         net->makeInternalLink(src - (2 * m_nodes), dest - (2 * m_nodes),
                               link_entry.link, link_entry.direction,
-                              routing_table_entry, isReconfiguration);
+                              routing_table_entry);
     }
 }
 
