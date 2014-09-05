@@ -63,10 +63,11 @@ class TopazSwitch : public BasicRouter
     ~TopazSwitch();
 
     void init();
-    void addInPort(const std::vector<MessageBuffer*>& in);
-    void addOutPort(const std::vector<MessageBuffer*>& out,
-        const NetDest& routing_table_entry, Cycles link_latency,
-        int bw_multiplier);
+    void addInPort(const std::map<int, MessageBuffer*>& in);
+    void addOutPort(const std::map<int, MessageBuffer*>& out,
+                const NetDest& routing_table_entry,
+                Cycles link_latency, int bw_multiplier);
+
     const Throttle* getThrottle(LinkID link_number) const;
     const std::vector<Throttle*>* getThrottles() const;
 
@@ -92,8 +93,8 @@ class TopazSwitch : public BasicRouter
     std::vector<Throttle*> m_throttles;
     std::vector<MessageBuffer*> m_buffers_to_free;
     Stats::Formula m_avg_utilization;
-    
-    
+
+
     Stats::Formula m_msg_counts[MessageSizeType_NUM];
     Stats::Formula m_msg_bytes[MessageSizeType_NUM];
 };

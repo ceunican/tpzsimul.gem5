@@ -31,7 +31,7 @@
 
 #include "base/cast.hh"
 #include "base/stl_helpers.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
+#include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/common/NetDest.hh"
 #include "mem/ruby/network/BasicLink.hh"
 #include "mem/ruby/network/simple/SimpleLink.hh"
@@ -104,7 +104,7 @@ TopazNetwork::TopazNetwork(const Params *p)
     m_reverse_mapping.resize(m_nodes);
 
     // Allocate to and from queues
-    m_toNetQueues.resize(m_nodes);
+   /*  m_toNetQueues.resize(m_nodes);
     m_fromNetQueues.resize(m_nodes);
     for (int node = 0; node < m_nodes; node++) {
         m_toNetQueues[node].resize(m_virtual_networks);
@@ -115,7 +115,8 @@ TopazNetwork::TopazNetwork(const Params *p)
             m_fromNetQueues[node][j] =
                 new MessageBuffer(csprintf("fromNet node %d j %d", node, j));
         }
-    }
+    }*/
+
     // record the routers
     for (vector<BasicRouter*>::const_iterator i = p->routers.begin();
          i != p->routers.end(); ++i) {
@@ -284,10 +285,10 @@ TopazNetwork::getFromSimNetQueue(NodeID id, bool ordered, int network_num)
 
 TopazNetwork::~TopazNetwork()
 {
-    for (int i = 0; i < m_nodes; i++) {
-        deletePointers(m_toNetQueues[i]);
-        deletePointers(m_fromNetQueues[i]);
-    }
+  //  for (int i = 0; i < m_nodes; i++) {
+  //      deletePointers(m_toNetQueues[i]);
+  //      deletePointers(m_fromNetQueues[i]);
+  //  }
     deletePointers(m_switch_ptr_vector);
     deletePointers(m_buffers_to_free);
     // delete m_topology_ptr;
@@ -305,13 +306,13 @@ TopazNetwork::makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
 
     SimpleExtLink *simple_link = safe_cast<SimpleExtLink*>(link);
 
-    m_switch_ptr_vector[src]->addOutPort(m_fromNetQueues[dest],
-                                         routing_table_entry,
-                                         simple_link->m_latency,
-                                         simple_link->m_bw_multiplier);
+    m_switch_ptr_vector[src]->addOutPort(m_fromNetQueues[dest], routing_table_entry,
+                                simple_link->m_latency,
+                                simple_link->m_bw_multiplier);
 
     m_endpoint_switches[dest] = m_switch_ptr_vector[src];
 }
+
 
 // From an endpoint node to a switch
 void
@@ -330,25 +331,28 @@ TopazNetwork::makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
                                 const NetDest& routing_table_entry)
 {
     // Create a set of new MessageBuffers
-    std::vector<MessageBuffer*> queues;
+    std::map<int, MessageBuffer*> queues;
     for (int i = 0; i < m_virtual_networks; i++) {
         // allocate a buffer
         MessageBuffer* buffer_ptr = new MessageBuffer;
         buffer_ptr->setOrdering(true);
+
         if (m_buffer_size > 0) {
             buffer_ptr->resize(m_buffer_size);
         }
-        queues.push_back(buffer_ptr);
+
+        queues[i] = buffer_ptr;
         // remember to deallocate it
         m_buffers_to_free.push_back(buffer_ptr);
     }
+
     // Connect it to the two switches
     SimpleIntLink *simple_link = safe_cast<SimpleIntLink*>(link);
 
     m_switch_ptr_vector[dest]->addInPort(queues);
     m_switch_ptr_vector[src]->addOutPort(queues, routing_table_entry,
-                                         simple_link->m_latency,
-                                         simple_link->m_bw_multiplier);
+                                simple_link->m_latency,
+                                simple_link->m_bw_multiplier);
 }
 
 void
@@ -363,6 +367,7 @@ TopazNetwork::checkNetworkAllocation(NodeID id, bool ordered, int network_num)
     m_in_use[network_num] = true;
 }
 
+/*
 MessageBuffer*
 TopazNetwork::getToNetQueue(NodeID id, bool ordered, int network_num,
                              std::string vnet_type)
@@ -377,6 +382,22 @@ TopazNetwork::getFromNetQueue(NodeID id, bool ordered, int network_num,
 {
     checkNetworkAllocation(id, ordered, network_num);
     return m_fromNetQueues[id][network_num];
+}
+*/
+void
+TopazNetwork::setToNetQueue(NodeID id, bool ordered, int network_num,
+                             std::string vnet_type, MessageBuffer *b)
+{
+    checkNetworkAllocation(id, ordered, network_num);
+    m_toNetQueues[id][network_num] = b;
+}
+
+void
+TopazNetwork::setFromNetQueue(NodeID id, bool ordered, int network_num,
+                               std::string vnet_type, MessageBuffer *b)
+{
+    checkNetworkAllocation(id, ordered, network_num);
+    m_fromNetQueues[id][network_num] = b;
 }
 
 const std::vector<Throttle*>*
@@ -486,9 +507,9 @@ TopazNetwork::print(ostream& out) const
     out<<"Ratio Processor Clock/Network Clock = "<<m_processorClockRatio<<endl;
     out<<"Flit size in bytes                  = "<<m_flitSize<<" bytes"<<endl;
     for(unsigned currentVnet=1;currentVnet<=m_unify;currentVnet++){
-        TPZSIMULATOR()->getSimulation(currentVnet)->writeSimulationStatus(cout);
+        TPZSIMULATOR()->getSimulation(currentVnet)->writeSimulationStatus(out);
         TPZSIMULATOR()->getSimulation(currentVnet)->
-                        getNetwork()->writeComponentStatus(cout);
+                        getNetwork()->writeComponentStatus(out);
     }
     out << endl;
     TopazNetwork* net=static_cast<TopazNetwork*>(g_system_ptr->getNetwork());
