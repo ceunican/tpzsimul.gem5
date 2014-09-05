@@ -73,7 +73,7 @@ class TopazNetwork : public Network
     int getBufferSize() { return m_buffer_size; }
     int getEndpointBandwidth() { return m_endpoint_bandwidth; }
     bool getAdaptiveRouting() {return m_adaptive_routing; }
-    
+
     void collateStats();
     void regStats();
     void printConfig(std::ostream& out) const;
@@ -114,8 +114,11 @@ class TopazNetwork : public Network
     void reset();
 
     // returns the queue requested for the given component
-    MessageBuffer* getToNetQueue(NodeID id, bool ordered, int network_num, std::string vnet_type);
-    MessageBuffer* getFromNetQueue(NodeID id, bool ordered, int network_num, std::string vnet_type);
+    void setToNetQueue(NodeID id, bool ordered, int network_num,
+                       std::string vnet_type, MessageBuffer *b);
+    void setFromNetQueue(NodeID id, bool ordered, int network_num,
+                         std::string vnet_type, MessageBuffer *b);
+
     virtual const std::vector<Throttle*>* getThrottles(NodeID id) const;
 
     const bool isVNetOrdered(int vnet) { return m_ordered[vnet]; }
@@ -124,14 +127,14 @@ class TopazNetwork : public Network
     int getNumNodes() {return m_nodes; }
 
     // Methods used by Topology to setup the network
-    void makeOutLink(SwitchID src, NodeID dest, BasicLink* link, 
-                     LinkDirection direction, 
+    void makeOutLink(SwitchID src, NodeID dest, BasicLink* link,
+                     LinkDirection direction,
                      const NetDest& routing_table_entry);
     void makeInLink(NodeID src, SwitchID dest, BasicLink* link,
                     LinkDirection direction,
                     const NetDest& routing_table_entry);
     void makeInternalLink(SwitchID src, SwitchID dest, BasicLink* link,
-                          LinkDirection direction, 
+                          LinkDirection direction,
                           const NetDest& routing_table_entry);
 
     void print(std::ostream& out) const;
@@ -174,8 +177,8 @@ class TopazNetwork : public Network
     TopazNetwork& operator=(const TopazNetwork& obj);
 
     // vector of queues from the components
-    std::vector<std::vector<MessageBuffer*> > m_toNetQueues;
-    std::vector<std::vector<MessageBuffer*> > m_fromNetQueues;
+    //std::vector<std::vector<MessageBuffer*> > m_toNetQueues;
+    //std::vector<std::vector<MessageBuffer*> > m_fromNetQueues;
 
     std::vector<bool> m_in_use;
     std::vector<bool> m_ordered;
@@ -185,7 +188,7 @@ class TopazNetwork : public Network
 
     int m_buffer_size;
     int m_endpoint_bandwidth;
-    bool m_adaptive_routing;    
+    bool m_adaptive_routing;
 
     //Statistical variables
     Stats::Formula m_msg_counts[MessageSizeType_NUM];

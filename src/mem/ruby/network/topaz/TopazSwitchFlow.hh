@@ -66,9 +66,10 @@ class TopazSwitchFlow : public Consumer
     { return csprintf("TopazSwitch-%i", m_switch_id); }
 
     void init(TopazNetwork *);
-    void addInPort(const std::vector<MessageBuffer*>& in);
-    void addOutPort(const std::vector<MessageBuffer*>& out,
-                    const NetDest& routing_table_entry);
+void addInPort(const std::map<int, MessageBuffer*>& in);
+void addOutPort(const std::map<int, MessageBuffer*>& out,
+                const NetDest& routing_table_entry);
+
     int getInLinks() const { return m_in.size(); }
     int getOutLinks() const { return m_out.size(); }
 
@@ -80,8 +81,8 @@ class TopazSwitchFlow : public Consumer
     void filterZeroDistanceMessages(MsgPtr& msg_ptr, int vnet, NetDest& destinations);
     NetDest getConsumerDestinations(int switch_id, NetDest& mensaje);
     void wakeUpTopaz();
-    void addOutNetPort(const std::vector<MessageBuffer*>& out,
-                       const NetDest& routing_table_entry);
+    /*void addOutNetPort(const std::vector<MessageBuffer*>& out,
+                       const NetDest& routing_table_entry);*/
     void printStats(std::ostream& out) const;
     void clearStats();
     void printConfig(std::ostream& out) const;
@@ -97,8 +98,13 @@ class TopazSwitchFlow : public Consumer
     SwitchID m_switch_id;
 
     // vector of queues from the components
-    std::vector<std::vector<MessageBuffer*> > m_in;
-    std::vector<std::vector<MessageBuffer*> > m_out;
+    //std::vector<std::vector<MessageBuffer*> > m_in;
+    //std::vector<std::vector<MessageBuffer*> > m_out;
+
+    // vector of queues from the components
+    std::vector<std::map<int, MessageBuffer*> > m_in;
+    std::vector<std::map<int, MessageBuffer*> > m_out;
+
     std::vector<NetDest> m_routing_table;
     std::vector<LinkOrder> m_link_order;
     uint32_t m_virtual_networks;

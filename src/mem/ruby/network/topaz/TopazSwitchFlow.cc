@@ -31,11 +31,12 @@
 #include <TPZSimulator.hpp>
 
 #include "base/cast.hh"
+#include "base/random.hh"
 #include "debug/RubyNetwork.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/network/topaz/TopazNetwork.hh"
-#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
 #include "mem/ruby/network/topaz/TopazSwitch.hh"
+#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
+#include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/slicc_interface/NetworkMessage.hh"
 #include "mem/ruby/system/System.hh"
@@ -75,29 +76,27 @@ TopazSwitchFlow::init(TopazNetwork *network_ptr)
 }
 
 void
-TopazSwitchFlow::addInPort(const vector<MessageBuffer*>& in)
+TopazSwitchFlow::addInPort(const map<int, MessageBuffer*>& in)
 {
-    assert(in.size() == m_virtual_networks);
     NodeID port = m_in.size();
     m_in.push_back(in);
 
-    for (int j = 0; j < m_virtual_networks; j++) {
-        m_in[port][j]->setConsumer(this);
+    for (auto& it : in) {
+        it.second->setConsumer(this);
 
         string desc = csprintf("[Queue from port %s %s %s to PerfectSwitch]",
-            to_string(m_switch_id), to_string(port), to_string(j));
-        m_in[port][j]->setDescription(desc);
-        m_in[port][j]->setIncomingLink(port);
-        m_in[port][j]->setVnet(j);
+            to_string(m_switch_id), to_string(port), to_string(it.first));
+
+        it.second->setDescription(desc);
+        it.second->setIncomingLink(port);
+        it.second->setVnet(it.first);
     }
 }
 
 void
-TopazSwitchFlow::addOutPort(const vector<MessageBuffer*>& out,
+TopazSwitchFlow::addOutPort(const map<int, MessageBuffer*>& out,
     const NetDest& routing_table_entry)
 {
-    assert(out.size() == m_virtual_networks);
-
     // Setup link order
     LinkOrder l;
     l.m_value = 0;
@@ -108,27 +107,6 @@ TopazSwitchFlow::addOutPort(const vector<MessageBuffer*>& out,
     m_out.push_back(out);
     m_routing_table.push_back(routing_table_entry);
 }
-
-void
-TopazSwitchFlow::addOutNetPort(const vector<MessageBuffer*>& out,
-                               const NetDest& routing_table_entry){
-    assert(out.size() == m_virtual_networks);
-    // Setup link order
-    LinkOrder l;
-    l.m_value = 0;
-    l.m_link = m_out.size();
-    m_link_order.push_back(l);
-    // Add to routing table
-    m_out.push_back(out);
-    m_routing_table.push_back(routing_table_entry);
-    /*VPVFIX
-    for (int j = 0; j < m_virtual_networks; j++) {
-        m_out[l.m_link][j]->setOutSwitchPort();
-        m_out[l.m_link][j]->setNetwork(m_network_ptr);
-        m_out[l.m_link][j]->setVNet(j);
-    }*/
-}
-
 
 
 TopazSwitchFlow::~TopazSwitchFlow()
@@ -143,7 +121,7 @@ int TopazSwitchFlow::getUnicastDestination(NetDest destinations) {
     int m_queue=0;
     for (MachineType mType = MachineType_FIRST; mType < MachineType_NUM; ++mType) {
         int limit = MachineType_base_count(mType);
-        for (int component = 0; component < limit; component++) {
+        for (unsigned int component = 0; component < limit; component++) {
             MachineID mach = {mType, component};
             if (destinations.elementAt(mach)==1) {
                 this_id=m_network_ptr->getSwitch(m_queue+component);
@@ -164,7 +142,7 @@ TopazSwitchFlow::getMulticastDestination(NetDest& destinations) {
     unsigned long long routers = 0;
     int node_number = 0;
     for (MachineType m = MachineType_FIRST; m < MachineType_NUM; ++m) {
-        for (int c = 0; c<MachineType_base_count(m); c++) {
+        for (unsigned int c = 0; c<MachineType_base_count(m); c++) {
             MachineID thisMid = {m, c};
             if (destinations.isElement(thisMid)) {
                 unsigned long long mask = 1;
@@ -190,7 +168,7 @@ TopazSwitchFlow::filterZeroDistanceMessages( MsgPtr& msg_ptr, int vnet,
     int m_queue=0;
     for (MachineType mType = MachineType_FIRST; mType < MachineType_NUM; ++mType){
         int limit = MachineType_base_count(mType);
-        for (int component = 0; component < limit; component++)    {
+        for (unsigned int component = 0; component < limit; component++)    {
             MachineID mach = {mType, component};
             if(destinations.elementAt(mach)==1)    {
                 destination=m_network_ptr->getSwitch(m_queue+component);
@@ -225,20 +203,45 @@ TopazSwitchFlow::getConsumerDestinations(int switch_id, NetDest& dest) {
 void TopazSwitchFlow::wakeup() {
     m_wakeups_wo_switch++;
     int highest_prio_vnet = m_virtual_networks-1;
+    int lowest_prio_vnet =0 ;
+    int decrementer = 1;
     int source=m_switch_id;
-    for (int vnet = highest_prio_vnet; vnet >= 0; vnet--) {
-    //If we are in warmup or the adaptive interface is used and then
-    //network is lightly loadad we may ruby network
-     if (m_network_ptr->useGemsNetwork(vnet)) {
-         wakeupVnet(vnet);
-     }
+
+  // invert priorities to avoid starvation seen in the component network
+  if (m_wakeups_wo_switch > PRIORITY_SWITCH_LIMIT) {
+      m_wakeups_wo_switch = 0;
+      highest_prio_vnet = 0;
+      lowest_prio_vnet = m_virtual_networks-1;
+      decrementer = -1;
+  }
+
+// For all components incoming queues
+  for (int vnet = highest_prio_vnet;
+     (vnet * decrementer) >= (decrementer * lowest_prio_vnet);
+     vnet -= decrementer) {
+       //If we are in warmup or the adaptive interface is used and then
+       //network is lightly loadad we may ruby network
+        if (m_network_ptr->useGemsNetwork(vnet)) {
+           wakeupVnet(vnet);
+        }
      //Otherwise, use topaz
-     else{
+      else{
        if(m_pending_message_count[vnet]>0)
         for(int incoming=0;incoming<m_in.size();incoming++) {
+
+            // temporary vectors to store the routing results
+            vector<LinkID> output_links;
+            vector<NetDest> output_link_destinations;
+
+            // Is there a message waiting?
+            auto it = m_in[incoming].find(vnet);
+            if (it == m_in[incoming].end())
+                continue;
+            MessageBuffer *buffer = (*it).second;
+
             //If there is packets waiting, we move it to Topaz
-            while(m_in[incoming][vnet]->isReady()){
-                MsgPtr msg_ptr = m_in[incoming][vnet]->peekMsgPtr();
+            while(buffer->isReady()){
+                MsgPtr msg_ptr = buffer->peekMsgPtr();
                 NetworkMessage *net_msg_ptr =
                         dynamic_cast<NetworkMessage*>(msg_ptr.get());
                 NetDest msg_destinations =
@@ -295,7 +298,7 @@ void TopazSwitchFlow::wakeup() {
                     TPZSIMULATOR()->getSimulation(1)->getNetwork()->sendMessage(msg);
                     m_network_ptr->increaseNumTopazMsg(msg_destinations.count());
                 }
-                m_in[incoming][vnet]->pop();
+                buffer->dequeue();
                 m_pending_message_count[vnet]--;
             }
           }
@@ -347,7 +350,7 @@ void TopazSwitchFlow::wakeUpTopaz() {
                 for (MachineType mType = MachineType_FIRST;
                      mType < MachineType_NUM; ++mType) {
                     int limit = MachineType_base_count(mType);
-                    for (int component = 0; component < limit; component++) {
+                    for (unsigned int component = 0; component < limit; component++) {
                         MachineID mach = {mType, component};
                         if(ConsDestinations.elementAt(mach)==1) {
                             MsgPtr unaMas = localCopy->clone();
@@ -375,187 +378,169 @@ void TopazSwitchFlow::wakeUpTopaz() {
         m_network_ptr->setTriggerSwitch(~0);
 }
 
-void TopazSwitchFlow::wakeupVnet(int vnet)
+
+void
+TopazSwitchFlow::wakeupVnet(int vnet)
 {
     MsgPtr msg_ptr;
-
-    // Give the highest numbered link priority most of the time
-    m_wakeups_wo_switch++;
-    int highest_prio_vnet = m_virtual_networks-1;
-    int lowest_prio_vnet = 0;
-    int decrementer = 1;
     NetworkMessage* net_msg_ptr = NULL;
 
-    // invert priorities to avoid starvation seen in the component network
-    if (m_wakeups_wo_switch > PRIORITY_SWITCH_LIMIT) {
-        m_wakeups_wo_switch = 0;
-        highest_prio_vnet = 0;
-        lowest_prio_vnet = m_virtual_networks-1;
-        decrementer = -1;
+    // This is for round-robin scheduling
+    int incoming = m_round_robin_start;
+    m_round_robin_start++;
+    if (m_round_robin_start >= m_in.size()) {
+        m_round_robin_start = 0;
     }
 
-    // For all components incoming queues
-    for (int vnet = highest_prio_vnet;
-         (vnet * decrementer) >= (decrementer * lowest_prio_vnet);
-         vnet -= decrementer) {
+    if(m_pending_message_count[vnet] > 0) {
+        // for all input ports, use round robin scheduling
+        for (int counter = 0; counter < m_in.size(); counter++) {
+            // Round robin scheduling
+            incoming++;
+            if (incoming >= m_in.size()) {
+                incoming = 0;
+            }
 
-        // This is for round-robin scheduling
-        int incoming = m_round_robin_start;
-        m_round_robin_start++;
-        if (m_round_robin_start >= m_in.size()) {
-            m_round_robin_start = 0;
-        }
+            // temporary vectors to store the routing results
+            vector<LinkID> output_links;
+            vector<NetDest> output_link_destinations;
 
-        if(m_pending_message_count[vnet] > 0) {
-            // for all input ports, use round robin scheduling
-            for (int counter = 0; counter < m_in.size(); counter++) {
-                // Round robin scheduling
-                incoming++;
-                if (incoming >= m_in.size()) {
-                    incoming = 0;
+            // Is there a message waiting?
+            auto it = m_in[incoming].find(vnet);
+            if (it == m_in[incoming].end())
+                continue;
+            MessageBuffer *buffer = (*it).second;
+
+            while (buffer->isReady()) {
+                DPRINTF(RubyNetwork, "incoming: %d\n", incoming);
+
+                // Peek at message
+                msg_ptr = buffer->peekMsgPtr();
+                net_msg_ptr = safe_cast<NetworkMessage*>(msg_ptr.get());
+                DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
+
+                output_links.clear();
+                output_link_destinations.clear();
+                NetDest msg_dsts = net_msg_ptr->getInternalDestination();
+
+                // Unfortunately, the token-protocol sends some
+                // zero-destination messages, so this assert isn't valid
+                // assert(msg_dsts.count() > 0);
+
+                assert(m_link_order.size() == m_routing_table.size());
+                assert(m_link_order.size() == m_out.size());
+
+                if (m_network_ptr->getAdaptiveRouting()) {
+                    if (m_network_ptr->isVNetOrdered(vnet)) {
+                        // Don't adaptively route
+                        for (int out = 0; out < m_out.size(); out++) {
+                            m_link_order[out].m_link = out;
+                            m_link_order[out].m_value = 0;
+                        }
+                    } else {
+                        // Find how clogged each link is
+                        for (int out = 0; out < m_out.size(); out++) {
+                            int out_queue_length = 0;
+                            for (int v = 0; v < m_virtual_networks; v++) {
+                                out_queue_length += m_out[out][v]->getSize();
+                            }
+                            int value =
+                                (out_queue_length << 8) |
+                                random_mt.random(0, 0xff);
+                            m_link_order[out].m_link = out;
+                            m_link_order[out].m_value = value;
+                        }
+
+                        // Look at the most empty link first
+                        sort(m_link_order.begin(), m_link_order.end());
+                    }
                 }
 
-                // temporary vectors to store the routing results
-                vector<LinkID> output_links;
-                vector<NetDest> output_link_destinations;
+                for (int i = 0; i < m_routing_table.size(); i++) {
+                    // pick the next link to look at
+                    int link = m_link_order[i].m_link;
+                    NetDest dst = m_routing_table[link];
+                    DPRINTF(RubyNetwork, "dst: %s\n", dst);
 
-                // Is there a message waiting?
-                while (m_in[incoming][vnet]->isReady()) {
-                    DPRINTF(RubyNetwork, "incoming: %d\n", incoming);
+                    if (!msg_dsts.intersectionIsNotEmpty(dst))
+                        continue;
 
-                    // Peek at message
-                    msg_ptr = m_in[incoming][vnet]->peekMsgPtr();
-                    net_msg_ptr = safe_cast<NetworkMessage*>(msg_ptr.get());
+                    // Remember what link we're using
+                    output_links.push_back(link);
+
+                    // Need to remember which destinations need this message in
+                    // another vector.  This Set is the intersection of the
+                    // routing_table entry and the current destination set.  The
+                    // intersection must not be empty, since we are inside "if"
+                    output_link_destinations.push_back(msg_dsts.AND(dst));
+
+                    // Next, we update the msg_destination not to include
+                    // those nodes that were already handled by this link
+                    msg_dsts.removeNetDest(dst);
+                }
+
+                assert(msg_dsts.count() == 0);
+
+                // Check for resources - for all outgoing queues
+                bool enough = true;
+                for (int i = 0; i < output_links.size(); i++) {
+                    int outgoing = output_links[i];
+
+                    if (!m_out[outgoing][vnet]->areNSlotsAvailable(1))
+                        enough = false;
+
+                    DPRINTF(RubyNetwork, "Checking if node is blocked ..."
+                            "outgoing: %d, vnet: %d, enough: %d\n",
+                            outgoing, vnet, enough);
+                }
+
+                // There were not enough resources
+                if (!enough) {
+                    scheduleEvent(Cycles(1));
+                    DPRINTF(RubyNetwork, "Can't deliver message since a node "
+                            "is blocked\n");
                     DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
+                    break; // go to next incoming port
+                }
 
-                    output_links.clear();
-                    output_link_destinations.clear();
-                    NetDest msg_dsts =
-                        net_msg_ptr->getInternalDestination();
+                MsgPtr unmodified_msg_ptr;
 
-                    // Unfortunately, the token-protocol sends some
-                    // zero-destination messages, so this assert isn't valid
-                    // assert(msg_dsts.count() > 0);
+                if (output_links.size() > 1) {
+                    // If we are sending this message down more than one link
+                    // (size>1), we need to make a copy of the message so each
+                    // branch can have a different internal destination we need
+                    // to create an unmodified MsgPtr because the MessageBuffer
+                    // enqueue func will modify the message
 
-                    assert(m_link_order.size() == m_routing_table.size());
-                    assert(m_link_order.size() == m_out.size());
+                    // This magic line creates a private copy of the message
+                    unmodified_msg_ptr = msg_ptr->clone();
+                }
 
-                    if (m_network_ptr->getAdaptiveRouting()) {
-                        if (m_network_ptr->isVNetOrdered(vnet)) {
-                            // Don't adaptively route
-                            for (int out = 0; out < m_out.size(); out++) {
-                                m_link_order[out].m_link = out;
-                                m_link_order[out].m_value = 0;
-                            }
-                        } else {
-                            // Find how clogged each link is
-                            for (int out = 0; out < m_out.size(); out++) {
-                                int out_queue_length = 0;
-                                for (int v = 0; v < m_virtual_networks; v++) {
-                                    out_queue_length += m_out[out][v]->getSize();
-                                }
-                                int value =
-                                    (out_queue_length << 8) | (random() & 0xff);
-                                m_link_order[out].m_link = out;
-                                m_link_order[out].m_value = value;
-                            }
+                // Dequeue msg
+                buffer->dequeue();
+                m_pending_message_count[vnet]--;
 
-                            // Look at the most empty link first
-                            sort(m_link_order.begin(), m_link_order.end());
-                        }
+                // Enqueue it - for all outgoing queues
+                for (int i=0; i<output_links.size(); i++) {
+                    int outgoing = output_links[i];
+
+                    if (i > 0) {
+                        // create a private copy of the unmodified message
+                        msg_ptr = unmodified_msg_ptr->clone();
                     }
 
-                    for (int i = 0; i < m_routing_table.size(); i++) {
-                        // pick the next link to look at
-                        int link = m_link_order[i].m_link;
-                        NetDest dst = m_routing_table[link];
-                        DPRINTF(RubyNetwork, "dst: %s\n", dst);
+                    // Change the internal destination set of the message so it
+                    // knows which destinations this link is responsible for.
+                    net_msg_ptr = safe_cast<NetworkMessage*>(msg_ptr.get());
+                    net_msg_ptr->getInternalDestination() =
+                        output_link_destinations[i];
 
-                        if (!msg_dsts.intersectionIsNotEmpty(dst))
-                            continue;
+                    // Enqeue msg
+                    DPRINTF(RubyNetwork, "Enqueuing net msg from "
+                            "inport[%d][%d] to outport [%d][%d].\n",
+                            incoming, vnet, outgoing, vnet);
 
-                        // Remember what link we're using
-                        output_links.push_back(link);
-
-                        // Need to remember which destinations need this
-                        // message in another vector.  This Set is the
-                        // intersection of the routing_table entry and the
-                        // current destination set.  The intersection must
-                        // not be empty, since we are inside "if"
-                        output_link_destinations.push_back(msg_dsts.AND(dst));
-
-                        // Next, we update the msg_destination not to
-                        // include those nodes that were already handled
-                        // by this link
-                        msg_dsts.removeNetDest(dst);
-                    }
-
-                    assert(msg_dsts.count() == 0);
-                    //assert(output_links.size() > 0);
-
-                    // Check for resources - for all outgoing queues
-                    bool enough = true;
-                    for (int i = 0; i < output_links.size(); i++) {
-                        int outgoing = output_links[i];
-                        if (!m_out[outgoing][vnet]->areNSlotsAvailable(1))
-                            enough = false;
-                        DPRINTF(RubyNetwork, "Checking if node is blocked ..."
-                                "outgoing: %d, vnet: %d, enough: %d\n",
-                                outgoing, vnet, enough);
-                    }
-
-                    // There were not enough resources
-                    if (!enough) {
-                        scheduleEvent(Cycles(1));
-                        DPRINTF(RubyNetwork, "Can't deliver message since a node "
-                                "is blocked\n");
-                        DPRINTF(RubyNetwork, "Message: %s\n", (*net_msg_ptr));
-                        break; // go to next incoming port
-                    }
-
-                    MsgPtr unmodified_msg_ptr;
-
-                    if (output_links.size() > 1) {
-                        // If we are sending this message down more than
-                        // one link (size>1), we need to make a copy of
-                        // the message so each branch can have a different
-                        // internal destination we need to create an
-                        // unmodified MsgPtr because the MessageBuffer
-                        // enqueue func will modify the message
-
-                        // This magic line creates a private copy of the
-                        // message
-                        unmodified_msg_ptr = msg_ptr->clone();
-                    }
-
-                    // Enqueue it - for all outgoing queues
-                    for (int i=0; i<output_links.size(); i++) {
-                        int outgoing = output_links[i];
-
-                        if (i > 0) {
-                            // create a private copy of the unmodified
-                            // message
-                            msg_ptr = unmodified_msg_ptr->clone();
-                        }
-
-                        // Change the internal destination set of the
-                        // message so it knows which destinations this
-                        // link is responsible for.
-                        net_msg_ptr = safe_cast<NetworkMessage*>(msg_ptr.get());
-                        net_msg_ptr->getInternalDestination() =
-                            output_link_destinations[i];
-
-                        // Enqeue msg
-                        DPRINTF(RubyNetwork, "Enqueuing net msg from "
-                                "inport[%d][%d] to outport [%d][%d].\n",
-                                incoming, vnet, outgoing, vnet);
-
-                        m_out[outgoing][vnet]->enqueue(msg_ptr);
-                    }
-
-                    // Dequeue msg
-                    m_in[incoming][vnet]->pop();
-                    m_pending_message_count[vnet]--;
+                    m_out[outgoing][vnet]->enqueue(msg_ptr);
                 }
             }
         }
@@ -590,4 +575,3 @@ TopazSwitchFlow::print(std::ostream& out) const
 {
   cout << "[TopazSwitchFlow " << m_switch_id << "]";
 }
-

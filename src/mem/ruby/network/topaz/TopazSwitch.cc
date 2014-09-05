@@ -31,7 +31,7 @@
 #include "base/cast.hh"
 #include "base/stl_helpers.hh"
 #include "mem/protocol/MessageSizeType.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
+#include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/network/simple/Throttle.hh"
 #include "mem/ruby/network/topaz/TopazNetwork.hh"
 #include "mem/ruby/network/topaz/TopazSwitch.hh"
@@ -65,29 +65,33 @@ TopazSwitch::init()
 }
 
 void
-TopazSwitch::addInPort(const vector<MessageBuffer*>& in)
+TopazSwitch::addInPort(const map<int, MessageBuffer*>& in)
 {
     m_perfect_switch_ptr->addInPort(in);
 
-    for (int i = 0; i < in.size(); i++) {
-        in[i]->setReceiver(this);
+    for (auto& it : in) {
+        it.second->setReceiver(this);
     }
 }
 
 void
-TopazSwitch::addOutPort(const vector<MessageBuffer*>& out,
-    const NetDest& routing_table_entry, Cycles link_latency, int bw_multiplier)
+TopazSwitch::addOutPort(const map<int, MessageBuffer*>& out,
+                   const NetDest& routing_table_entry,
+                   Cycles link_latency, int bw_multiplier)
 {
     // Create a throttle
     Throttle* throttle_ptr = new Throttle(m_id, m_throttles.size(),
-            link_latency, bw_multiplier, m_network_ptr->getEndpointBandwidth(),
-            this);
+                                          link_latency, bw_multiplier,
+                                          m_network_ptr->getEndpointBandwidth(),
+                                          this);
+
     m_throttles.push_back(throttle_ptr);
 
     // Create one buffer per vnet (these are intermediaryQueues)
-    vector<MessageBuffer*> intermediateBuffers;
-    for (int i = 0; i < out.size(); i++) {
-        out[i]->setSender(this);
+    map<int, MessageBuffer*> intermediateBuffers;
+
+    for (auto& it : out) {
+        it.second->setSender(this);
 
         MessageBuffer* buffer_ptr = new MessageBuffer;
         // Make these queues ordered
@@ -96,7 +100,7 @@ TopazSwitch::addOutPort(const vector<MessageBuffer*>& out,
             buffer_ptr->resize(m_network_ptr->getBufferSize());
         }
 
-        intermediateBuffers.push_back(buffer_ptr);
+        intermediateBuffers[it.first] = buffer_ptr;
         m_buffers_to_free.push_back(buffer_ptr);
 
         buffer_ptr->setSender(this);
@@ -215,4 +219,3 @@ TopazSwitchParams::create()
 {
     return new TopazSwitch(this);
 }
-
