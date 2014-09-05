@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010, 2012-2013 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -38,6 +39,7 @@
  */
 
 #include "arch/arm/insts/misc.hh"
+#include "cpu/reg_class.hh"
 
 std::string
 MrsOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
@@ -48,17 +50,17 @@ MrsOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
     ss << ", ";
     bool foundPsr = false;
     for (unsigned i = 0; i < numSrcRegs(); i++) {
-        int idx = srcRegIdx(i);
-        if (idx < Ctrl_Base_DepTag) {
+        RegIndex idx = srcRegIdx(i);
+        RegIndex rel_idx;
+        if (regIdxToClass(idx, &rel_idx) != MiscRegClass) {
             continue;
         }
-        idx -= Ctrl_Base_DepTag;
-        if (idx == MISCREG_CPSR) {
+        if (rel_idx == MISCREG_CPSR) {
             ss << "cpsr";
             foundPsr = true;
             break;
         }
-        if (idx == MISCREG_SPSR) {
+        if (rel_idx == MISCREG_SPSR) {
             ss << "spsr";
             foundPsr = true;
             break;
@@ -78,10 +80,10 @@ MsrBase::printMsrBase(std::ostream &os) const
     bool foundPsr = false;
     for (unsigned i = 0; i < numDestRegs(); i++) {
         int idx = destRegIdx(i);
-        if (idx < Ctrl_Base_DepTag) {
+        if (idx < Misc_Reg_Base) {
             continue;
         }
-        idx -= Ctrl_Base_DepTag;
+        idx -= Misc_Reg_Base;
         if (idx == MISCREG_CPSR) {
             os << "cpsr_";
             foundPsr = true;
@@ -140,6 +142,32 @@ MsrRegOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
     printMsrBase(ss);
     ss << ", ";
     printReg(ss, op1);
+    return ss.str();
+}
+
+std::string
+MrrcOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
+{
+    std::stringstream ss;
+    printMnemonic(ss);
+    printReg(ss, dest);
+    ss << ", ";
+    printReg(ss, dest2);
+    ss << ", ";
+    printReg(ss, op1);
+    return ss.str();
+}
+
+std::string
+McrrOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
+{
+    std::stringstream ss;
+    printMnemonic(ss);
+    printReg(ss, dest);
+    ss << ", ";
+    printReg(ss, op1);
+    ss << ", ";
+    printReg(ss, op2);
     return ss.str();
 }
 
@@ -224,6 +252,16 @@ RegRegImmOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
     ss << ", ";
     printReg(ss, op1);
     ccprintf(ss, ", #%d", imm);
+    return ss.str();
+}
+
+std::string
+RegImmImmOp::generateDisassembly(Addr pc, const SymbolTable *symtab) const
+{
+    std::stringstream ss;
+    printMnemonic(ss);
+    printReg(ss, dest);
+    ccprintf(ss, ", #%d, #%d", imm1, imm2);
     return ss.str();
 }
 

@@ -89,18 +89,28 @@ class BasePrefetcher : public ClockedObject
     const Cycles latency;
 
     /** The number of prefetches to issue */
-    unsigned degree;
+    const unsigned degree;
 
     /** If patterns should be found per context id */
-    bool useMasterId;
+    const bool useMasterId;
     /** Do we prefetch across page boundaries. */
-    bool pageStop;
+    const bool pageStop;
 
     /** Do we remove prefetches with later times than a new miss.*/
-    bool serialSquash;
+    const bool serialSquash;
 
     /** Do we prefetch on only data reads, or on inst reads as well. */
-    bool onlyData;
+    const bool onlyData;
+
+    /** Do we trigger/train prefetch on cache misses only, or all accesses. */
+    const bool onMissOnly;
+
+    /** Do we trigger/train prefetch on reads only, or all accesses. */
+    const bool onReadOnly;
+
+    /** Do we tag prefetch's with PC addresses, allowing lower pc-based
+        prefetchers to prefetch on prefetch requests */
+    const bool onPrefetch;
 
     /** System we belong to */
     System* system;
@@ -137,9 +147,9 @@ class BasePrefetcher : public ClockedObject
      */
     Tick notify(PacketPtr &pkt, Tick tick);
 
-    bool inCache(Addr addr);
+    bool inCache(Addr addr, bool is_secure);
 
-    bool inMissQueue(Addr addr);
+    bool inMissQueue(Addr addr, bool is_secure);
 
     PacketPtr getPacket();
 
@@ -157,7 +167,7 @@ class BasePrefetcher : public ClockedObject
                                    std::list<Addr> &addresses,
                                    std::list<Cycles> &delays) = 0;
 
-    std::list<DeferredPacket>::iterator inPrefetch(Addr address);
+    std::list<DeferredPacket>::iterator inPrefetch(Addr address, bool is_secure);
 
     /**
      * Utility function: are addresses a and b on the same VM page?

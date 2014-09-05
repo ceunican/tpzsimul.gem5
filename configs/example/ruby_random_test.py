@@ -48,8 +48,8 @@ m5_root = os.path.dirname(config_root)
 parser = optparse.OptionParser()
 Options.addCommonOptions(parser)
 
-parser.add_option("-l", "--checks", metavar="N", default=100,
-                  help="Stop after N checks (loads)")
+parser.add_option("--maxloads", metavar="N", default=100,
+                  help="Stop after N loads")
 parser.add_option("-f", "--wakeup_freq", metavar="N", default=10,
                   help="Wakeup every N cycles")
 
@@ -89,7 +89,7 @@ if buildEnv['PROTOCOL'] == 'MOESI_hammer':
     check_flush = True
 
 tester = RubyTester(check_flush = check_flush,
-                    checks_to_complete = options.checks,
+                    checks_to_complete = options.maxloads,
                     wakeup_frequency = options.wakeup_freq)
 
 #
@@ -97,7 +97,7 @@ tester = RubyTester(check_flush = check_flush,
 # actually used by the rubytester, but is included to support the
 # M5 memory size == Ruby memory size checks
 #
-system = System(tester = tester, physmem = SimpleMemory(),
+system = System(cpu = tester, physmem = SimpleMemory(),
                 mem_ranges = [AddrRange(options.mem_size)])
 
 # Create a top-level voltage domain and clock domain
@@ -112,9 +112,9 @@ Ruby.create_system(options, system)
 system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
                                         voltage_domain = system.voltage_domain)
 
-assert(options.num_cpus == len(system.ruby._cpu_ruby_ports))
+assert(options.num_cpus == len(system.ruby._cpu_ports))
 
-tester.num_cpus = len(system.ruby._cpu_ruby_ports)
+tester.num_cpus = len(system.ruby._cpu_ports)
 
 #
 # The tester is most effective when randomization is turned on and
@@ -122,7 +122,7 @@ tester.num_cpus = len(system.ruby._cpu_ruby_ports)
 #
 system.ruby.randomization = True
 
-for ruby_port in system.ruby._cpu_ruby_ports:
+for ruby_port in system.ruby._cpu_ports:
     #
     # Tie the ruby tester ports to the ruby cpu read and write ports
     #

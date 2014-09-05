@@ -59,6 +59,14 @@ class BasePrefetcher(ClockedObject):
          "Use the master id to separate calculations of prefetches")
     data_accesses_only = Param.Bool(False,
          "Only prefetch on data not on instruction accesses")
+    on_miss_only = Param.Bool(False,
+         "Only prefetch on miss (as opposed to always)")
+    on_read_only = Param.Bool(False,
+         "Only prefetch on read requests (write requests ignored)")
+    on_prefetch = Param.Bool(True,
+         "Let lower cache prefetcher train on prefetch requests")
+    inst_tagged = Param.Bool(True,
+         "Perform a tagged prefetch for instruction fetches always")
     sys = Param.System(Parent.any, "System this device belongs to")
 
 class GHBPrefetcher(BasePrefetcher):

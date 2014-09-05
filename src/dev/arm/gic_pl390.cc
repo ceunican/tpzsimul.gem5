@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 ARM Limited
+ * Copyright (c) 2010, 2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -56,7 +56,9 @@ Pl390::Pl390(const Params *p)
     : BaseGic(p), distAddr(p->dist_addr),
       cpuAddr(p->cpu_addr), distPioDelay(p->dist_pio_delay),
       cpuPioDelay(p->cpu_pio_delay), intLatency(p->int_latency),
-      enabled(false), itLines(p->it_lines)
+      enabled(false), itLines(p->it_lines), irqEnable(false),
+      msixRegAddr(p->msix_addr),
+      msixReg(0x0)
 {
     itLinesLog2 = ceilLog2(itLines);
 
@@ -117,6 +119,10 @@ Pl390::read(PacketPtr pkt)
         return readDistributor(pkt);
     else if (addr >= cpuAddr && addr < cpuAddr + CPU_SIZE)
         return readCpu(pkt);
+    else if (msixRegAddr != 0x0 &&
+             addr >= msixRegAddr &&
+             addr < msixRegAddr + MSIX_SIZE)
+        return readMsix(pkt);
     else
         panic("Read to unknown address %#x\n", pkt->getAddr());
 }
@@ -132,6 +138,10 @@ Pl390::write(PacketPtr pkt)
         return writeDistributor(pkt);
     else if (addr >= cpuAddr && addr < cpuAddr + CPU_SIZE)
         return writeCpu(pkt);
+    else if (msixRegAddr != 0x0 &&
+             addr >= msixRegAddr &&
+             addr < msixRegAddr + MSIX_SIZE)
+        return writeMsix(pkt);
     else
         panic("Write to unknown address %#x\n", pkt->getAddr());
 }
@@ -232,7 +242,12 @@ Pl390::readDistributor(PacketPtr pkt)
             }
         } else {
             assert(ctx_id < sys->numRunningContexts());
-            pkt->set<uint32_t>(ctx_id);
+            // convert the CPU id number into a bit mask
+            uint32_t ctx_mask = power(2, ctx_id);
+            // replicate the 8-bit mask 4 times in a 32-bit word
+            ctx_mask |= ctx_mask << 8;
+            ctx_mask |= ctx_mask << 16;
+            pkt->set<uint32_t>(ctx_mask);
         }
         goto done;
     }
@@ -350,6 +365,26 @@ Pl390::readCpu(PacketPtr pkt)
     return cpuPioDelay;
 }
 
+Tick
+Pl390::readMsix(PacketPtr pkt)
+{
+    Addr daddr = pkt->getAddr() - msixRegAddr;
+    pkt->allocate();
+
+    DPRINTF(GIC, "Gic MSIX read register %#x\n", daddr);
+
+    switch (daddr) {
+        case MSIX_SR:
+            pkt->set<uint32_t>(msixReg);
+            break;
+        default:
+            panic("Tried to read Gic MSIX register at offset %#x\n", daddr);
+            break;
+    }
+
+    pkt->makeAtomicResponse();
+    return distPioDelay;
+}
 
 Tick
 Pl390::writeDistributor(PacketPtr pkt)
@@ -360,8 +395,25 @@ Pl390::writeDistributor(PacketPtr pkt)
     assert(pkt->req->hasContextId());
     int ctx_id = pkt->req->contextId();
 
+    uint32_t pkt_data M5_VAR_USED;
+    switch (pkt->getSize())
+    {
+      case 1:
+        pkt_data = pkt->get<uint8_t>();
+        break;
+      case 2:
+        pkt_data = pkt->get<uint16_t>();
+        break;
+      case 4:
+        pkt_data = pkt->get<uint32_t>();
+        break;
+      default:
+        panic("Invalid size when writing to priority regs in Gic: %d\n",
+              pkt->getSize());
+    }
+
     DPRINTF(GIC, "gic distributor write register %#x size %#x value %#x \n",
-            daddr, pkt->getSize(), pkt->get<uint32_t>());
+            daddr, pkt->getSize(), pkt_data);
 
     if (daddr >= ICDISER_ST && daddr < ICDISER_ED + 4) {
         assert((daddr-ICDISER_ST) >> 2 < 32);
@@ -530,6 +582,31 @@ Pl390::writeCpu(PacketPtr pkt)
     return cpuPioDelay;
 }
 
+Tick
+Pl390::writeMsix(PacketPtr pkt)
+{
+    Addr daddr = pkt->getAddr() - msixRegAddr;
+    pkt->allocate();
+
+    DPRINTF(GIC, "Gic MSI-X write register %#x data %d\n",
+                 daddr, pkt->get<uint32_t>());
+
+    switch (daddr) {
+        case MSIX_SR:
+            // This value is little endian, just like the ARM guest
+            msixReg = pkt->get<uint32_t>();
+            pendingInt[intNumToWord(letoh(msixReg))] |= 1UL << intNumToBit(letoh(msixReg));
+            updateIntState(-1);
+            break;
+        default:
+            panic("Tried to write Gic MSI-X register at offset %#x\n", daddr);
+            break;
+    }
+
+    pkt->makeAtomicResponse();
+    return distPioDelay;
+}
+
 void
 Pl390::softInt(int ctx_id, SWI swi)
 {
@@ -687,7 +764,7 @@ Pl390::sendInt(uint32_t num)
 void
 Pl390::sendPPInt(uint32_t num, uint32_t cpu)
 {
-    DPRINTF(Interrupt, "Received Interrupt number %d, cpuTarget %#x: \n",
+    DPRINTF(Interrupt, "Received PPI %d, cpuTarget %#x: \n",
             num, cpu);
     cpuPpiPending[cpu] |= 1 << (num - SGI_MAX);
     updateIntState(intNumToWord(num));
@@ -697,6 +774,15 @@ void
 Pl390::clearInt(uint32_t number)
 {
     /* @todo assume edge triggered only at the moment. Nothing to do. */
+}
+
+void
+Pl390::clearPPInt(uint32_t num, uint32_t cpu)
+{
+    DPRINTF(Interrupt, "Clearing PPI %d, cpuTarget %#x: \n",
+            num, cpu);
+    cpuPpiPending[cpu] &= ~(1 << (num - SGI_MAX));
+    updateIntState(intNumToWord(num));
 }
 
 void
@@ -712,6 +798,9 @@ Pl390::getAddrRanges() const
     AddrRangeList ranges;
     ranges.push_back(RangeSize(distAddr, DIST_SIZE));
     ranges.push_back(RangeSize(cpuAddr, CPU_SIZE));
+    if (msixRegAddr != 0) {
+        ranges.push_back(RangeSize(msixRegAddr, MSIX_SIZE));
+    }
     return ranges;
 }
 
@@ -728,6 +817,8 @@ Pl390::serialize(std::ostream &os)
     SERIALIZE_SCALAR(enabled);
     SERIALIZE_SCALAR(itLines);
     SERIALIZE_SCALAR(itLinesLog2);
+    SERIALIZE_SCALAR(msixRegAddr);
+    SERIALIZE_SCALAR(msixReg);
     SERIALIZE_ARRAY(intEnabled, INT_BITS_MAX);
     SERIALIZE_ARRAY(pendingInt, INT_BITS_MAX);
     SERIALIZE_ARRAY(activeInt, INT_BITS_MAX);
@@ -768,6 +859,8 @@ Pl390::unserialize(Checkpoint *cp, const std::string &section)
     UNSERIALIZE_SCALAR(enabled);
     UNSERIALIZE_SCALAR(itLines);
     UNSERIALIZE_SCALAR(itLinesLog2);
+    UNSERIALIZE_SCALAR(msixRegAddr);
+    UNSERIALIZE_SCALAR(msixReg);
     UNSERIALIZE_ARRAY(intEnabled, INT_BITS_MAX);
     UNSERIALIZE_ARRAY(pendingInt, INT_BITS_MAX);
     UNSERIALIZE_ARRAY(activeInt, INT_BITS_MAX);

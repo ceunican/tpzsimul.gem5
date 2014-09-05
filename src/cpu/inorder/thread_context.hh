@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -110,14 +111,17 @@ class InOrderThreadContext : public ThreadContext
     std::string getCpuName() { return cpu->name(); }
 
     /** Reads this CPU's ID. */
-    int cpuId() { return cpu->cpuId(); }
+    int cpuId() const { return cpu->cpuId(); }
 
-    int contextId() { return thread->contextId(); }
+    /** Reads this CPU's Socket ID. */
+    uint32_t socketId() const { return cpu->socketId(); }
+
+    int contextId() const { return thread->contextId(); }
 
     void setContextId(int id) { thread->setContextId(id); }
 
     /** Returns this thread's ID number. */
-    int threadId() { return thread->threadId(); }
+    int threadId() const { return thread->threadId(); }
     void setThreadId(int id) { return thread->setThreadId(id); }
 
     uint64_t readMicroPC()
@@ -207,6 +211,8 @@ class InOrderThreadContext : public ThreadContext
 
     FloatRegBits readFloatRegBits(int reg_idx);
 
+    CCReg readCCReg(int reg_idx);
+
     uint64_t readRegOtherThread(int misc_reg, ThreadID tid);
 
     /** Sets an integer register to a value. */
@@ -215,6 +221,8 @@ class InOrderThreadContext : public ThreadContext
     void setFloatReg(int reg_idx, FloatReg val);
 
     void setFloatRegBits(int reg_idx, FloatRegBits val);
+
+    void setCCReg(int reg_idx, CCReg val);
 
     void setRegOtherThread(int misc_reg,
                                    const MiscReg &val,
@@ -265,6 +273,12 @@ class InOrderThreadContext : public ThreadContext
     int flattenFloatIndex(int reg)
     { return cpu->isa[thread->threadId()]->flattenFloatIndex(reg); }
 
+    int flattenCCIndex(int reg)
+    { return cpu->isa[thread->threadId()]->flattenCCIndex(reg); }
+
+    int flattenMiscIndex(int reg)
+    { return cpu->isa[thread->threadId()]->flattenMiscIndex(reg); }
+
     void activateContext(Cycles delay)
     { cpu->activateContext(thread->threadId(), delay); }
 
@@ -307,6 +321,9 @@ class InOrderThreadContext : public ThreadContext
 
     FloatRegBits readFloatRegBitsFlat(int idx);
     void setFloatRegBitsFlat(int idx, FloatRegBits val);
+
+    CCReg readCCRegFlat(int idx);
+    void setCCRegFlat(int idx, CCReg val);
 };
 
 #endif

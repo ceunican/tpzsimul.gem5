@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 ARM Limited
+ * Copyright (c) 2011-2014 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -79,6 +79,7 @@ System::System(Params *p)
       init_param(p->init_param),
       physProxy(_systemPort, p->cache_line_size),
       loadAddrMask(p->load_addr_mask),
+      loadAddrOffset(p->load_offset),
       nextPID(0),
       physmem(name() + ".physmem", p->memories),
       memoryMode(p->mem_mode),
@@ -273,15 +274,22 @@ System::initState()
          * Load the kernel code into memory
          */
         if (params()->kernel != "")  {
-            // Validate kernel mapping before loading binary
-            if (!(isMemAddr(kernelStart & loadAddrMask) &&
-                            isMemAddr(kernelEnd & loadAddrMask))) {
-                fatal("Kernel is mapped to invalid location (not memory). "
-                      "kernelStart 0x(%x) - kernelEnd 0x(%x)\n", kernelStart,
-                      kernelEnd);
+            if (params()->kernel_addr_check) {
+                // Validate kernel mapping before loading binary
+                if (!(isMemAddr((kernelStart & loadAddrMask) +
+                                loadAddrOffset) &&
+                      isMemAddr((kernelEnd & loadAddrMask) +
+                                loadAddrOffset))) {
+                    fatal("Kernel is mapped to invalid location (not memory). "
+                          "kernelStart 0x(%x) - kernelEnd 0x(%x) %#x:%#x\n",
+                          kernelStart,
+                          kernelEnd, (kernelStart & loadAddrMask) +
+                          loadAddrOffset,
+                          (kernelEnd & loadAddrMask) + loadAddrOffset);
+                }
             }
             // Load program sections into memory
-            kernel->loadSections(physProxy, loadAddrMask);
+            kernel->loadSections(physProxy, loadAddrMask, loadAddrOffset);
 
             DPRINTF(Loader, "Kernel start = %#x\n", kernelStart);
             DPRINTF(Loader, "Kernel end   = %#x\n", kernelEnd);
@@ -309,9 +317,9 @@ System::replaceThreadContext(ThreadContext *tc, int context_id)
 Addr
 System::allocPhysPages(int npages)
 {
-    Addr return_addr = pagePtr << LogVMPageSize;
+    Addr return_addr = pagePtr << PageShift;
     pagePtr += npages;
-    if ((pagePtr << LogVMPageSize) > physmem.totalSize())
+    if ((pagePtr << PageShift) > physmem.totalSize())
         fatal("Out of memory, please increase size of physical memory.");
     return return_addr;
 }
@@ -325,7 +333,7 @@ System::memSize() const
 Addr
 System::freeMemSize() const
 {
-   return physmem.totalSize() - (pagePtr << LogVMPageSize);
+   return physmem.totalSize() - (pagePtr << PageShift);
 }
 
 bool
@@ -459,9 +467,6 @@ System::getMasterName(MasterID master_id)
 
     return masterIds[master_id];
 }
-
-const char *System::MemoryModeStrings[4] = {"invalid", "atomic", "timing",
-                                            "atomic_noncaching"};
 
 System *
 SystemParams::create()

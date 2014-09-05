@@ -85,7 +85,7 @@ def addCommonOptions(parser):
     parser.add_option("--list-mem-types",
                       action="callback", callback=_listMemTypes,
                       help="List available memory types")
-    parser.add_option("--mem-type", type="choice", default="simple_mem",
+    parser.add_option("--mem-type", type="choice", default="ddr3_1600_x64",
                       choices=MemConfig.mem_names(),
                       help = "type of memory to use")
     parser.add_option("--mem-channels", type="int", default=1,
@@ -93,6 +93,9 @@ def addCommonOptions(parser):
     parser.add_option("--mem-size", action="store", type="string",
                       default="512MB",
                       help="Specify the physical memory size (single memory)")
+
+    parser.add_option("-l", "--lpae", action="store_true")
+    parser.add_option("-V", "--virtualisation", action="store_true")
 
     # Cache Options
     parser.add_option("--caches", action="store_true")
@@ -130,6 +133,8 @@ def addCommonOptions(parser):
                                             simulate (default: run forever)""")
     parser.add_option("--work-item-id", action="store", type="int",
                       help="the specific work id for exit & checkpointing")
+    parser.add_option("--num-work-ids", action="store", type="int",
+                      help="Number of distinct work item types")
     parser.add_option("--work-begin-cpu-id-exit", action="store", type="int",
                       help="exit when work starts on the specified cpu")
     parser.add_option("--work-end-exit-count", action="store", type="int",
@@ -197,6 +202,14 @@ def addCommonOptions(parser):
     parser.add_option("--at-instruction", action="store_true", default=False,
         help="""Treat value of --checkpoint-restore or --take-checkpoint as a
                 number of instructions.""")
+    parser.add_option("--spec-input", default="ref", type="choice",
+                      choices=["ref", "test", "train", "smred", "mdred",
+                               "lgred"],
+                      help="Input set size for SPEC CPU2000 benchmarks.")
+    parser.add_option("--arm-iset", default="arm", type="choice",
+                      choices=["arm", "thumb", "aarch64"],
+                      help="ARM instruction set.")
+
 
 def addSEOptions(parser):
     # Benchmark options
@@ -232,6 +245,10 @@ def addFSOptions(parser):
         parser.add_option("--dtb-filename", action="store", type="string",
               help="Specifies device tree blob file to use with device-tree-"\
               "enabled kernels")
+        parser.add_option("--enable-context-switch-stats-dump", \
+                action="store_true", help="Enable stats dump at context "\
+                "switches and dump tasks file (required for Streamline)")
+
     # Benchmark options
     parser.add_option("--dual", action="store_true",
                       help="Simulate two systems attached with an ethernet link")

@@ -1,4 +1,16 @@
 #! /usr/bin/env python
+# Copyright (c) 2014 ARM Limited
+# All rights reserved
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2006 The Regents of The University of Michigan
 # Copyright (c) 2007,2011 The Hewlett-Packard Development Company
 # All rights reserved.
@@ -35,7 +47,7 @@ import sys
 
 from os.path import dirname, join as joinpath
 from itertools import count
-from mercurial import bdiff, mdiff
+from mercurial import bdiff, mdiff, commands
 
 current_dir = dirname(__file__)
 sys.path.insert(0, current_dir)
@@ -54,6 +66,37 @@ any_control = re.compile(r'\b(if|while|for)[ \t]*[(]')
 good_control = re.compile(r'\b(if|while|for) [(]')
 
 format_types = set(('C', 'C++'))
+
+
+def re_ignore(expr):
+    """Helper function to create regular expression ignore file
+    matcher functions"""
+
+    rex = re.compile(expr)
+    def match_re(fname):
+        return rex.match(fname)
+    return match_re
+
+# This list contains a list of functions that are called to determine
+# if a file should be excluded from the style matching rules or
+# not. The functions are called with the file name relative to the
+# repository root (without a leading slash) as their argument. A file
+# is excluded if any function in the list returns true.
+style_ignores = [
+    # Ignore external projects as they are unlikely to follow the gem5
+    # coding convention.
+    re_ignore("^ext/"),
+]
+
+def check_ignores(fname):
+    """Check if a file name matches any of the ignore rules"""
+
+    for rule in style_ignores:
+        if rule(fname):
+            return True
+
+    return False
+
 
 def modified_regions(old_data, new_data):
     regions = Regions()
@@ -149,6 +192,13 @@ class Verifier(object):
         return f
 
     def skip(self, filename):
+        # We never want to handle symlinks, so always skip them: If the location
+        # pointed to is a directory, skip it. If the location is a file inside
+        # the gem5 directory, it will be checked as a file, so symlink can be
+        # skipped. If the location is a file outside gem5, we don't want to
+        # check it anyway.
+        if os.path.islink(filename):
+            return True
         return lang_type(filename) not in self.languages
 
     def check(self, filename, regions=all_regions):
@@ -371,20 +421,26 @@ def validate(filename, stats, verbose, exit_code):
                     msg(i, line, 'improper spacing after %s' % match.group(1))
                 bad()
 
-def do_check_style(hgui, repo, *files, **args):
-    """check files for proper m5 style guidelines"""
+
+def do_check_style(hgui, repo, *pats, **opts):
+    """check files for proper m5 style guidelines
+
+    Without an argument, checks all modified and added files for gem5
+    coding style violations. A list of files can be specified to limit
+    the checker to a subset of the repository. The style rules are
+    normally applied on a diff of the repository state (i.e., added
+    files are checked in their entirety while only modifications of
+    modified files are checked).
+
+    The --all option can be specified to include clean files and check
+    modified files in their entirety.
+    """
     from mercurial import mdiff, util
 
-    auto = args.get('auto', False)
-    if auto:
-        auto = 'f'
-    ui = MercurialUI(hgui, hgui.verbose, auto)
-
-    if files:
-        files = frozenset(files)
-
-    def skip(name):
-        return files and name in files
+    opt_fix_white = opts.get('fix_white', False)
+    opt_all = opts.get('all', False)
+    opt_no_ignore = opts.get('no_ignore', False)
+    ui = MercurialUI(hgui, hgui.verbose, opt_fix_white)
 
     def prompt(name, func, regions=all_regions):
         result = ui.prompt("(a)bort, (i)gnore, or (f)ix?", 'aif', 'a')
@@ -395,39 +451,43 @@ def do_check_style(hgui, repo, *files, **args):
 
         return False
 
-    modified, added, removed, deleted, unknown, ignore, clean = repo.status()
+
+    # Import the match (repository file name matching helper)
+    # function. Different versions of Mercurial keep it in different
+    # modules and implement them differently.
+    try:
+        from mercurial import scmutil
+        m = scmutil.match(repo[None], pats, opts)
+    except ImportError:
+        from mercurial import cmdutil
+        m = cmdutil.match(repo, pats, opts)
+
+    modified, added, removed, deleted, unknown, ignore, clean = \
+        repo.status(match=m, clean=opt_all)
+    if not opt_all:
+        try:
+            wctx = repo.workingctx()
+        except:
+            from mercurial import context
+            wctx = context.workingctx(repo)
+
+        files = [ (fn, all_regions) for fn in added ] + \
+            [ (fn,  modregions(wctx, fn)) for fn in modified ]
+    else:
+        files = [ (fn, all_regions) for fn in added + modified + clean ]
 
     whitespace = Whitespace(ui)
     sorted_includes = SortedIncludes(ui)
-    for fname in added:
-        if skip(fname):
+    for fname, mod_regions in files:
+        if not opt_no_ignore and check_ignores(fname):
             continue
 
         fpath = joinpath(repo.root, fname)
 
-        if whitespace.apply(fpath, prompt):
+        if whitespace.apply(fpath, prompt, mod_regions):
             return True
 
-        if sorted_includes.apply(fpath, prompt):
-            return True
-
-    try:
-        wctx = repo.workingctx()
-    except:
-        from mercurial import context
-        wctx = context.workingctx(repo)
-
-    for fname in modified:
-        if skip(fname):
-            continue
-
-        fpath = joinpath(repo.root, fname)
-        regions = modregions(wctx, fname)
-
-        if whitespace.apply(fpath, prompt, regions):
-            return True
-
-        if sorted_includes.apply(fpath, prompt, regions):
+        if sorted_includes.apply(fpath, prompt, mod_regions):
             return True
 
     return False
@@ -485,10 +545,14 @@ except ImportError:
         return arg
 
 cmdtable = {
-    '^m5style' :
-    ( do_check_style,
-      [ ('a', 'auto', False, _("automatically fix whitespace")) ],
-      _('hg m5style [-a] [FILE]...')),
+    '^m5style' : (
+        do_check_style, [
+            ('w', 'fix-white', False, _("automatically fix whitespace")),
+            ('a', 'all', False,
+             _("include clean files and unmodified parts of modified files")),
+            ('', 'no-ignore', False, _("ignore the style ignore list")),
+            ] +  commands.walkopts,
+        _('hg m5style [-a] [FILE]...')),
     '^m5format' :
     ( do_check_format,
       [ ],

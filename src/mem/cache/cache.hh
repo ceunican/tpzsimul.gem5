@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 ARM Limited
+ * Copyright (c) 2012-2014 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -181,6 +181,11 @@ class Cache : public BaseCache
     const bool doFastWrites;
 
     /**
+     * Turn line-sized writes into WriteInvalidate transactions.
+     */
+    void promoteWholeLineWrites(PacketPtr pkt);
+
+    /**
      * Notify the prefetcher on every access, not just misses.
      */
     const bool prefetchOnAccess;
@@ -195,9 +200,9 @@ class Cache : public BaseCache
     /**
      * Does all the processing necessary to perform the provided request.
      * @param pkt The memory request to perform.
+     * @param blk The cache block to be updated.
      * @param lat The latency of the access.
      * @param writebacks List for any writebacks that need to be performed.
-     * @param update True if the replacement data should be updated.
      * @return Boolean indicating whether the request was satisfied.
      */
     bool access(PacketPtr pkt, BlkType *&blk,
@@ -209,12 +214,13 @@ class Cache : public BaseCache
     void cmpAndSwap(BlkType *blk, PacketPtr pkt);
 
     /**
-     * Find a block frame for new block at address addr, assuming that
-     * the block is not currently in the cache.  Append writebacks if
-     * any to provided packet list.  Return free block frame.  May
-     * return NULL if there are no replaceable blocks at the moment.
+     * Find a block frame for new block at address addr targeting the
+     * given security space, assuming that the block is not currently
+     * in the cache.  Append writebacks if any to provided packet
+     * list.  Return free block frame.  May return NULL if there are
+     * no replaceable blocks at the moment.
      */
-    BlkType *allocateBlock(Addr addr, PacketList &writebacks);
+    BlkType *allocateBlock(Addr addr, bool is_secure, PacketList &writebacks);
 
     /**
      * Populates a cache block and handles all outstanding requests for the
@@ -384,16 +390,16 @@ class Cache : public BaseCache
         return mshrQueue.allocated != 0;
     }
 
-    CacheBlk *findBlock(Addr addr) const {
-        return tags->findBlock(addr);
+    CacheBlk *findBlock(Addr addr, bool is_secure) const {
+        return tags->findBlock(addr, is_secure);
     }
 
-    bool inCache(Addr addr) const {
-        return (tags->findBlock(addr) != 0);
+    bool inCache(Addr addr, bool is_secure) const {
+        return (tags->findBlock(addr, is_secure) != 0);
     }
 
-    bool inMissQueue(Addr addr) const {
-        return (mshrQueue.findMatch(addr) != 0);
+    bool inMissQueue(Addr addr, bool is_secure) const {
+        return (mshrQueue.findMatch(addr, is_secure) != 0);
     }
 
     /**

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -96,6 +97,7 @@ class ThreadContext
     typedef TheISA::IntReg IntReg;
     typedef TheISA::FloatReg FloatReg;
     typedef TheISA::FloatRegBits FloatRegBits;
+    typedef TheISA::CCReg CCReg;
     typedef TheISA::MiscReg MiscReg;
   public:
 
@@ -119,13 +121,15 @@ class ThreadContext
 
     virtual BaseCPU *getCpuPtr() = 0;
 
-    virtual int cpuId() = 0;
+    virtual int cpuId() const = 0;
 
-    virtual int threadId() = 0;
+    virtual uint32_t socketId() const = 0;
+
+    virtual int threadId() const = 0;
 
     virtual void setThreadId(int id) = 0;
 
-    virtual int contextId() = 0;
+    virtual int contextId() const = 0;
 
     virtual void setContextId(int id) = 0;
 
@@ -200,11 +204,15 @@ class ThreadContext
 
     virtual FloatRegBits readFloatRegBits(int reg_idx) = 0;
 
+    virtual CCReg readCCReg(int reg_idx) = 0;
+
     virtual void setIntReg(int reg_idx, uint64_t val) = 0;
 
     virtual void setFloatReg(int reg_idx, FloatReg val) = 0;
 
     virtual void setFloatRegBits(int reg_idx, FloatRegBits val) = 0;
+
+    virtual void setCCReg(int reg_idx, CCReg val) = 0;
 
     virtual TheISA::PCState pcState() = 0;
 
@@ -228,6 +236,8 @@ class ThreadContext
 
     virtual int flattenIntIndex(int reg) = 0;
     virtual int flattenFloatIndex(int reg) = 0;
+    virtual int flattenCCIndex(int reg) = 0;
+    virtual int flattenMiscIndex(int reg) = 0;
 
     virtual uint64_t
     readRegOtherThread(int misc_reg, ThreadID tid)
@@ -283,6 +293,8 @@ class ThreadContext
     virtual FloatRegBits readFloatRegBitsFlat(int idx) = 0;
     virtual void setFloatRegBitsFlat(int idx, FloatRegBits val) = 0;
 
+    virtual CCReg readCCRegFlat(int idx) = 0;
+    virtual void setCCRegFlat(int idx, CCReg val) = 0;
     /** @} */
 
 };
@@ -311,13 +323,15 @@ class ProxyThreadContext : public ThreadContext
 
     BaseCPU *getCpuPtr() { return actualTC->getCpuPtr(); }
 
-    int cpuId() { return actualTC->cpuId(); }
+    int cpuId() const { return actualTC->cpuId(); }
 
-    int threadId() { return actualTC->threadId(); }
+    uint32_t socketId() const { return actualTC->socketId(); }
 
-    void setThreadId(int id) { return actualTC->setThreadId(id); }
+    int threadId() const { return actualTC->threadId(); }
 
-    int contextId() { return actualTC->contextId(); }
+    void setThreadId(int id) { actualTC->setThreadId(id); }
+
+    int contextId() const { return actualTC->contextId(); }
 
     void setContextId(int id) { actualTC->setContextId(id); }
 
@@ -391,6 +405,9 @@ class ProxyThreadContext : public ThreadContext
     FloatRegBits readFloatRegBits(int reg_idx)
     { return actualTC->readFloatRegBits(reg_idx); }
 
+    CCReg readCCReg(int reg_idx)
+    { return actualTC->readCCReg(reg_idx); }
+
     void setIntReg(int reg_idx, uint64_t val)
     { actualTC->setIntReg(reg_idx, val); }
 
@@ -399,6 +416,9 @@ class ProxyThreadContext : public ThreadContext
 
     void setFloatRegBits(int reg_idx, FloatRegBits val)
     { actualTC->setFloatRegBits(reg_idx, val); }
+
+    void setCCReg(int reg_idx, CCReg val)
+    { actualTC->setCCReg(reg_idx, val); }
 
     TheISA::PCState pcState() { return actualTC->pcState(); }
 
@@ -433,6 +453,12 @@ class ProxyThreadContext : public ThreadContext
     int flattenFloatIndex(int reg)
     { return actualTC->flattenFloatIndex(reg); }
 
+    int flattenCCIndex(int reg)
+    { return actualTC->flattenCCIndex(reg); }
+
+    int flattenMiscIndex(int reg)
+    { return actualTC->flattenMiscIndex(reg); }
+
     unsigned readStCondFailures()
     { return actualTC->readStCondFailures(); }
 
@@ -464,6 +490,12 @@ class ProxyThreadContext : public ThreadContext
 
     void setFloatRegBitsFlat(int idx, FloatRegBits val)
     { actualTC->setFloatRegBitsFlat(idx, val); }
+
+    CCReg readCCRegFlat(int idx)
+    { return actualTC->readCCRegFlat(idx); }
+
+    void setCCRegFlat(int idx, CCReg val)
+    { actualTC->setCCRegFlat(idx, val); }
 };
 
 /** @{ */

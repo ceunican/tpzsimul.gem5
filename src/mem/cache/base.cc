@@ -49,6 +49,7 @@
 #include "debug/Drain.hh"
 #include "mem/cache/tags/fa_lru.hh"
 #include "mem/cache/tags/lru.hh"
+#include "mem/cache/tags/random_repl.hh"
 #include "mem/cache/base.hh"
 #include "mem/cache/cache.hh"
 #include "mem/cache/mshr.hh"
@@ -92,9 +93,9 @@ BaseCache::CacheSlavePort::setBlocked()
     // if we already scheduled a retry in this cycle, but it has not yet
     // happened, cancel it
     if (sendRetryEvent.scheduled()) {
-       owner.deschedule(sendRetryEvent);
-       DPRINTF(CachePort, "Cache port %s deschedule retry\n", name());
-       mustSendRetry = true;
+        owner.deschedule(sendRetryEvent);
+        DPRINTF(CachePort, "Cache port %s deschedule retry\n", name());
+        mustSendRetry = true;
     }
 }
 
@@ -105,13 +106,20 @@ BaseCache::CacheSlavePort::clearBlocked()
     DPRINTF(CachePort, "Cache port %s accepting new requests\n", name());
     blocked = false;
     if (mustSendRetry) {
-        DPRINTF(CachePort, "Cache port %s sending retry\n", name());
-        mustSendRetry = false;
         // @TODO: need to find a better time (next bus cycle?)
         owner.schedule(sendRetryEvent, curTick() + 1);
     }
 }
 
+void
+BaseCache::CacheSlavePort::processSendRetry()
+{
+    DPRINTF(CachePort, "Cache port %s sending retry\n", name());
+
+    // reset the flag and call retry
+    mustSendRetry = false;
+    sendRetry();
+}
 
 void
 BaseCache::init()
@@ -783,6 +791,8 @@ BaseCacheParams::create()
         if (numSets == 1)
             warn("Consider using FALRU tags for a fully associative cache\n");
         return new Cache<LRU>(this);
+    } else if (dynamic_cast<RandomRepl*>(tags)) {
+        return new Cache<RandomRepl>(this);
     } else {
         fatal("No suitable tags selected\n");
     }

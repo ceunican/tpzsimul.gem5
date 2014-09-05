@@ -33,6 +33,7 @@ from m5.defines import buildEnv
 from m5.params import *
 from m5.proxy import *
 
+from DVFSHandler import *
 from SimpleMemory import *
 
 class MemoryMode(Enum): vals = ['invalid', 'atomic', 'timing',
@@ -83,7 +84,14 @@ class System(MemObject):
     init_param = Param.UInt64(0, "numerical value to pass into simulator")
     boot_osflags = Param.String("a", "boot flags to pass to the kernel")
     kernel = Param.String("", "file that contains the kernel code")
+    kernel_addr_check = Param.Bool(True,
+        "whether to address check on kernel (disable for baremetal)")
     readfile = Param.String("", "file to read startup script from")
     symbolfile = Param.String("", "file to get the symbols from")
     load_addr_mask = Param.UInt64(0xffffffffff,
-            "Address to mask loading binaries with");
+            "Address to mask loading binaries with")
+    load_offset = Param.UInt64(0, "Address to offset loading binaries with")
+
+    # Dynamic voltage and frequency handler for the system, disabled by default
+    # Provide list of domains that need to be controlled by the handler
+    dvfs_handler = DVFSHandler()

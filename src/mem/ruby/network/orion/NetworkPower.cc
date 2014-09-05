@@ -29,6 +29,7 @@
  *          Tushar Krishna
  */
 
+#include "mem/ruby/common/Global.hh"
 #include "mem/ruby/network/orion/NetworkPower.hh"
 #include "mem/ruby/network/orion/OrionConfig.hh"
 #include "mem/ruby/network/orion/OrionLink.hh"
@@ -211,7 +212,7 @@ Router_d::calculate_power()
 }
 
 void
-NetworkLink_d::calculate_power()
+NetworkLink_d::calculate_power(double sim_cycles)
 {
     OrionConfig* orion_cfg_ptr;
     OrionLink* orion_link_ptr;
@@ -231,8 +232,6 @@ NetworkLink_d::calculate_power()
         link_length,
         channel_width_bits,
         orion_cfg_ptr);
-
-    double sim_cycles = (double)(m_net_ptr->curCycle() - g_ruby_start);
 
     // Dynamic Power
     // Assume half the bits flipped on every link activity

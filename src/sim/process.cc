@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2014 Advanced Micro Devices, Inc.
  * Copyright (c) 2012 ARM Limited
  * All rights reserved
  *
@@ -55,6 +56,7 @@
 #include "config/the_isa.hh"
 #include "cpu/thread_context.hh"
 #include "mem/page_table.hh"
+#include "mem/multi_level_page_table.hh"
 #include "mem/se_translating_port_proxy.hh"
 #include "params/LiveProcess.hh"
 #include "params/Process.hh"
@@ -104,7 +106,10 @@ Process::Process(ProcessParams * params)
     : SimObject(params), system(params->system),
       max_stack_size(params->max_stack_size),
       M5_pid(system->allocatePID()),
-      pTable(new PageTable(name(), M5_pid)),
+      useArchPT(params->useArchPT),
+      pTable(useArchPT ?
+        static_cast<PageTableBase *>(new ArchPageTable(name(), M5_pid, system)) :
+        static_cast<PageTableBase *>(new FuncPageTable(name(), M5_pid)) ),
       initVirtMem(system->getSystemPort(), this,
                   SETranslatingPortProxy::Always)
 {
@@ -246,6 +251,8 @@ Process::initState()
 
     // mark this context as active so it will start ticking.
     tc->activate(Cycles(0));
+
+    pTable->initState(tc);
 }
 
 // map simulator fd sim_fd to target fd tgt_fd
@@ -327,7 +334,7 @@ Process::sim_fd_obj(int tgt_fd)
 void
 Process::allocateMem(Addr vaddr, int64_t size, bool clobber)
 {
-    int npages = divCeil(size, (int64_t)VMPageSize);
+    int npages = divCeil(size, (int64_t)PageBytes);
     Addr paddr = system->allocPhysPages(npages);
     pTable->map(vaddr, paddr, size, clobber);
 }
@@ -338,7 +345,7 @@ Process::fixupStackFault(Addr vaddr)
     // Check if this is already on the stack and there's just no page there
     // yet.
     if (vaddr >= stack_min && vaddr < stack_base) {
-        allocateMem(roundDown(vaddr, VMPageSize), VMPageSize);
+        allocateMem(roundDown(vaddr, PageBytes), PageBytes);
         return true;
     }
 
@@ -695,15 +702,22 @@ LiveProcess::create(LiveProcessParams * params)
         fatal("Unknown/unsupported operating system.");
     }
 #elif THE_ISA == ARM_ISA
-    if (objFile->getArch() != ObjectFile::Arm &&
-        objFile->getArch() != ObjectFile::Thumb)
+    ObjectFile::Arch arch = objFile->getArch();
+    if (arch != ObjectFile::Arm && arch != ObjectFile::Thumb &&
+        arch != ObjectFile::Arm64)
         fatal("Object file architecture does not match compiled ISA (ARM).");
     switch (objFile->getOpSys()) {
       case ObjectFile::UnknownOpSys:
         warn("Unknown operating system; assuming Linux.");
         // fall through
       case ObjectFile::Linux:
-        process = new ArmLinuxProcess(params, objFile, objFile->getArch());
+        if (arch == ObjectFile::Arm64) {
+            process = new ArmLinuxProcess64(params, objFile,
+                                            objFile->getArch());
+        } else {
+            process = new ArmLinuxProcess32(params, objFile,
+                                            objFile->getArch());
+        }
         break;
       case ObjectFile::LinuxArmOABI:
         fatal("M5 does not support ARM OABI binaries. Please recompile with an"

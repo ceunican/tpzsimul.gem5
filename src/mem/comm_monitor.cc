@@ -55,18 +55,36 @@ CommMonitor::CommMonitor(Params* params)
       readAddrMask(params->read_addr_mask),
       writeAddrMask(params->write_addr_mask),
       stats(params),
-      traceStream(NULL)
+      traceStream(NULL),
+      system(params->system)
 {
-    // If we are using a trace file, then open the file,
-    if (params->trace_file != "") {
-        // If the trace file is not specified as an absolute path,
-        // append the current simulation output directory
-        std::string filename = simout.resolve(params->trace_file);
+    // If we are using a trace file, then open the file
+    if (params->trace_enable) {
+        std::string filename;
+        if (params->trace_file != "") {
+            // If the trace file is not specified as an absolute path,
+            // append the current simulation output directory
+            filename = simout.resolve(params->trace_file);
+
+            std::string suffix = ".gz";
+            // If trace_compress has been set, check the suffix. Append
+            // accordingly.
+            if (params->trace_compress &&
+                filename.compare(filename.size() - suffix.size(), suffix.size(),
+                                 suffix) != 0)
+                    filename = filename + suffix;
+        } else {
+            // Generate a filename from the name of the SimObject. Append .trc
+            // and .gz if we want compression enabled.
+            filename = simout.resolve(name() + ".trc" +
+                                      (params->trace_compress ? ".gz" : ""));
+        }
+
         traceStream = new ProtoOutputStream(filename);
 
         // Create a protobuf message for the header and write it to
         // the stream
-        Message::PacketHeader header_msg;
+        ProtoMessage::PacketHeader header_msg;
         header_msg.set_obj_id(name());
         header_msg.set_tick_freq(SimClock::Frequency);
         traceStream->write(header_msg);
@@ -83,8 +101,8 @@ CommMonitor::CommMonitor(Params* params)
     samplePeriod.setTick(params->sample_period);
 
     DPRINTF(CommMonitor,
-            "Created monitor %s with sample period %d ticks (%f s)\n",
-            name(), samplePeriodTicks, samplePeriod);
+            "Created monitor %s with sample period %d ticks (%f ms)\n",
+            name(), samplePeriodTicks, samplePeriod.msec());
 }
 
 void
@@ -106,6 +124,13 @@ CommMonitor::init()
     // make sure both sides of the monitor are connected
     if (!slavePort.isConnected() || !masterPort.isConnected())
         fatal("Communication monitor is not connected on both sides.\n");
+
+    if (traceStream != NULL) {
+        // Check the memory mode. We only record something when in
+        // timing mode. Warn accordingly.
+        if (!system->isTimingMode())
+            warn("%s: Not in timing mode. No trace will be recorded.", name());
+    }
 }
 
 BaseMasterPort&
@@ -189,7 +214,7 @@ CommMonitor::recvTimingReq(PacketPtr pkt)
         // Create a protobuf message representing the
         // packet. Currently we do not preserve the flags in the
         // trace.
-        Message::Packet pkt_msg;
+        ProtoMessage::Packet pkt_msg;
         pkt_msg.set_tick(curTick());
         pkt_msg.set_cmd(cmd);
         pkt_msg.set_flags(req_flags);

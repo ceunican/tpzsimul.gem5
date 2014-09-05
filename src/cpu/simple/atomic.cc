@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -278,6 +278,36 @@ AtomicSimpleCPU::suspendContext(ThreadID thread_num)
 }
 
 
+Tick
+AtomicSimpleCPU::AtomicCPUDPort::recvAtomicSnoop(PacketPtr pkt)
+{
+    DPRINTF(SimpleCPU, "received snoop pkt for addr:%#x %s\n", pkt->getAddr(),
+            pkt->cmdString());
+
+    // if snoop invalidates, release any associated locks
+    if (pkt->isInvalidate()) {
+        DPRINTF(SimpleCPU, "received invalidation for addr:%#x\n",
+                pkt->getAddr());
+        TheISA::handleLockedSnoop(cpu->thread, pkt, cacheBlockMask);
+    }
+
+    return 0;
+}
+
+void
+AtomicSimpleCPU::AtomicCPUDPort::recvFunctionalSnoop(PacketPtr pkt)
+{
+    DPRINTF(SimpleCPU, "received snoop pkt for addr:%#x %s\n", pkt->getAddr(),
+            pkt->cmdString());
+
+    // if snoop invalidates, release any associated locks
+    if (pkt->isInvalidate()) {
+        DPRINTF(SimpleCPU, "received invalidation for addr:%#x\n",
+                pkt->getAddr());
+        TheISA::handleLockedSnoop(cpu->thread, pkt, cacheBlockMask);
+    }
+}
+
 Fault
 AtomicSimpleCPU::readMem(Addr addr, uint8_t * data,
                          unsigned size, unsigned flags)
@@ -301,6 +331,7 @@ AtomicSimpleCPU::readMem(Addr addr, uint8_t * data,
 
     dcache_latency = 0;
 
+    req->taskId(taskId());
     while (1) {
         req->setVirt(0, addr, size, flags, dataMasterId(), thread->pcState().instAddr());
 
@@ -309,9 +340,8 @@ AtomicSimpleCPU::readMem(Addr addr, uint8_t * data,
 
         // Now do the access.
         if (fault == NoFault && !req->getFlags().isSet(Request::NO_ACCESS)) {
-            Packet pkt = Packet(req,
-                                req->isLLSC() ? MemCmd::LoadLockedReq :
-                                MemCmd::ReadReq);
+            Packet pkt(req, MemCmd::ReadReq);
+            pkt.refineCommand();
             pkt.dataStatic(data);
 
             if (req->isMmappedIpr())
@@ -368,6 +398,16 @@ Fault
 AtomicSimpleCPU::writeMem(uint8_t *data, unsigned size,
                           Addr addr, unsigned flags, uint64_t *res)
 {
+
+    static uint8_t zero_array[64] = {};
+
+    if (data == NULL) {
+        assert(size <= 64);
+        assert(flags & Request::CACHE_BLOCK_ZERO);
+        // This must be a cache block cleaning request
+        data = zero_array;
+    }
+
     // use the CPU's statically allocated write request and packet objects
     Request *req = &data_write_req;
 
@@ -387,6 +427,7 @@ AtomicSimpleCPU::writeMem(uint8_t *data, unsigned size,
 
     dcache_latency = 0;
 
+    req->taskId(taskId());
     while(1) {
         req->setVirt(0, addr, size, flags, dataMasterId(), thread->pcState().instAddr());
 
@@ -400,7 +441,7 @@ AtomicSimpleCPU::writeMem(uint8_t *data, unsigned size,
 
             if (req->isLLSC()) {
                 cmd = MemCmd::StoreCondReq;
-                do_access = TheISA::handleLockedWrite(thread, req);
+                do_access = TheISA::handleLockedWrite(thread, req, dcachePort.cacheBlockMask);
             } else if (req->isSwap()) {
                 cmd = MemCmd::SwapReq;
                 if (req->isCondSwap()) {
@@ -492,6 +533,7 @@ AtomicSimpleCPU::tick()
         bool needToFetch = !isRomMicroPC(pcState.microPC()) &&
                            !curMacroStaticInst;
         if (needToFetch) {
+            ifetch_req.taskId(taskId());
             setupFetchRequest(&ifetch_req);
             fault = thread->itb->translateAtomic(&ifetch_req, tc,
                                                  BaseTLB::Execute);
@@ -618,7 +660,6 @@ AtomicSimpleCPU::profileSimPoint()
             // If basic block is seen before, just increment the count by the
             // number of insts in basic block.
             BBInfo& info = map_itr->second;
-            assert(info.insts == currentBBVInstCount);
             info.count += currentBBVInstCount;
         }
         currentBBVInstCount = 0;

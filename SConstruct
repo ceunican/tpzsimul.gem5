@@ -109,6 +109,7 @@ For more details, see:
     raise
 
 # Global Python includes
+import itertools
 import os
 import re
 import subprocess
@@ -190,9 +191,11 @@ termcap = get_termcap(GetOption('use_colors'))
 # Set up the main build environment.
 #
 ########################################################################
+
+# export TERM so that clang reports errors in color
 use_vars = set([ 'AS', 'AR', 'CC', 'CXX', 'HOME', 'LD_LIBRARY_PATH',
-                 'LIBRARY_PATH', 'PATH', 'PKG_CONFIG_PATH', 'PYTHONPATH',
-                 'RANLIB', 'SWIG' ])
+                 'LIBRARY_PATH', 'PATH', 'PKG_CONFIG_PATH', 'PROTOC',
+                 'PYTHONPATH', 'RANLIB', 'SWIG', 'TERM' ])
 
 use_prefixes = [
     "M5",           # M5 configuration (e.g., path to kernels)
@@ -565,52 +568,62 @@ else:
     Exit(1)
 
 if main['GCC']:
-    # Check for a supported version of gcc, >= 4.4 is needed for c++0x
-    # support. See http://gcc.gnu.org/projects/cxx0x.html for details
+    # Check for a supported version of gcc. >= 4.6 is chosen for its
+    # level of c++11 support. See
+    # http://gcc.gnu.org/projects/cxx0x.html for details. 4.6 is also
+    # the first version with proper LTO support.
     gcc_version = readCommand([main['CXX'], '-dumpversion'], exception=False)
-    if compareVersions(gcc_version, "4.4") < 0:
-        print 'Error: gcc version 4.4 or newer required.'
+    if compareVersions(gcc_version, "4.6") < 0:
+        print 'Error: gcc version 4.6 or newer required.'
         print '       Installed version:', gcc_version
         Exit(1)
 
     main['GCC_VERSION'] = gcc_version
 
-    # Check for versions with bugs
-    if not compareVersions(gcc_version, '4.4.1') or \
-       not compareVersions(gcc_version, '4.4.2'):
-        print 'Info: Tree vectorizer in GCC 4.4.1 & 4.4.2 is buggy, disabling.'
-        main.Append(CCFLAGS=['-fno-tree-vectorize'])
+    # gcc from version 4.8 and above generates "rep; ret" instructions
+    # to avoid performance penalties on certain AMD chips. Older
+    # assemblers detect this as an error, "Error: expecting string
+    # instruction after `rep'"
+    if compareVersions(gcc_version, "4.8") > 0:
+        as_version = readCommand([main['AS'], '-v', '/dev/null'],
+                                 exception=False).split()
 
-    # LTO support is only really working properly from 4.6 and beyond
-    if compareVersions(gcc_version, '4.6') >= 0:
-        # Add the appropriate Link-Time Optimization (LTO) flags
-        # unless LTO is explicitly turned off. Note that these flags
-        # are only used by the fast target.
-        if not GetOption('no_lto'):
-            # Pass the LTO flag when compiling to produce GIMPLE
-            # output, we merely create the flags here and only append
-            # them later/
-            main['LTO_CCFLAGS'] = ['-flto=%d' % GetOption('num_jobs')]
+        if not as_version or compareVersions(as_version[-1], "2.23") < 0:
+            print termcap.Yellow + termcap.Bold + \
+                'Warning: This combination of gcc and binutils have' + \
+                ' known incompatibilities.\n' + \
+                '         If you encounter build problems, please update ' + \
+                'binutils to 2.23.' + \
+                termcap.Normal
 
-            # Use the same amount of jobs for LTO as we are running
-            # scons with, we hardcode the use of the linker plugin
-            # which requires either gold or GNU ld >= 2.21
-            main['LTO_LDFLAGS'] = ['-flto=%d' % GetOption('num_jobs'),
-                                   '-fuse-linker-plugin']
+    # Add the appropriate Link-Time Optimization (LTO) flags
+    # unless LTO is explicitly turned off. Note that these flags
+    # are only used by the fast target.
+    if not GetOption('no_lto'):
+        # Pass the LTO flag when compiling to produce GIMPLE
+        # output, we merely create the flags here and only append
+        # them later/
+        main['LTO_CCFLAGS'] = ['-flto=%d' % GetOption('num_jobs')]
+
+        # Use the same amount of jobs for LTO as we are running
+        # scons with, we hardcode the use of the linker plugin
+        # which requires either gold or GNU ld >= 2.21
+        main['LTO_LDFLAGS'] = ['-flto=%d' % GetOption('num_jobs'),
+                               '-fuse-linker-plugin']
 
     main.Append(TCMALLOC_CCFLAGS=['-fno-builtin-malloc', '-fno-builtin-calloc',
                                   '-fno-builtin-realloc', '-fno-builtin-free'])
 
 elif main['CLANG']:
-    # Check for a supported version of clang, >= 2.9 is needed to
-    # support similar features as gcc 4.4. See
+    # Check for a supported version of clang, >= 3.0 is needed to
+    # support similar features as gcc 4.6. See
     # http://clang.llvm.org/cxx_status.html for details
     clang_version_re = re.compile(".* version (\d+\.\d+)")
-    clang_version_match = clang_version_re.match(CXX_version)
+    clang_version_match = clang_version_re.search(CXX_version)
     if (clang_version_match):
         clang_version = clang_version_match.groups()[0]
-        if compareVersions(clang_version, "2.9") < 0:
-            print 'Error: clang version 2.9 or newer required.'
+        if compareVersions(clang_version, "3.0") < 0:
+            print 'Error: clang version 3.0 or newer required.'
             print '       Installed version:', clang_version
             Exit(1)
     else:
@@ -625,7 +638,12 @@ elif main['CLANG']:
     # is relying on this
     main.Append(CCFLAGS=['-Wno-tautological-compare',
                          '-Wno-parentheses',
-                         '-Wno-self-assign'])
+                         '-Wno-self-assign',
+                         # Some versions of libstdc++ (4.8?) seem to
+                         # use struct hash and class hash
+                         # interchangeably.
+                         '-Wno-mismatched-tags',
+                         ])
 
     main.Append(TCMALLOC_CCFLAGS=['-fno-builtin'])
 
@@ -724,22 +742,11 @@ if len(swig_version) < 3 or \
     print 'Error determining SWIG version.'
     Exit(1)
 
-min_swig_version = '1.3.34'
+min_swig_version = '2.0.4'
 if compareVersions(swig_version[2], min_swig_version) < 0:
     print 'Error: SWIG version', min_swig_version, 'or newer required.'
     print '       Installed version:', swig_version[2]
     Exit(1)
-
-# Older versions of swig do not play well with more recent versions of
-# gcc due to assumptions on implicit includes (cstddef) and use of
-# namespaces
-if main['GCC'] and compareVersions(gcc_version, '4.6') > 0 and \
-        compareVersions(swig_version[2], '2') < 0:
-    print '\n' + termcap.Yellow + termcap.Bold + \
-        'Warning: SWIG 1.x cause issues with gcc 4.6 and later.\n' + \
-        termcap.Normal + \
-        'Use SWIG 2.x to avoid assumptions on implicit includes\n' + \
-        'and use of namespaces\n'
 
 # Set up SWIG flags & scanner
 swig_flags=Split('-c++ -python -modern -templatereduce $_CPPINCFLAGS')
@@ -792,12 +799,35 @@ def CheckLeading(context):
     context.Result(ret)
     return ret
 
+# Add a custom Check function to test for structure members.
+def CheckMember(context, include, decl, member, include_quotes="<>"):
+    context.Message("Checking for member %s in %s..." %
+                    (member, decl))
+    text = """
+#include %(header)s
+int main(){
+  %(decl)s test;
+  (void)test.%(member)s;
+  return 0;
+};
+""" % { "header" : include_quotes[0] + include + include_quotes[1],
+        "decl" : decl,
+        "member" : member,
+        }
+
+    ret = context.TryCompile(text, extension=".cc")
+    context.Result(ret)
+    return ret
+
 # Platform-specific configuration.  Note again that we assume that all
 # builds under a given build root run on the same host platform.
 conf = Configure(main,
                  conf_dir = joinpath(build_root, '.scons_config'),
                  log_file = joinpath(build_root, 'scons_config.log'),
-                 custom_tests = { 'CheckLeading' : CheckLeading })
+                 custom_tests = {
+        'CheckLeading' : CheckLeading,
+        'CheckMember' : CheckMember,
+        })
 
 # Check for leading underscores.  Don't really need to worry either
 # way so don't need to check the return code.
@@ -847,7 +877,13 @@ if main['M5_BUILD_CACHE']:
 # we add them explicitly below. If you want to link in an alternate
 # version of python, see above for instructions on how to invoke
 # scons with the appropriate PATH set.
-py_includes = readCommand(['python-config', '--includes'],
+#
+# First we check if python2-config exists, else we use python-config
+python_config = readCommand(['which', 'python2-config'], exception='').strip()
+if not os.path.exists(python_config):
+    python_config = readCommand(['which', 'python-config'],
+                                exception='').strip()
+py_includes = readCommand([python_config, '--includes'],
                           exception='').split()
 # Strip the -I from the include folders before adding them to the
 # CPPPATH
@@ -855,7 +891,7 @@ main.Append(CPPPATH=map(lambda inc: inc[2:], py_includes))
 
 # Read the linker flags and split them into libraries and other link
 # flags. The libraries are added later through the call the CheckLib.
-py_ld_flags = readCommand(['python-config', '--ldflags'], exception='').split()
+py_ld_flags = readCommand([python_config, '--ldflags'], exception='').split()
 py_libs = []
 for lib in py_ld_flags:
      if not lib.startswith('-l'):
@@ -962,6 +998,12 @@ def is_isa_kvm_compatible(isa):
     return host_isa in isa_comp_table.get(isa, [])
 
 
+# Check if the exclude_host attribute is available. We want this to
+# get accurate instruction counts in KVM.
+main['HAVE_PERF_ATTR_EXCLUDE_HOST'] = conf.CheckMember(
+    'linux/perf_event.h', 'struct perf_event_attr', 'exclude_host')
+
+
 ######################################################################
 #
 # Finish the configuration
@@ -983,17 +1025,10 @@ class CpuModel(object):
 
     # Dict of available CPU model objects.  Accessible as CpuModel.dict.
     dict = {}
-    list = []
-    defaults = []
 
     # Constructor.  Automatically adds models to CpuModel.dict.
-    def __init__(self, name, filename, includes, strings, default=False):
+    def __init__(self, name, default=False):
         self.name = name           # name of model
-        self.filename = filename   # filename for output exec code
-        self.includes = includes   # include files needed in exec file
-        # The 'strings' dict holds all the per-CPU symbols we can
-        # substitute into templates etc.
-        self.strings = strings
 
         # This cpu is enabled by default
         self.default = default
@@ -1002,7 +1037,6 @@ class CpuModel(object):
         if name in CpuModel.dict:
             raise AttributeError, "CpuModel '%s' already registered" % name
         CpuModel.dict[name] = self
-        CpuModel.list.append(name)
 
 Export('CpuModel')
 
@@ -1026,7 +1060,7 @@ Export('slicc_includes')
 
 # Walk the tree and execute all SConsopts scripts that wil add to the
 # above variables
-if not GetOption('verbose'):
+if GetOption('verbose'):
     print "Reading SConsopts"
 for bdir in [ base_dir ] + extras_dir_list:
     if not isdir(bdir):
@@ -1044,7 +1078,7 @@ sticky_vars.AddVariables(
     EnumVariable('TARGET_ISA', 'Target ISA', 'alpha', all_isa_list),
     ListVariable('CPU_MODELS', 'CPU models',
                  sorted(n for n,m in CpuModel.dict.iteritems() if m.default),
-                 sorted(CpuModel.list)),
+                 sorted(CpuModel.dict.keys())),
     BoolVariable('EFENCE', 'Link with Electric Fence malloc debugger',
                  False),
     BoolVariable('SS_COMPATIBLE_FP',
@@ -1063,7 +1097,8 @@ sticky_vars.AddVariables(
 
 # These variables get exported to #defines in config/*.hh (see src/SConscript).
 export_vars += ['USE_FENV', 'SS_COMPATIBLE_FP', 'TARGET_ISA', 'CP_ANNOTATE',
-                'USE_POSIX_CLOCK', 'PROTOCOL', 'HAVE_PROTOBUF']
+                'USE_POSIX_CLOCK', 'PROTOCOL', 'HAVE_PROTOBUF',
+                'HAVE_PERF_ATTR_EXCLUDE_HOST']
 
 ###################################################
 #
@@ -1122,6 +1157,10 @@ main.SConscript('ext/libfdt/SConscript',
 main.SConscript('ext/fputils/SConscript',
                 variant_dir = joinpath(build_root, 'fputils'))
 
+# DRAMSim2 build is shared across all configs in the build root.
+main.SConscript('ext/dramsim2/SConscript',
+                variant_dir = joinpath(build_root, 'dramsim2'))
+
 # topaz build is shared across all configs in the build root.
 main.SConscript('ext/TOPAZ/SConscript',
                 variant_dir = joinpath(build_root, 'topaz'))
@@ -1133,16 +1172,21 @@ main.SConscript('ext/TOPAZ/SConscript',
 ###################################################
 
 main['ALL_ISA_LIST'] = all_isa_list
+all_isa_deps = {}
 def make_switching_dir(dname, switch_headers, env):
     # Generate the header.  target[0] is the full path of the output
     # header to generate.  'source' is a dummy variable, since we get the
     # list of ISAs from env['ALL_ISA_LIST'].
     def gen_switch_hdr(target, source, env):
         fname = str(target[0])
-        f = open(fname, 'w')
         isa = env['TARGET_ISA'].lower()
-        print >>f, '#include "%s/%s/%s"' % (dname, isa, basename(fname))
-        f.close()
+        try:
+            f = open(fname, 'w')
+            print >>f, '#include "%s/%s/%s"' % (dname, isa, basename(fname))
+            f.close()
+        except IOError:
+            print "Failed to create %s" % fname
+            raise
 
     # Build SCons Action object. 'varlist' specifies env vars that this
     # action depends on; when env['ALL_ISA_LIST'] changes these actions
@@ -1153,7 +1197,36 @@ def make_switching_dir(dname, switch_headers, env):
     # Instantiate actions for each header
     for hdr in switch_headers:
         env.Command(hdr, [], switch_hdr_action)
+
+    isa_target = Dir('.').up().name.lower().replace('_', '-')
+    env['PHONY_BASE'] = '#'+isa_target
+    all_isa_deps[isa_target] = None
+
 Export('make_switching_dir')
+
+# all-isas -> all-deps -> all-environs -> all_targets
+main.Alias('#all-isas', [])
+main.Alias('#all-deps', '#all-isas')
+
+# Dummy target to ensure all environments are created before telling
+# SCons what to actually make (the command line arguments).  We attach
+# them to the dependence graph after the environments are complete.
+ORIG_BUILD_TARGETS = list(BUILD_TARGETS) # force a copy; gets closure to work.
+def environsComplete(target, source, env):
+    for t in ORIG_BUILD_TARGETS:
+        main.Depends('#all-targets', t)
+
+# Each build/* switching_dir attaches its *-environs target to #all-environs.
+main.Append(BUILDERS = {'CompleteEnvirons' :
+                        Builder(action=MakeAction(environsComplete, None))})
+main.CompleteEnvirons('#all-environs', [])
+
+def doNothing(**ignored): pass
+main.Append(BUILDERS = {'Dummy': Builder(action=MakeAction(doNothing, None))})
+
+# The final target to which all the original targets ultimately get attached.
+main.Dummy('#all-targets', '#all-environs')
+BUILD_TARGETS[:] = ['#all-targets']
 
 ###################################################
 #
@@ -1162,7 +1235,8 @@ Export('make_switching_dir')
 ###################################################
 
 for variant_path in variant_paths:
-    print "Building in", variant_path
+    if not GetOption('silent'):
+        print "Building in", variant_path
 
     # Make a copy of the build-root environment to use for this config.
     env = main.Clone()
@@ -1180,7 +1254,8 @@ for variant_path in variant_paths:
     current_vars_file = joinpath(build_root, 'variables', variant_dir)
     if isfile(current_vars_file):
         sticky_vars.files.append(current_vars_file)
-        print "Using saved variables file %s" % current_vars_file
+        if not GetOption('silent'):
+            print "Using saved variables file %s" % current_vars_file
     else:
         # Build dir-specific variables file doesn't exist.
 
@@ -1245,6 +1320,13 @@ for variant_path in variant_paths:
                 "target ISA combination"
             env['USE_KVM'] = False
 
+    # Warn about missing optional functionality
+    if env['USE_KVM']:
+        if not main['HAVE_PERF_ATTR_EXCLUDE_HOST']:
+            print "Warning: perf_event headers lack support for the " \
+                "exclude_host attribute. KVM instruction counts will " \
+                "be inaccurate."
+
     # Save sticky variable settings back to current variables file
     sticky_vars.Save(current_vars_file, env)
 
@@ -1254,14 +1336,25 @@ for variant_path in variant_paths:
     # The src/SConscript file sets up the build rules in 'env' according
     # to the configured variables.  It returns a list of environments,
     # one for each variant build (debug, opt, etc.)
-    envList = SConscript('src/SConscript', variant_dir = variant_path,
-                         exports = 'env')
+    SConscript('src/SConscript', variant_dir = variant_path, exports = 'env')
 
-    # Set up the regression tests for each build.
-    for e in envList:
-        SConscript('tests/SConscript',
-                   variant_dir = joinpath(variant_path, 'tests', e.Label),
-                   exports = { 'env' : e }, duplicate = False)
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = itertools.tee(iterable)
+    b.next()
+    return itertools.izip(a, b)
+
+# Create false dependencies so SCons will parse ISAs, establish
+# dependencies, and setup the build Environments serially. Either
+# SCons (likely) and/or our SConscripts (possibly) cannot cope with -j
+# greater than 1. It appears to be standard race condition stuff; it
+# doesn't always fail, but usually, and the behaviors are different.
+# Every time I tried to remove this, builds would fail in some
+# creative new way. So, don't do that. You'll want to, though, because
+# tests/SConscript takes a long time to make its Environments.
+for t1, t2 in pairwise(sorted(all_isa_deps.iterkeys())):
+    main.Depends('#%s-deps'     % t2, '#%s-deps'     % t1)
+    main.Depends('#%s-environs' % t2, '#%s-environs' % t1)
 
 # base help text
 Help('''

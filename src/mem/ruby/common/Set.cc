@@ -29,11 +29,11 @@
 // modified (rewritten) 05/20/05 by Dan Gibson to accomimdate FASTER
 // >32 bit set sizes
 
+#include <cassert>
 #include <cstdio>
 
 #include "base/misc.hh"
 #include "mem/ruby/common/Set.hh"
-#include "mem/ruby/system/System.hh"
 
 Set::Set()
 {
@@ -100,22 +100,6 @@ Set::addSet(const Set& set)
     assert(getSize()==set.getSize());
     for (int i = 0; i < m_nArrayLen; i++)
         m_p_nArray[i] |= set.m_p_nArray[i];
-}
-
-/*
- * This function should randomly assign 1 to the bits in the set--it
- * should not clear the bits bits first, though?
- */
-void
-Set::addRandom()
-{
-
-    for (int i = 0; i < m_nArrayLen; i++) {
-        // this ensures that all 32 bits are subject to random effects,
-        // as RAND_MAX typically = 0x7FFFFFFF
-        m_p_nArray[i] |= random() ^ (random() << 4);
-    }
-    clearExcess();
 }
 
 /*

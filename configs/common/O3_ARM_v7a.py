@@ -42,7 +42,7 @@ class O3_ARM_v7a_Complex_Int(FUDesc):
     count = 1
 
 
-# Floating point and SIMD instructions 
+# Floating point and SIMD instructions
 class O3_ARM_v7a_FP(FUDesc):
     opList = [ OpDesc(opClass='SimdAdd', opLat=4),
                OpDesc(opClass='SimdAddAcc', opLat=4),
@@ -87,12 +87,9 @@ class O3_ARM_v7a_FUP(FUPool):
     FUList = [O3_ARM_v7a_Simple_Int(), O3_ARM_v7a_Complex_Int(),
               O3_ARM_v7a_Load(), O3_ARM_v7a_Store(), O3_ARM_v7a_FP()]
 
-# Tournament Branch Predictor
+# Bi-Mode Branch Predictor
 class O3_ARM_v7a_BP(BranchPredictor):
-    predType = "tournament"
-    localPredictorSize = 2048
-    localCtrBits = 2
-    localHistoryTableSize = 1024
+    predType = "bi-mode"
     globalPredictorSize = 8192
     globalCtrBits = 2
     choicePredictorSize = 8192
@@ -119,6 +116,7 @@ class O3_ARM_v7a_3(DerivO3CPU):
     commitToRenameDelay = 1
     commitToIEWDelay = 1
     fetchWidth = 3
+    fetchBufferSize = 16
     fetchToDecodeDelay = 3
     decodeWidth = 3
     decodeToRenameDelay = 2
@@ -128,7 +126,6 @@ class O3_ARM_v7a_3(DerivO3CPU):
     dispatchWidth = 6
     issueWidth = 8
     wbWidth = 8
-    wbDepth = 1
     fuPool = O3_ARM_v7a_FUP()
     iewToCommitDelay = 1
     renameToROBDelay = 1
@@ -138,7 +135,7 @@ class O3_ARM_v7a_3(DerivO3CPU):
     backComSize = 5
     forwardComSize = 5
     numPhysIntRegs = 128
-    numPhysFloatRegs = 128
+    numPhysFloatRegs = 192
     numIQEntries = 32
     numROBEntries = 40
 
@@ -166,7 +163,7 @@ class O3_ARM_v7a_DCache(BaseCache):
     write_buffers = 16
     is_top_level = 'true'
 
-# TLB Cache 
+# TLB Cache
 # Use a cache as a L2 TLB
 class O3_ARM_v7aWalkCache(BaseCache):
     hit_latency = 4
@@ -191,4 +188,4 @@ class O3_ARM_v7aL2(BaseCache):
     prefetch_on_access = 'true'
     # Simple stride prefetcher
     prefetcher = StridePrefetcher(degree=8, latency = 1)
-
+    tags = RandomRepl()

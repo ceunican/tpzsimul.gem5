@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 ARM Limited
+ * Copyright (c) 2010-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -94,6 +94,7 @@ TimingSimpleCPU::TimingSimpleCPU(TimingSimpleCPUParams *p)
 
     system->totalNumInsts = 0;
 }
+
 
 
 TimingSimpleCPU::~TimingSimpleCPU()
@@ -273,7 +274,7 @@ TimingSimpleCPU::sendData(RequestPtr req, uint8_t *data, uint64_t *res,
         bool do_access = true;  // flag to suppress cache access
 
         if (req->isLLSC()) {
-            do_access = TheISA::handleLockedWrite(thread, req);
+            do_access = TheISA::handleLockedWrite(thread, req, dcachePort.cacheBlockMask);
         } else if (req->isCondSwap()) {
             assert(res);
             req->setExtraData(*res);
@@ -348,20 +349,7 @@ TimingSimpleCPU::translationFault(Fault fault)
 void
 TimingSimpleCPU::buildPacket(PacketPtr &pkt, RequestPtr req, bool read)
 {
-    MemCmd cmd;
-    if (read) {
-        cmd = MemCmd::ReadReq;
-        if (req->isLLSC())
-            cmd = MemCmd::LoadLockedReq;
-    } else {
-        cmd = MemCmd::WriteReq;
-        if (req->isLLSC()) {
-            cmd = MemCmd::StoreCondReq;
-        } else if (req->isSwap()) {
-            cmd = MemCmd::SwapReq;
-        }
-    }
-    pkt = new Packet(req, cmd);
+    pkt = read ? Packet::createRead(req) : Packet::createWrite(req);
 }
 
 void
@@ -414,6 +402,8 @@ TimingSimpleCPU::readMem(Addr addr, uint8_t *data,
 
     RequestPtr req  = new Request(asid, addr, size,
                                   flags, dataMasterId(), pc, _cpuId, tid);
+
+    req->taskId(taskId());
 
     Addr split_addr = roundDown(addr + size - 1, block_size);
     assert(split_addr <= addr || split_addr - addr < block_size);
@@ -469,13 +459,19 @@ TimingSimpleCPU::writeMem(uint8_t *data, unsigned size,
                           Addr addr, unsigned flags, uint64_t *res)
 {
     uint8_t *newData = new uint8_t[size];
-    memcpy(newData, data, size);
-
     const int asid = 0;
     const ThreadID tid = 0;
     const Addr pc = thread->instAddr();
     unsigned block_size = cacheLineSize();
     BaseTLB::Mode mode = BaseTLB::Write;
+
+    if (data == NULL) {
+        assert(flags & Request::CACHE_BLOCK_ZERO);
+        // This must be a cache block cleaning request
+        memset(newData, 0, size);
+    } else {
+        memcpy(newData, data, size);
+    }
 
     if (traceData) {
         traceData->setAddr(addr);
@@ -483,6 +479,8 @@ TimingSimpleCPU::writeMem(uint8_t *data, unsigned size,
 
     RequestPtr req = new Request(asid, addr, size,
                                  flags, dataMasterId(), pc, _cpuId, tid);
+
+    req->taskId(taskId());
 
     Addr split_addr = roundDown(addr + size - 1, block_size);
     assert(split_addr <= addr || split_addr - addr < block_size);
@@ -561,6 +559,7 @@ TimingSimpleCPU::fetch()
     if (needToFetch) {
         _status = BaseSimpleCPU::Running;
         Request *ifetch_req = new Request();
+        ifetch_req->taskId(taskId());
         ifetch_req->setThreadContext(_cpuId, /* thread ID */ 0);
         setupFetchRequest(ifetch_req);
         DPRINTF(SimpleCPU, "Translating address %#x\n", ifetch_req->getVaddr());
@@ -646,7 +645,6 @@ TimingSimpleCPU::completeIfetch(PacketPtr pkt)
 
     // received a response from the icache: execute the received
     // instruction
-
     assert(!pkt || !pkt->isError());
     assert(_status == IcacheWaitResponse);
 
@@ -654,6 +652,10 @@ TimingSimpleCPU::completeIfetch(PacketPtr pkt)
 
     numCycles += curCycle() - previousCycle;
     previousCycle = curCycle();
+
+    if (pkt)
+        pkt->req->setAccessLatency();
+
 
     preExecute();
     if (curStaticInst && curStaticInst->isMemRef()) {
@@ -749,6 +751,7 @@ TimingSimpleCPU::completeDataAccess(PacketPtr pkt)
     assert(_status == DcacheWaitResponse || _status == DTBWaitResponse ||
            pkt->req->getFlags().isSet(Request::NO_ACCESS));
 
+    pkt->req->setAccessLatency();
     numCycles += curCycle() - previousCycle;
     previousCycle = curCycle();
 
@@ -803,6 +806,13 @@ TimingSimpleCPU::completeDataAccess(PacketPtr pkt)
 
     advanceInst(fault);
 }
+
+void
+TimingSimpleCPU::DcachePort::recvTimingSnoopReq(PacketPtr pkt)
+{
+    TheISA::handleLockedSnoop(cpu->thread, pkt, cacheBlockMask);
+}
+
 
 bool
 TimingSimpleCPU::DcachePort::recvTimingResp(PacketPtr pkt)

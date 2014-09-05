@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2012, 2014 ARM Limited
  * Copyright (c) 2010 The University of Edinburgh
  * Copyright (c) 2012 Mark D. Hill and David A. Wood
  * All rights reserved
@@ -42,6 +42,9 @@
  * Authors: Kevin Lim
  */
 
+#ifndef __CPU_PRED_BPRED_UNIT_IMPL_HH__
+#define __CPU_PRED_BPRED_UNIT_IMPL_HH__
+
 #include <algorithm>
 
 #include "arch/isa_traits.hh"
@@ -54,17 +57,15 @@
 
 BPredUnit::BPredUnit(const Params *params)
     : SimObject(params),
+      numThreads(params->numThreads),
+      predHist(numThreads),
       BTB(params->BTBEntries,
           params->BTBTagSize,
-          params->instShiftAmt)
+          params->instShiftAmt),
+      RAS(numThreads)
 {
-    numThreads = params->numThreads;
-
-    predHist = new History[numThreads];
-
-    RAS = new ReturnAddrStack[numThreads];
-    for (int i=0; i < numThreads; i++)
-        RAS[i].init(params->RASSize);
+    for (auto& r : RAS)
+        r.init(params->RASSize);
 }
 
 void
@@ -123,8 +124,8 @@ BPredUnit::drainSanityCheck() const
 {
     // We shouldn't have any outstanding requests when we resume from
     // a drained system.
-    for (int i = 0; i < numThreads; ++i)
-        assert(predHist[i].empty());
+    for (const auto& ph M5_VAR_USED : predHist)
+        assert(ph.empty());
 }
 
 bool
@@ -371,8 +372,12 @@ BPredUnit::update(const InstSeqNum &done_sn, ThreadID tid)
     while (!predHist[tid].empty() &&
            predHist[tid].back().seqNum <= done_sn) {
         // Update the branch predictor with the correct results.
-        update(predHist[tid].back().pc, predHist[tid].back().predTaken,
-               predHist[tid].back().bpHistory, false);
+        if (!predHist[tid].back().wasSquashed) {
+            update(predHist[tid].back().pc, predHist[tid].back().predTaken,
+                predHist[tid].back().bpHistory, false);
+        } else {
+            retireSquashed(predHist[tid].back().bpHistory);
+        }
 
         predHist[tid].pop_back();
     }
@@ -445,7 +450,7 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
     // fix up the entry.
     if (!pred_hist.empty()) {
 
-        HistoryIt hist_it = pred_hist.begin();
+        auto hist_it = pred_hist.begin();
         //HistoryIt hist_it = find(pred_hist.begin(), pred_hist.end(),
         //                       squashed_sn);
 
@@ -464,12 +469,15 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
 
         update((*hist_it).pc, actually_taken,
                pred_hist.front().bpHistory, true);
+        hist_it->wasSquashed = true;
+
         if (actually_taken) {
             if (hist_it->wasReturn && !hist_it->usedRAS) {
                  DPRINTF(Branch, "[tid: %i] Incorrectly predicted"
                          "  return [sn:%i] PC: %s\n", tid, hist_it->seqNum,
                          hist_it->pc);
                  RAS[tid].pop();
+                 hist_it->usedRAS = true;
             }
 
             DPRINTF(Branch,"[tid: %i] BTB Update called for [sn:%i]"
@@ -487,23 +495,16 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
                         " to: %i, target: %s.\n", tid,
                         hist_it->RASIndex, hist_it->RASTarget);
                 RAS[tid].restore(hist_it->RASIndex, hist_it->RASTarget);
-
+                hist_it->usedRAS = false;
            } else if (hist_it->wasCall && hist_it->pushedRAS) {
                  //Was a Call but predicated false. Pop RAS here
                  DPRINTF(Branch, "[tid: %i] Incorrectly predicted"
                          "  Call [sn:%i] PC: %s Popping RAS\n", tid,
                          hist_it->seqNum, hist_it->pc);
                  RAS[tid].pop();
+                 hist_it->pushedRAS = false;
            }
         }
-        DPRINTF(Branch, "[tid:%i]: Removing history for [sn:%i]"
-                " PC %s  Actually Taken: %i\n", tid, hist_it->seqNum,
-                hist_it->pc, actually_taken);
-
-        pred_hist.erase(hist_it);
-
-        DPRINTF(Branch, "[tid:%i]: predHist.size(): %i\n", tid,
-                                         predHist[tid].size());
     } else {
         DPRINTF(Branch, "[tid:%i]: [sn:%i] pred_hist empty, can't "
                 "update.\n", tid, squashed_sn);
@@ -513,15 +514,14 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
 void
 BPredUnit::dump()
 {
-    HistoryIt pred_hist_it;
+    int i = 0;
+    for (const auto& ph : predHist) {
+        if (!ph.empty()) {
+            auto pred_hist_it = ph.begin();
 
-    for (int i = 0; i < numThreads; ++i) {
-        if (!predHist[i].empty()) {
-            pred_hist_it = predHist[i].begin();
+            cprintf("predHist[%i].size(): %i\n", i++, ph.size());
 
-            cprintf("predHist[%i].size(): %i\n", i, predHist[i].size());
-
-            while (pred_hist_it != predHist[i].end()) {
+            while (pred_hist_it != ph.end()) {
                 cprintf("[sn:%lli], PC:%#x, tid:%i, predTaken:%i, "
                         "bpHistory:%#x\n",
                         pred_hist_it->seqNum, pred_hist_it->pc,
@@ -534,3 +534,5 @@ BPredUnit::dump()
         }
     }
 }
+
+#endif//__CPU_PRED_BPRED_UNIT_IMPL_HH__

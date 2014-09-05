@@ -13,6 +13,8 @@
  *
  * Copyright (c) 2002-2005 The Regents of The University of Michigan
  * Copyright (c) 2011 Regents of the University of California
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
+ * Copyright (c) 2013 Mark D. Hill and David A. Wood
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -115,7 +117,7 @@ CPUProgressEvent::description() const
 }
 
 BaseCPU::BaseCPU(Params *p, bool is_checker)
-    : MemObject(p), instCnt(0), _cpuId(p->cpu_id),
+    : MemObject(p), instCnt(0), _cpuId(p->cpu_id), _socketId(p->socket_id),
       _instMasterId(p->system->getMasterId(name() + ".inst")),
       _dataMasterId(p->system->getMasterId(name() + ".data")),
       _taskId(ContextSwitchTaskId::Unknown), _pid(Request::invldPid),
@@ -131,7 +133,8 @@ BaseCPU::BaseCPU(Params *p, bool is_checker)
     // add self to global list of CPUs
     cpuList.push_back(this);
 
-    DPRINTF(SyscallVerbose, "Constructing CPU with id %d\n", _cpuId);
+    DPRINTF(SyscallVerbose, "Constructing CPU with id %d, socket id %d\n",
+                _cpuId, _socketId);
 
     if (numThreads > maxThreadsPerCPU)
         maxThreadsPerCPU = numThreads;
@@ -429,6 +432,8 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
             old_dtb_port->unbind();
             new_dtb_port->bind(slavePort);
         }
+        newTC->getITBPtr()->takeOverFrom(oldTC->getITBPtr());
+        newTC->getDTBPtr()->takeOverFrom(oldTC->getDTBPtr());
 
         // Checker whether or not we have to transfer CheckerCPU
         // objects over in the switch
@@ -443,6 +448,9 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
                 newChecker->getITBPtr()->getMasterPort();
             BaseMasterPort *new_checker_dtb_port =
                 newChecker->getDTBPtr()->getMasterPort();
+
+            newChecker->getITBPtr()->takeOverFrom(oldChecker->getITBPtr());
+            newChecker->getDTBPtr()->takeOverFrom(oldChecker->getDTBPtr());
 
             // Move over any table walker ports if they exist for checker
             if (new_checker_itb_port) {
@@ -569,7 +577,7 @@ void
 BaseCPU::scheduleInstStop(ThreadID tid, Counter insts, const char *cause)
 {
     const Tick now(comInstEventQueue[tid]->getCurTick());
-    Event *event(new SimLoopExitEvent(cause, 0));
+    Event *event(new LocalSimLoopExitEvent(cause, 0));
 
     comInstEventQueue[tid]->schedule(event, now + insts);
 }
@@ -578,7 +586,7 @@ void
 BaseCPU::scheduleLoadStop(ThreadID tid, Counter loads, const char *cause)
 {
     const Tick now(comLoadEventQueue[tid]->getCurTick());
-    Event *event(new SimLoopExitEvent(cause, 0));
+    Event *event(new LocalSimLoopExitEvent(cause, 0));
 
     comLoadEventQueue[tid]->schedule(event, now + loads);
 }

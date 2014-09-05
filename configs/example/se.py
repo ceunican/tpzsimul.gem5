@@ -53,7 +53,6 @@ from m5.util import addToPath, fatal
 
 addToPath('../common')
 addToPath('../ruby')
-addToPath('../topologies')
 
 import Options
 import Ruby
@@ -135,12 +134,18 @@ if options.bench:
     for app in apps:
         try:
             if buildEnv['TARGET_ISA'] == 'alpha':
-                exec("workload = %s('alpha', 'tru64', 'ref')" % app)
+                exec("workload = %s('alpha', 'tru64', '%s')" % (
+                        app, options.spec_input))
+            elif buildEnv['TARGET_ISA'] == 'arm':
+                exec("workload = %s('arm_%s', 'linux', '%s')" % (
+                        app, options.arm_iset, options.spec_input))
             else:
-                exec("workload = %s(buildEnv['TARGET_ISA'], 'linux', 'ref')" % app)
+                exec("workload = %s(buildEnv['TARGET_ISA', 'linux', '%s')" % (
+                        app, options.spec_input))
             multiprocesses.append(workload.makeLiveProcess())
         except:
-            print >>sys.stderr, "Unable to find workload for %s: %s" % (buildEnv['TARGET_ISA'], app)
+            print >>sys.stderr, "Unable to find workload for %s: %s" % (
+                    buildEnv['TARGET_ISA'], app)
             sys.exit(1)
 elif options.cmd:
     multiprocesses, numThreads = get_processes(options)
@@ -151,8 +156,6 @@ else:
 
 (CPUClass, test_mem_mode, FutureClass) = Simulation.setCPUClass(options)
 CPUClass.numThreads = numThreads
-
-MemClass = Simulation.setMemClass(options)
 
 # Check -- do not allow SMT with multiple CPUs
 if options.smt and options.num_cpus > 1:
@@ -223,16 +226,19 @@ if options.ruby:
         print >> sys.stderr, "Ruby requires TimingSimpleCPU or O3CPU!!"
         sys.exit(1)
 
-    # Set the option for physmem so that it is not allocated any space
-    system.physmem = MemClass(range=AddrRange(options.mem_size),
+    # Use SimpleMemory with the null option since this memory is only used
+    # for determining which addresses are within the range of the memory.
+    # No space allocation is required.
+    system.physmem = SimpleMemory(range=AddrRange(options.mem_size),
                               null = True)
-
     options.use_map = True
     Ruby.create_system(options, system)
-    assert(options.num_cpus == len(system.ruby._cpu_ruby_ports))
+    assert(options.num_cpus == len(system.ruby._cpu_ports))
 
+    system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
+                                        voltage_domain = system.voltage_domain)
     for i in xrange(np):
-        ruby_port = system.ruby._cpu_ruby_ports[i]
+        ruby_port = system.ruby._cpu_ports[i]
 
         # Create the interrupt controller and connect its ports to Ruby
         # Note that the interrupt controller is always present but only
@@ -249,6 +255,7 @@ if options.ruby:
             system.cpu[i].itb.walker.port = ruby_port.slave
             system.cpu[i].dtb.walker.port = ruby_port.slave
 else:
+    MemClass = Simulation.setMemClass(options)
     system.membus = CoherentBus()
     system.system_port = system.membus.slave
     CacheConfig.config_cache(options, system)

@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2014 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -40,6 +41,9 @@
  * Authors: Kevin Lim
  *          Korey Sewell
  */
+
+#ifndef __CPU_O3_INST_QUEUE_IMPL_HH__
+#define __CPU_O3_INST_QUEUE_IMPL_HH__
 
 #include <limits>
 #include <vector>
@@ -87,16 +91,15 @@ InstructionQueue<Impl>::InstructionQueue(O3CPU *cpu_ptr, IEW *iew_ptr,
       fuPool(params->fuPool),
       numEntries(params->numIQEntries),
       totalWidth(params->issueWidth),
-      numPhysIntRegs(params->numPhysIntRegs),
-      numPhysFloatRegs(params->numPhysFloatRegs),
       commitToIEWDelay(params->commitToIEWDelay)
 {
     assert(fuPool);
 
     numThreads = params->numThreads;
 
-    // Set the number of physical registers as the number of int + float
-    numPhysRegs = numPhysIntRegs + numPhysFloatRegs;
+    // Set the number of total physical registers
+    numPhysRegs = params->numPhysIntRegs + params->numPhysFloatRegs +
+        params->numPhysCCRegs;
 
     //Create an entry for each physical register within the
     //dependency graph.
@@ -410,6 +413,8 @@ InstructionQueue<Impl>::resetState()
     nonSpecInsts.clear();
     listOrder.clear();
     deferredMemInsts.clear();
+    blockedMemInsts.clear();
+    retryMemInsts.clear();
 }
 
 template <class Impl>
@@ -731,13 +736,14 @@ InstructionQueue<Impl>::scheduleReadyInsts()
 
     IssueStruct *i2e_info = issueToExecuteQueue->access(0);
 
-    DynInstPtr deferred_mem_inst;
-    int total_deferred_mem_issued = 0;
-    while (total_deferred_mem_issued < totalWidth &&
-           (deferred_mem_inst = getDeferredMemInstToExecute()) != 0) {
-        issueToExecuteQueue->access(0)->size++;
-        instsToExecute.push_back(deferred_mem_inst);
-        total_deferred_mem_issued++;
+    DynInstPtr mem_inst;
+    while (mem_inst = getDeferredMemInstToExecute()) {
+        addReadyMemInst(mem_inst);
+    }
+
+    // See if any cache blocked instructions are able to be executed
+    while (mem_inst = getBlockedMemInstToExecute()) {
+        addReadyMemInst(mem_inst);
     }
 
     // Have iterator to head of the list
@@ -748,13 +754,11 @@ InstructionQueue<Impl>::scheduleReadyInsts()
     // Increment the iterator.
     // This will avoid trying to schedule a certain op class if there are no
     // FUs that handle it.
+    int total_issued = 0;
     ListOrderIt order_it = listOrder.begin();
     ListOrderIt order_end_it = listOrder.end();
-    int total_issued = 0;
 
-    while (total_issued < (totalWidth - total_deferred_mem_issued) &&
-           iewStage->canIssue() &&
-           order_it != order_end_it) {
+    while (total_issued < totalWidth && order_it != order_end_it) {
         OpClass op_class = (*order_it).queueType;
 
         assert(!readyInsts[op_class].empty());
@@ -858,7 +862,6 @@ InstructionQueue<Impl>::scheduleReadyInsts()
 
             listOrder.erase(order_it++);
             statIssuedInstType[tid][op_class]++;
-            iewStage->incrWb(issuing_inst->seqNum);
         } else {
             statFuBusy[op_class]++;
             fuBusy[tid]++;
@@ -873,7 +876,7 @@ InstructionQueue<Impl>::scheduleReadyInsts()
     // @todo If the way deferred memory instructions are handeled due to
     // translation changes then the deferredMemInsts condition should be removed
     // from the code below.
-    if (total_issued || total_deferred_mem_issued || deferredMemInsts.size()) {
+    if (total_issued || !retryMemInsts.empty() || !deferredMemInsts.empty()) {
         cpu->activityThisCycle();
     } else {
         DPRINTF(IQ, "Not able to schedule any instructions.\n");
@@ -1049,7 +1052,7 @@ template <class Impl>
 void
 InstructionQueue<Impl>::replayMemInst(DynInstPtr &replay_inst)
 {
-    memDepUnit[replay_inst->threadNumber].replay(replay_inst);
+    memDepUnit[replay_inst->threadNumber].replay();
 }
 
 template <class Impl>
@@ -1077,18 +1080,52 @@ InstructionQueue<Impl>::deferMemInst(DynInstPtr &deferred_inst)
 }
 
 template <class Impl>
+void
+InstructionQueue<Impl>::blockMemInst(DynInstPtr &blocked_inst)
+{
+    blocked_inst->translationStarted(false);
+    blocked_inst->translationCompleted(false);
+
+    blocked_inst->clearIssued();
+    blocked_inst->clearCanIssue();
+    blockedMemInsts.push_back(blocked_inst);
+}
+
+template <class Impl>
+void
+InstructionQueue<Impl>::cacheUnblocked()
+{
+    retryMemInsts.splice(retryMemInsts.end(), blockedMemInsts);
+    // Get the CPU ticking again
+    cpu->wakeCPU();
+}
+
+template <class Impl>
 typename Impl::DynInstPtr
 InstructionQueue<Impl>::getDeferredMemInstToExecute()
 {
     for (ListIt it = deferredMemInsts.begin(); it != deferredMemInsts.end();
          ++it) {
         if ((*it)->translationCompleted() || (*it)->isSquashed()) {
-            DynInstPtr ret = *it;
+            DynInstPtr mem_inst = *it;
             deferredMemInsts.erase(it);
-            return ret;
+            return mem_inst;
         }
     }
-    return NULL;
+    return nullptr;
+}
+
+template <class Impl>
+typename Impl::DynInstPtr
+InstructionQueue<Impl>::getBlockedMemInstToExecute()
+{
+    if (retryMemInsts.empty()) {
+        return nullptr;
+    } else {
+        DynInstPtr mem_inst = retryMemInsts.front();
+        retryMemInsts.pop_front();
+        return mem_inst;
+    }
 }
 
 template <class Impl>
@@ -1154,11 +1191,17 @@ InstructionQueue<Impl>::doSquash(ThreadID tid)
             DPRINTF(IQ, "[tid:%i]: Instruction [sn:%lli] PC %s squashed.\n",
                     tid, squashed_inst->seqNum, squashed_inst->pcState());
 
+            bool is_acq_rel = squashed_inst->isMemBarrier() &&
+                         (squashed_inst->isLoad() ||
+                           (squashed_inst->isStore() &&
+                             !squashed_inst->isStoreConditional()));
+
             // Remove the instruction from the dependency list.
-            if (!squashed_inst->isNonSpeculative() &&
-                !squashed_inst->isStoreConditional() &&
-                !squashed_inst->isMemBarrier() &&
-                !squashed_inst->isWriteBarrier()) {
+            if (is_acq_rel ||
+                (!squashed_inst->isNonSpeculative() &&
+                 !squashed_inst->isStoreConditional() &&
+                 !squashed_inst->isMemBarrier() &&
+                 !squashed_inst->isWriteBarrier())) {
 
                 for (int src_reg_idx = 0;
                      src_reg_idx < squashed_inst->numSrcRegs();
@@ -1189,8 +1232,15 @@ InstructionQueue<Impl>::doSquash(ThreadID tid)
                 NonSpecMapIt ns_inst_it =
                     nonSpecInsts.find(squashed_inst->seqNum);
 
+                // we remove non-speculative instructions from
+                // nonSpecInsts already when they are ready, and so we
+                // cannot always expect to find them
                 if (ns_inst_it == nonSpecInsts.end()) {
-                    assert(squashed_inst->getFault() != NoFault);
+                    // loads that became ready but stalled on a
+                    // blocked cache are alreayd removed from
+                    // nonSpecInsts, and have not faulted
+                    assert(squashed_inst->getFault() != NoFault ||
+                           squashed_inst->isMemRef());
                 } else {
 
                     (*ns_inst_it).second = NULL;
@@ -1246,7 +1296,7 @@ InstructionQueue<Impl>::addToDependents(DynInstPtr &new_inst)
             // it be added to the dependency graph.
             if (src_reg >= numPhysRegs) {
                 continue;
-            } else if (regScoreboard[src_reg] == false) {
+            } else if (!regScoreboard[src_reg]) {
                 DPRINTF(IQ, "Instruction PC %s has src reg %i that "
                         "is being added to the dependency chain.\n",
                         new_inst->pcState(), src_reg);
@@ -1508,3 +1558,5 @@ InstructionQueue<Impl>::dumpInsts()
         ++num;
     }
 }
+
+#endif//__CPU_O3_INST_QUEUE_IMPL_HH__

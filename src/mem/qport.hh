@@ -78,8 +78,8 @@ class QueuedSlavePort : public SlavePort
      * QueuePort constructor.
      */
     QueuedSlavePort(const std::string& name, MemObject* owner,
-                    SlavePacketQueue &queue) :
-        SlavePort(name, owner), queue(queue)
+                    SlavePacketQueue &queue, PortID id = InvalidPortID) :
+        SlavePort(name, owner, id), queue(queue)
     { }
 
     virtual ~QueuedSlavePort() { }
@@ -122,8 +122,8 @@ class QueuedMasterPort : public MasterPort
      * QueuePort constructor.
      */
     QueuedMasterPort(const std::string& name, MemObject* owner,
-                     MasterPacketQueue &queue) :
-        MasterPort(name, owner), queue(queue)
+                     MasterPacketQueue &queue, PortID id = InvalidPortID) :
+        MasterPort(name, owner, id), queue(queue)
     { }
 
     virtual ~QueuedMasterPort() { }

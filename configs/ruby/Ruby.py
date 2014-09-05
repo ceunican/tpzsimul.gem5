@@ -39,10 +39,13 @@
 #
 # Authors: Brad Beckmann
 
-import math
+import math, time, os
 import m5
 from m5.objects import *
 from m5.defines import buildEnv
+from m5.util import addToPath, fatal
+
+addToPath('../topologies')
 
 def define_options(parser):
     # By default, ruby uses the simple timing cpu
@@ -82,6 +85,9 @@ def define_options(parser):
     parser.add_option("--random_seed", type="int", default=1234,
                       help="Used for seeding the random number generator")
 
+    parser.add_option("--randomization", type="string", default="True",
+                      help="Enables ruby randomization")
+
     parser.add_option("--ruby_stats", type="string", default="ruby.stats")
 
     #TOPAZ options
@@ -119,15 +125,45 @@ def create_topology(controllers, options):
 
 def create_system(options, system, piobus = None, dma_ports = []):
 
-    system.ruby = RubySystem(stats_filename = options.ruby_stats,
-                             no_mem_vec = options.use_map)
+    system.ruby = RubySystem(no_mem_vec = options.use_map)
     ruby = system.ruby
+
+    # Set the network classes based on the command line options
+    if options.garnet_network == "fixed":
+        NetworkClass = GarnetNetwork_d
+        IntLinkClass = GarnetIntLink_d
+        ExtLinkClass = GarnetExtLink_d
+        RouterClass = GarnetRouter_d
+        InterfaceClass = GarnetNetworkInterface_d
+
+    elif options.garnet_network == "flexible":
+        class NetworkClass(GarnetNetwork): pass
+        class IntLinkClass(GarnetIntLink): pass
+        class ExtLinkClass(GarnetExtLink): pass
+        class RouterClass(GarnetRouter): pass
+    elif options.topaz_network:
+        NetworkClass = TopazNetwork
+        IntLinkClass = SimpleIntLink
+        ExtLinkClass = SimpleExtLink
+        RouterClass = TopazSwitch
+        InterfaceClass = None
+    else:
+        NetworkClass = SimpleNetwork
+        IntLinkClass = SimpleIntLink
+        ExtLinkClass = SimpleExtLink
+        RouterClass = Switch
+        InterfaceClass = None
+
+    # Create the network topology
+    network = NetworkClass(ruby_system = ruby, topology = options.topology,
+            routers = [], ext_links = [], int_links = [], netifs = [])
+    ruby.network = network
 
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
     try:
         (cpu_sequencers, dir_cntrls, topology) = \
-             eval("%s.create_system(options, system, piobus, dma_ports, ruby)"
+          eval("%s.create_system(options, system, dma_ports, ruby)"
                   % protocol)
     except:
         print "Error: could not create sytem for ruby protocol %s" % protocol
@@ -144,37 +180,13 @@ def create_system(options, system, piobus = None, dma_ports = []):
     # Connect the system port for loading of binaries etc
     system.system_port = system.sys_port_proxy.slave
 
-
-    #
-    # Set the network classes based on the command line options
-    #
-    if options.garnet_network == "fixed":
-        class NetworkClass(GarnetNetwork_d): pass
-        class IntLinkClass(GarnetIntLink_d): pass
-        class ExtLinkClass(GarnetExtLink_d): pass
-        class RouterClass(GarnetRouter_d): pass
-    elif options.garnet_network == "flexible":
-        class NetworkClass(GarnetNetwork): pass
-        class IntLinkClass(GarnetIntLink): pass
-        class ExtLinkClass(GarnetExtLink): pass
-        class RouterClass(GarnetRouter): pass
-    elif options.topaz_network:
-        class NetworkClass(TopazNetwork): pass
-        class IntLinkClass(SimpleIntLink): pass
-        class ExtLinkClass(SimpleExtLink): pass
-        class RouterClass(TopazSwitch): pass
-    else:
-        class NetworkClass(SimpleNetwork): pass
-        class IntLinkClass(SimpleIntLink): pass
-        class ExtLinkClass(SimpleExtLink): pass
-        class RouterClass(Switch): pass
-
-
     # Create the network topology
-    network = NetworkClass(ruby_system = ruby, topology = topology.description,
-                           routers = [], ext_links = [], int_links = [])
     topology.makeTopology(options, network, IntLinkClass, ExtLinkClass,
-                          RouterClass)
+            RouterClass)
+
+    if InterfaceClass != None:
+        netifs = [InterfaceClass(id=i) for (i,n) in enumerate(network.ext_links)]
+        network.netifs = netifs
 
     if options.network_fault_model:
         assert(options.garnet_network == "fixed")
@@ -203,7 +215,6 @@ def create_system(options, system, piobus = None, dma_ports = []):
     #
     total_mem_size = MemorySize('0B')
 
-    dir_bits = int(math.log(options.num_dirs, 2))
     ruby.block_size_bytes = options.cacheline_size
     block_size_bits = int(math.log(options.cacheline_size, 2))
 
@@ -213,6 +224,7 @@ def create_system(options, system, piobus = None, dma_ports = []):
         # if the numa_bit is not specified, set the directory bits as the
         # lowest bits above the block offset bits, and the numa_bit as the
         # highest of those directory bits
+        dir_bits = int(math.log(options.num_dirs, 2))
         numa_bit = block_size_bits + dir_bits - 1
 
     for dir_cntrl in dir_cntrls:
@@ -221,11 +233,27 @@ def create_system(options, system, piobus = None, dma_ports = []):
 
     phys_mem_size = sum(map(lambda r: r.size(), system.mem_ranges))
     assert(total_mem_size.value == phys_mem_size)
-
-    ruby_profiler = RubyProfiler(ruby_system = ruby,
-                                 num_of_sequencers = len(cpu_sequencers))
-    ruby.network = network
-    ruby.profiler = ruby_profiler
     ruby.mem_size = total_mem_size
-    ruby._cpu_ruby_ports = cpu_sequencers
+
+    # Connect the cpu sequencers and the piobus
+    if piobus != None:
+        for cpu_seq in cpu_sequencers:
+            cpu_seq.pio_master_port = piobus.slave
+            cpu_seq.mem_master_port = piobus.slave
+
+            if buildEnv['TARGET_ISA'] == "x86":
+                cpu_seq.pio_slave_port = piobus.master
+
+    ruby._cpu_ports = cpu_sequencers
+    ruby.num_of_sequencers = len(cpu_sequencers)
     ruby.random_seed    = options.random_seed
+
+    if options.random_seed == 1234:
+      if os.environ.has_key('SGE_TASK_ID'):
+        ruby.random_seed = time.gmtime().tm_hour*3600+time.gmtime().tm_min*60+time.gmtime().tm_sec + os.getpid() + int(os.environ['SGE_TASK_ID'])
+      else:
+        ruby.random_seed = time.gmtime().tm_hour*3600+time.gmtime().tm_min*60+time.gmtime().tm_sec + os.getpid()
+    else:
+      ruby.random_seed = options.random_seed
+    ruby.randomization = options.randomization
+

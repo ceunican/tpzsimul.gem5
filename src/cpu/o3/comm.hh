@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -144,13 +145,15 @@ struct TimeBufStruct {
     struct iewComm {
         // Also eventually include skid buffer space.
         unsigned freeIQEntries;
-        unsigned freeLSQEntries;
+        unsigned freeLQEntries;
+        unsigned freeSQEntries;
+        unsigned dispatchedToLQ;
+        unsigned dispatchedToSQ;
 
         unsigned iqCount;
         unsigned ldstqCount;
 
         unsigned dispatched;
-        unsigned dispatchedToLSQ;
         bool usedIQ;
         bool usedLSQ;
     };
@@ -226,8 +229,6 @@ struct TimeBufStruct {
     bool renameUnblock[Impl::MaxThreads];
     bool iewBlock[Impl::MaxThreads];
     bool iewUnblock[Impl::MaxThreads];
-    bool commitBlock[Impl::MaxThreads];
-    bool commitUnblock[Impl::MaxThreads];
 };
 
 #endif //__CPU_O3_COMM_HH__

@@ -37,7 +37,6 @@
 #include "debug/RubySystem.hh"
 #include "mem/ruby/common/Address.hh"
 #include "mem/ruby/network/Network.hh"
-#include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/system/System.hh"
 #include "sim/eventq.hh"
 #include "sim/simulate.hh"
@@ -73,15 +72,11 @@ RubySystem::RubySystem(const Params *p)
     }
 
     if (p->no_mem_vec) {
-        m_mem_vec_ptr = NULL;
+        m_mem_vec = NULL;
     } else {
-        m_mem_vec_ptr = new MemoryVector;
-        m_mem_vec_ptr->resize(m_memory_size_bytes);
+        m_mem_vec = new MemoryVector;
+        m_mem_vec->resize(m_memory_size_bytes);
     }
-
-    // Print ruby configuration and stats at exit and when asked for
-    Stats::registerDumpCallback(new RubyDumpStatsCallback(p->stats_filename,
-                                                          this));
 
     m_warmup_enabled = false;
     m_cooldown_enabled = false;
@@ -91,18 +86,17 @@ RubySystem::RubySystem(const Params *p)
 
     // Resize to the size of different machine types
     g_abs_controls.resize(MachineType_NUM);
+
+    // Collate the statistics before they are printed.
+    Stats::registerDumpCallback(new RubyStatsCallback(this));
+    // Create the profiler
+    m_profiler = new Profiler(p);
 }
 
 void
 RubySystem::registerNetwork(Network* network_ptr)
 {
-  m_network_ptr = network_ptr;
-}
-
-void
-RubySystem::registerProfiler(Profiler* profiler_ptr)
-{
-  m_profiler_ptr = profiler_ptr;
+  m_network = network_ptr;
 }
 
 void
@@ -127,22 +121,10 @@ RubySystem::registerMemController(MemoryControl *mc) {
 
 RubySystem::~RubySystem()
 {
-    delete m_network_ptr;
-    delete m_profiler_ptr;
-    if (m_mem_vec_ptr)
-        delete m_mem_vec_ptr;
-}
-
-void
-RubySystem::printStats(ostream& out)
-{
-    const time_t T = time(NULL);
-    tm *localTime = localtime(&T);
-    char buf[100];
-    strftime(buf, 100, "%b/%d/%Y %H:%M:%S", localTime);
-    out << "Real time: " << buf << endl;
-
-    m_profiler_ptr->printStats(out);
+    delete m_network;
+    delete m_profiler;
+    if (m_mem_vec)
+        delete m_mem_vec;
 }
 
 void
@@ -200,9 +182,16 @@ RubySystem::serialize(std::ostream &os)
         }
     }
 
+    // Store the cache-block size, so we are able to restore on systems with a
+    // different cache-block size. CacheRecorder depends on the correct
+    // cache-block size upon unserializing.
+    uint64 block_size_bytes = getBlockSizeBytes();
+    SERIALIZE_SCALAR(block_size_bytes);
+
     DPRINTF(RubyCacheTrace, "Recording Cache Trace\n");
     // Create the CacheRecorder and record the cache trace
-    m_cache_recorder = new CacheRecorder(NULL, 0, sequencer_map);
+    m_cache_recorder = new CacheRecorder(NULL, 0, sequencer_map,
+                                         block_size_bytes);
 
     for (int cntrl = 0; cntrl < m_abs_cntrl_vec.size(); cntrl++) {
         m_abs_cntrl_vec[cntrl]->recordCacheTrace(cntrl, m_cache_recorder);
@@ -229,8 +218,8 @@ RubySystem::serialize(std::ostream &os)
 
     uint8_t *raw_data = NULL;
 
-    if (m_mem_vec_ptr != NULL) {
-        uint64 memory_trace_size = m_mem_vec_ptr->collatePages(raw_data);
+    if (m_mem_vec != NULL) {
+        uint64 memory_trace_size = m_mem_vec->collatePages(raw_data);
 
         string memory_trace_file = name() + ".memory.gz";
         writeCompressedTrace(raw_data, memory_trace_file,
@@ -295,7 +284,13 @@ RubySystem::unserialize(Checkpoint *cp, const string &section)
 {
     uint8_t *uncompressed_trace = NULL;
 
-    if (m_mem_vec_ptr != NULL) {
+    // This value should be set to the checkpoint-system's block-size.
+    // Optional, as checkpoints without it can be run if the
+    // checkpoint-system's block-size == current block-size.
+    uint64 block_size_bytes = getBlockSizeBytes();
+    UNSERIALIZE_OPT_SCALAR(block_size_bytes);
+
+    if (m_mem_vec != NULL) {
         string memory_trace_file;
         uint64 memory_trace_size = 0;
 
@@ -305,7 +300,7 @@ RubySystem::unserialize(Checkpoint *cp, const string &section)
 
         readCompressedTrace(memory_trace_file, uncompressed_trace,
                             memory_trace_size);
-        m_mem_vec_ptr->populatePages(uncompressed_trace);
+        m_mem_vec->populatePages(uncompressed_trace);
 
         delete [] uncompressed_trace;
         uncompressed_trace = NULL;
@@ -338,7 +333,7 @@ RubySystem::unserialize(Checkpoint *cp, const string &section)
     }
 
     m_cache_recorder = new CacheRecorder(uncompressed_trace, cache_trace_size,
-                                         sequencer_map);
+                                         sequencer_map, block_size_bytes);
 }
 
 void
@@ -407,11 +402,6 @@ RubySystem::RubyEvent::process()
 void
 RubySystem::resetStats()
 {
-    m_profiler_ptr->clearStats();
-    for (uint32_t cntrl = 0; cntrl < m_abs_cntrl_vec.size(); cntrl++) {
-        m_abs_cntrl_vec[cntrl]->clearStats();
-    }
-
     g_ruby_start = curCycle();
 }
 
@@ -558,7 +548,7 @@ RubySystem::functionalWrite(PacketPtr pkt)
             m_memory_controller_vec[i]->functionalWriteBuffers(pkt);
     }
 
-    num_functional_writes += m_network_ptr->functionalWrite(pkt);
+    num_functional_writes += m_network->functionalWrite(pkt);
     DPRINTF(RubySystem, "Messages written = %u\n", num_functional_writes);
 
     return true;
@@ -620,14 +610,4 @@ RubySystem *
 RubySystemParams::create()
 {
     return new RubySystem(this);
-}
-
-/**
- * virtual process function that is invoked when the callback
- * queue is executed.
- */
-void
-RubyDumpStatsCallback::process()
-{
-    ruby_system->printStats(*os);
 }

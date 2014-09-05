@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -49,6 +50,7 @@
 #include "config/the_isa.hh"
 #include "cpu/base.hh"
 #include "cpu/checker/cpu.hh"
+#include "cpu/exec_context.hh"
 #include "cpu/pc_event.hh"
 #include "cpu/simple_thread.hh"
 #include "cpu/static_inst.hh"
@@ -76,14 +78,17 @@ namespace Trace {
 }
 
 struct BaseSimpleCPUParams;
+class BPredUnit;
 
-
-class BaseSimpleCPU : public BaseCPU
+class BaseSimpleCPU : public BaseCPU, public ExecContext
 {
   protected:
     typedef TheISA::MiscReg MiscReg;
     typedef TheISA::FloatReg FloatReg;
     typedef TheISA::FloatRegBits FloatRegBits;
+    typedef TheISA::CCReg CCReg;
+
+    BPredUnit *branchPred;
 
   protected:
     Trace::InstRecord *traceData;
@@ -231,6 +236,10 @@ class BaseSimpleCPU : public BaseCPU
     Stats::Scalar numFpRegReads;
     Stats::Scalar numFpRegWrites;
 
+    //number of condition code register file accesses
+    Stats::Scalar numCCRegReads;
+    Stats::Scalar numCCRegWrites;
+
     // number of simulated memory references
     Stats::Scalar numMemRefs;
     Stats::Scalar numLoadInsts;
@@ -266,6 +275,18 @@ class BaseSimpleCPU : public BaseCPU
     Stats::Scalar dcacheRetryCycles;
     Counter lastDcacheRetry;
 
+    /// @{
+    /// Total number of branches fetched
+    Stats::Scalar numBranches;
+    /// Number of branches predicted as taken
+    Stats::Scalar numPredictedBranches;
+    /// Number of misprediced branches
+    Stats::Scalar numBranchMispred;
+    /// @}
+
+    // instruction mix histogram by OpClass
+    Stats::Vector statExecutedInstType;
+
     void serializeThread(std::ostream &os, ThreadID tid);
     void unserializeThread(Checkpoint *cp, const std::string &section,
                            ThreadID tid);
@@ -273,8 +294,7 @@ class BaseSimpleCPU : public BaseCPU
     // These functions are only used in CPU models that split
     // effective address computation from the actual memory access.
     void setEA(Addr EA) { panic("BaseSimpleCPU::setEA() not implemented\n"); }
-    Addr getEA()        { panic("BaseSimpleCPU::getEA() not implemented\n");
-        M5_DUMMY_RETURN}
+    Addr getEA() const  { panic("BaseSimpleCPU::getEA() not implemented\n"); }
 
     // The register accessor methods provide the index of the
     // instruction's operand (e.g., 0 or 1), not the architectural
@@ -287,7 +307,7 @@ class BaseSimpleCPU : public BaseCPU
     // storage (which is pretty hard to imagine they would have reason
     // to do).
 
-    uint64_t readIntRegOperand(const StaticInst *si, int idx)
+    IntReg readIntRegOperand(const StaticInst *si, int idx)
     {
         numIntRegReads++;
         return thread->readIntReg(si->srcRegIdx(idx));
@@ -296,18 +316,25 @@ class BaseSimpleCPU : public BaseCPU
     FloatReg readFloatRegOperand(const StaticInst *si, int idx)
     {
         numFpRegReads++;
-        int reg_idx = si->srcRegIdx(idx) - TheISA::FP_Base_DepTag;
+        int reg_idx = si->srcRegIdx(idx) - TheISA::FP_Reg_Base;
         return thread->readFloatReg(reg_idx);
     }
 
     FloatRegBits readFloatRegOperandBits(const StaticInst *si, int idx)
     {
         numFpRegReads++;
-        int reg_idx = si->srcRegIdx(idx) - TheISA::FP_Base_DepTag;
+        int reg_idx = si->srcRegIdx(idx) - TheISA::FP_Reg_Base;
         return thread->readFloatRegBits(reg_idx);
     }
 
-    void setIntRegOperand(const StaticInst *si, int idx, uint64_t val)
+    CCReg readCCRegOperand(const StaticInst *si, int idx)
+    {
+        numCCRegReads++;
+        int reg_idx = si->srcRegIdx(idx) - TheISA::CC_Reg_Base;
+        return thread->readCCReg(reg_idx);
+    }
+
+    void setIntRegOperand(const StaticInst *si, int idx, IntReg val)
     {
         numIntRegWrites++;
         thread->setIntReg(si->destRegIdx(idx), val);
@@ -316,7 +343,7 @@ class BaseSimpleCPU : public BaseCPU
     void setFloatRegOperand(const StaticInst *si, int idx, FloatReg val)
     {
         numFpRegWrites++;
-        int reg_idx = si->destRegIdx(idx) - TheISA::FP_Base_DepTag;
+        int reg_idx = si->destRegIdx(idx) - TheISA::FP_Reg_Base;
         thread->setFloatReg(reg_idx, val);
     }
 
@@ -324,8 +351,15 @@ class BaseSimpleCPU : public BaseCPU
                                 FloatRegBits val)
     {
         numFpRegWrites++;
-        int reg_idx = si->destRegIdx(idx) - TheISA::FP_Base_DepTag;
+        int reg_idx = si->destRegIdx(idx) - TheISA::FP_Reg_Base;
         thread->setFloatRegBits(reg_idx, val);
+    }
+
+    void setCCRegOperand(const StaticInst *si, int idx, CCReg val)
+    {
+        numCCRegWrites++;
+        int reg_idx = si->destRegIdx(idx) - TheISA::CC_Reg_Base;
+        thread->setCCReg(reg_idx, val);
     }
 
     bool readPredicate() { return thread->readPredicate(); }
@@ -336,7 +370,7 @@ class BaseSimpleCPU : public BaseCPU
             traceData->setPredicate(val);
         }
     }
-    TheISA::PCState pcState() { return thread->pcState(); }
+    TheISA::PCState pcState() const { return thread->pcState(); }
     void pcState(const TheISA::PCState &val) { thread->pcState(val); }
     Addr instAddr() { return thread->instAddr(); }
     Addr nextInstAddr() { return thread->nextInstAddr(); }
@@ -362,7 +396,7 @@ class BaseSimpleCPU : public BaseCPU
     MiscReg readMiscRegOperand(const StaticInst *si, int idx)
     {
         numIntRegReads++;
-        int reg_idx = si->srcRegIdx(idx) - TheISA::Ctrl_Base_DepTag;
+        int reg_idx = si->srcRegIdx(idx) - TheISA::Misc_Reg_Base;
         return thread->readMiscReg(reg_idx);
     }
 
@@ -370,7 +404,7 @@ class BaseSimpleCPU : public BaseCPU
             const StaticInst *si, int idx, const MiscReg &val)
     {
         numIntRegWrites++;
-        int reg_idx = si->destRegIdx(idx) - TheISA::Ctrl_Base_DepTag;
+        int reg_idx = si->destRegIdx(idx) - TheISA::Misc_Reg_Base;
         return thread->setMiscReg(reg_idx, val);
     }
 
@@ -389,26 +423,26 @@ class BaseSimpleCPU : public BaseCPU
         thread->demapDataPage(vaddr, asn);
     }
 
-    unsigned readStCondFailures() {
+    unsigned int readStCondFailures() const {
         return thread->readStCondFailures();
     }
 
-    void setStCondFailures(unsigned sc_failures) {
+    void setStCondFailures(unsigned int sc_failures) {
         thread->setStCondFailures(sc_failures);
     }
 
-     MiscReg readRegOtherThread(int regIdx, ThreadID tid = InvalidThreadID)
-     {
+    MiscReg readRegOtherThread(int regIdx, ThreadID tid = InvalidThreadID)
+    {
         panic("Simple CPU models do not support multithreaded "
               "register access.\n");
-     }
+    }
 
-     void setRegOtherThread(int regIdx, const MiscReg &val,
-                            ThreadID tid = InvalidThreadID)
-     {
+    void setRegOtherThread(int regIdx, MiscReg val,
+                           ThreadID tid = InvalidThreadID)
+    {
         panic("Simple CPU models do not support multithreaded "
               "register access.\n");
-     }
+    }
 
     //Fault CacheOp(uint8_t Op, Addr EA);
 
@@ -426,6 +460,9 @@ class BaseSimpleCPU : public BaseCPU
 
     bool misspeculating() { return thread->misspeculating(); }
     ThreadContext *tcBase() { return tc; }
+
+  private:
+    TheISA::PCState pred_pc;
 };
 
 #endif // __CPU_SIMPLE_BASE_HH__

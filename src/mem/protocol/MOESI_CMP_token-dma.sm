@@ -28,13 +28,16 @@
 
 
 machine(DMA, "DMA Controller")
-: DMASequencer * dma_sequencer,
-  Cycles request_latency = 6
+    : DMASequencer * dma_sequencer;
+      Cycles request_latency := 6;
+
+      // Messsage Queues
+      MessageBuffer * responseFromDir, network="From", virtual_network="5",
+            ordered="true", vnet_type="response";
+      MessageBuffer * reqToDirectory, network="To", virtual_network="0",
+            ordered="false", vnet_type="request";
+
 {
-
-  MessageBuffer responseFromDir, network="From", virtual_network="5", ordered="true", vnet_type="response", no_vector="true";
-  MessageBuffer reqToDirectory, network="To", virtual_network="0", ordered="false", vnet_type="request", no_vector="true";
-
   state_declaration(State, desc="DMA states", default="DMA_State_READY") {
     READY, AccessPermission:Invalid, desc="Ready to accept a new request";
     BUSY_RD, AccessPermission:Busy, desc="Busy: currently processing a request";
@@ -53,8 +56,8 @@ machine(DMA, "DMA Controller")
     void dataCallback(DataBlock);
   }
 
-  MessageBuffer mandatoryQueue, ordered="false", no_vector="true";
-  State cur_state, no_vector="true";
+  MessageBuffer mandatoryQueue, ordered="false";
+  State cur_state;
 
   State getState(Address addr) {
     return cur_state;
@@ -106,7 +109,7 @@ machine(DMA, "DMA Controller")
 
   action(s_sendReadRequest, "s", desc="Send a DMA read request to memory") {
     peek(dmaRequestQueue_in, SequencerMsg) {
-      enqueue(reqToDirectory_out, DMARequestMsg, latency=request_latency) {
+      enqueue(reqToDirectory_out, DMARequestMsg, request_latency) {
         out_msg.PhysicalAddress := in_msg.PhysicalAddress;
         out_msg.LineAddress := in_msg.LineAddress;
         out_msg.Type := DMARequestType:READ;
@@ -121,7 +124,7 @@ machine(DMA, "DMA Controller")
 
   action(s_sendWriteRequest, "\s", desc="Send a DMA write request to memory") {
     peek(dmaRequestQueue_in, SequencerMsg) {
-      enqueue(reqToDirectory_out, DMARequestMsg, latency=request_latency) {
+      enqueue(reqToDirectory_out, DMARequestMsg, request_latency) {
           out_msg.PhysicalAddress := in_msg.PhysicalAddress;
           out_msg.LineAddress := in_msg.LineAddress;
           out_msg.Type := DMARequestType:WRITE;

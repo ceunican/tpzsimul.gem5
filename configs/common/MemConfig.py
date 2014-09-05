@@ -54,6 +54,7 @@ _mem_aliases_all = [
     ("lpddr2_s4_1066_x32", "LPDDR2_S4_1066_x32"),
     ("lpddr3_1600_x32", "LPDDR3_1600_x32"),
     ("wio_200_x128", "WideIO_200_x128"),
+    ("dramsim2", "DRAMSim2")
     ]
 
 # Filtered list of aliases. Only aliases for existing memory
@@ -159,7 +160,7 @@ def config_mem(options, system):
             ctrl = cls()
 
             # Only do this for DRAMs
-            if issubclass(cls, m5.objects.SimpleDRAM):
+            if issubclass(cls, m5.objects.DRAMCtrl):
                 # Inform each controller how many channels to account
                 # for
                 ctrl.channels = nbr_mem_ctrls
@@ -167,7 +168,7 @@ def config_mem(options, system):
                 # If the channel bits are appearing after the column
                 # bits, we need to add the appropriate number of bits
                 # for the row buffer size
-                if ctrl.addr_mapping.value == 'RaBaChCo':
+                if ctrl.addr_mapping.value == 'RoRaBaChCo':
                     # This computation only really needs to happen
                     # once, but as we rely on having an instance we
                     # end up having to repeat it for each and every
@@ -189,5 +190,5 @@ def config_mem(options, system):
     system.mem_ctrls = mem_ctrls
 
     # Connect the controllers to the membus
-    for i in xrange(nbr_mem_ctrls):
+    for i in xrange(len(system.mem_ctrls)):
         system.mem_ctrls[i].port = system.membus.master

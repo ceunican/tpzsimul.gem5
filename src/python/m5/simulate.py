@@ -118,6 +118,12 @@ def instantiate(ckpt_dir=None):
     # Do a third pass to initialize statistics
     for obj in root.descendants(): obj.regStats()
 
+    # Do a fourth pass to initialize probe points
+    for obj in root.descendants(): obj.regProbePoints()
+
+    # Do a fifth pass to connect probe listeners
+    for obj in root.descendants(): obj.regProbeListeners()
+
     # We're done registering statistics.  Enable the stats package now.
     stats.enable()
 
@@ -134,9 +140,6 @@ def instantiate(ckpt_dir=None):
     # a checkpoint, If so, this call will shift them to be at a valid time.
     updateStatEvents()
 
-    # Reset to put the stats in a consistent state.
-    stats.reset()
-
 need_resume = []
 need_startup = True
 def simulate(*args, **kwargs):
@@ -147,6 +150,16 @@ def simulate(*args, **kwargs):
         for obj in root.descendants(): obj.startup()
         need_startup = False
 
+        # Python exit handlers happen in reverse order.
+        # We want to dump stats last.
+        atexit.register(stats.dump)
+
+        # register our C++ exit callback function with Python
+        atexit.register(internal.core.doExitCleanup)
+
+        # Reset to put the stats in a consistent state.
+        stats.reset()
+
     for root in need_resume:
         resume(root)
     need_resume = []
@@ -156,12 +169,6 @@ def simulate(*args, **kwargs):
 # Export curTick to user script.
 def curTick():
     return internal.core.curTick()
-
-# Python exit handlers happen in reverse order.  We want to dump stats last.
-atexit.register(stats.dump)
-
-# register our C++ exit callback function with Python
-atexit.register(internal.core.doExitCleanup)
 
 # Drain the system in preparation of a checkpoint or memory mode
 # switch.
@@ -218,7 +225,7 @@ def _changeMemoryMode(system, mode):
     else:
         print "System already in target mode. Memory mode unchanged."
 
-def switchCpus(system, cpuList, do_drain=True):
+def switchCpus(system, cpuList, do_drain=True, verbose=True):
     """Switch CPUs in a system.
 
     By default, this method drains and resumes the system. This
@@ -238,7 +245,10 @@ def switchCpus(system, cpuList, do_drain=True):
     Keyword Arguments:
       do_drain -- Perform a drain/resume of the system when switching.
     """
-    print "switching cpus"
+
+    if verbose:
+        print "switching cpus"
+
     if not isinstance(cpuList, list):
         raise RuntimeError, "Must pass a list to this function"
     for item in cpuList:

@@ -182,28 +182,30 @@ public:
      * access and should only be used as such.
      * Returns the access latency and inCache flags as a side effect.
      * @param addr The address to look for.
+     * @param is_secure True if the target memory space is secure.
      * @param asid The address space ID.
      * @param lat The latency of the access.
      * @param inCache The FALRUBlk::inCache flags.
      * @return Pointer to the cache block.
      */
-    FALRUBlk* accessBlock(Addr addr, Cycles &lat, int context_src, int *inCache = 0);
+    FALRUBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
+                          int context_src, int *inCache = 0);
 
     /**
      * Find the block in the cache, do not update the replacement data.
      * @param addr The address to look for.
+     * @param is_secure True if the target memory space is secure.
      * @param asid The address space ID.
      * @return Pointer to the cache block.
      */
-    FALRUBlk* findBlock(Addr addr) const;
+    FALRUBlk* findBlock(Addr addr, bool is_secure) const;
 
     /**
      * Find a replacement block for the address provided.
      * @param pkt The request to a find a replacement candidate for.
-     * @param writebacks List for any writebacks to be performed.
      * @return The block to place the replacement in.
      */
-    FALRUBlk* findVictim(Addr addr, PacketList & writebacks);
+    FALRUBlk* findVictim(Addr addr);
 
     void insertBlock(PacketPtr pkt, BlkType *blk);
 

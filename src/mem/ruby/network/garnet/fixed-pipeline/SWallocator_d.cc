@@ -133,7 +133,7 @@ bool
 SWallocator_d::is_candidate_inport(int inport, int invc)
 {
     int outport = m_input_unit[inport]->get_route(invc);
-    int t_enqueue_time = m_input_unit[inport]->get_enqueue_time(invc);
+    Cycles t_enqueue_time = m_input_unit[inport]->get_enqueue_time(invc);
     int t_vnet = get_vnet(invc);
     int vc_base = t_vnet*m_vc_per_vnet;
     if ((m_router->get_net_ptr())->isVNetOrdered(t_vnet)) {
@@ -218,10 +218,11 @@ SWallocator_d::arbitrate_outports()
 void
 SWallocator_d::check_for_wakeup()
 {
+    Cycles nextCycle = m_router->curCycle() + Cycles(1);
+
     for (int i = 0; i < m_num_inports; i++) {
         for (int j = 0; j < m_num_vcs; j++) {
-            if (m_input_unit[i]->need_stage_nextcycle(j, ACTIVE_, SA_,
-                                                      m_router->curCycle())) {
+            if (m_input_unit[i]->need_stage(j, ACTIVE_, SA_, nextCycle)) {
                 scheduleEvent(Cycles(1));
                 return;
             }

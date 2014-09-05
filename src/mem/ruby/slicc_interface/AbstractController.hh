@@ -34,14 +34,14 @@
 
 #include "base/callback.hh"
 #include "mem/protocol/AccessPermission.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
 #include "mem/ruby/common/Address.hh"
 #include "mem/ruby/common/Consumer.hh"
 #include "mem/ruby/common/DataBlock.hh"
 #include "mem/ruby/common/Histogram.hh"
+#include "mem/ruby/common/MachineID.hh"
+#include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/network/Network.hh"
-#include "mem/ruby/recorder/CacheRecorder.hh"
-#include "mem/ruby/system/MachineID.hh"
+#include "mem/ruby/system/CacheRecorder.hh"
 #include "mem/packet.hh"
 #include "params/RubyController.hh"
 #include "sim/clocked_object.hh"
@@ -56,24 +56,23 @@ class AbstractController : public ClockedObject, public Consumer
     void init();
     const Params *params() const { return (const Params *)_params; }
 
-    const int & getVersion() const { return m_version; }
+    const NodeID getVersion() const { return m_machineID.getNum(); }
+    const MachineType getType() const { return m_machineID.getType(); }
+
     void initNetworkPtr(Network* net_ptr) { m_net_ptr = net_ptr; }
 
     // return instance name
-    const std::string getName() const { return m_name; }
     void blockOnQueue(Address, MessageBuffer*);
     void unblock(Address);
 
     virtual MessageBuffer* getMandatoryQueue() const = 0;
-    virtual const std::string toString() const = 0;  // returns text version of
-                                                     // controller type
     virtual AccessPermission getAccessPermission(const Address& addr) = 0;
     virtual DataBlock& getDataBlock(const Address& addr) = 0;
 
     virtual void print(std::ostream & out) const = 0;
     virtual void wakeup() = 0;
-    virtual void clearStats() = 0;
-    virtual void regStats() = 0;
+    virtual void resetStats() = 0;
+    virtual void regStats();
 
     virtual void recordCacheTrace(int cntrl, CacheRecorder* tr) = 0;
     virtual Sequencer* getSequencer() const = 0;
@@ -97,24 +96,15 @@ class AbstractController : public ClockedObject, public Consumer
     virtual void collateStats()
     {fatal("collateStats() should be overridden!");}
 
+    //! Set the message buffer with given name.
+    virtual void setNetQueue(const std::string& name, MessageBuffer *b) = 0;
+
   public:
     MachineID getMachineID() const { return m_machineID; }
-    uint64_t getFullyBusyCycles() const { return m_fully_busy_cycles; }
-    uint64_t getRequestCount() const { return m_request_count; }
-    const std::map<std::string, uint64_t>& getRequestProfileMap() const
-    { return m_requestProfileMap; }
 
-    Histogram& getDelayHist() { return m_delayHistogram; }
-    Histogram& getDelayVCHist(uint32_t index)
-    { return m_delayVCHistogram[index]; }
-
-    MessageBuffer *getPeerQueue(uint32_t pid)
-    {
-        std::map<uint32_t, MessageBuffer *>::iterator it =
-                                        peerQueueMap.find(pid);
-        assert(it != peerQueueMap.end());
-        return (*it).second;
-    }
+    Stats::Histogram& getDelayHist() { return m_delayHistogram; }
+    Stats::Histogram& getDelayVCHist(uint32_t index)
+    { return *(m_delayVCHistogram[index]); }
 
   protected:
     //! Profiles original cache requests including PUTs
@@ -122,49 +112,39 @@ class AbstractController : public ClockedObject, public Consumer
     //! Profiles the delay associated with messages.
     void profileMsgDelay(uint32_t virtualNetwork, Cycles delay);
 
-    //! Function for connecting peer controllers
-    void connectWithPeer(AbstractController *);
-    virtual void getQueuesFromPeer(AbstractController *)
-    { fatal("getQueuesFromPeer() should be called only if implemented!"); }
-
     void stallBuffer(MessageBuffer* buf, Address addr);
     void wakeUpBuffers(Address addr);
     void wakeUpAllBuffers(Address addr);
     void wakeUpAllBuffers();
 
   protected:
-    int m_transitions_per_cycle;
-    int m_buffer_size;
-    Cycles m_recycle_latency;
-    std::string m_name;
     NodeID m_version;
-    Network* m_net_ptr;
     MachineID m_machineID;
+    NodeID m_clusterID;
+
+    Network* m_net_ptr;
     bool m_is_blocking;
     std::map<Address, MessageBuffer*> m_block_map;
+
     typedef std::vector<MessageBuffer*> MsgVecType;
     typedef std::map< Address, MsgVecType* > WaitingBufType;
     WaitingBufType m_waiting_buffers;
-    int m_max_in_port_rank;
-    int m_cur_in_port_rank;
-    int m_number_of_TBEs;
 
-    //! Map from physical network number to the Message Buffer.
-    std::map<uint32_t, MessageBuffer*> peerQueueMap;
+    unsigned int m_in_ports;
+    unsigned int m_cur_in_port;
+    int m_number_of_TBEs;
+    int m_transitions_per_cycle;
+    unsigned int m_buffer_size;
+    Cycles m_recycle_latency;
 
     //! Counter for the number of cycles when the transitions carried out
     //! were equal to the maximum allowed
-    uint64_t m_fully_busy_cycles;
-
-    //! Map for couting requests of different types. The controller should
-    //! call requisite function for updating the count.
-    std::map<std::string, uint64_t> m_requestProfileMap;
-    uint64_t m_request_count;
+    Stats::Scalar m_fully_busy_cycles;
 
     //! Histogram for profiling delay for the messages this controller
     //! cares for
-    Histogram m_delayHistogram;
-    std::vector<Histogram> m_delayVCHistogram;
+    Stats::Histogram m_delayHistogram;
+    std::vector<Stats::Histogram *> m_delayVCHistogram;
 
     //! Callback class used for collating statistics from all the
     //! controller of this type.
@@ -175,12 +155,7 @@ class AbstractController : public ClockedObject, public Consumer
 
       public:
         virtual ~StatsCallback() {}
-
-        StatsCallback(AbstractController *_ctr)
-            : ctr(_ctr)
-        {
-        }
-
+        StatsCallback(AbstractController *_ctr) : ctr(_ctr) {}
         void process() {ctr->collateStats();}
     };
 };

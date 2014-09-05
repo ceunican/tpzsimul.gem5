@@ -41,6 +41,7 @@
 
 #include <sstream>
 
+#include "base/intmath.hh"
 #include "base/random.hh"
 #include "cpu/testers/traffic_gen/traffic_gen.hh"
 #include "debug/Checkpoint.hh"
@@ -119,6 +120,11 @@ TrafficGen::initState()
 unsigned int
 TrafficGen::drain(DrainManager *dm)
 {
+    if (!updateEvent.scheduled()) {
+        // no event has been scheduled yet (e.g. switched from atomic mode)
+        return 0;
+    }
+
     if (retryPkt == NULL) {
         // shut things down
         nextPacketTick = MaxTick;
@@ -181,10 +187,18 @@ TrafficGen::update()
         assert(curTick() >= nextPacketTick);
         // get the next packet and try to send it
         PacketPtr pkt = states[currState]->getNextPacket();
-        numPackets++;
-        if (!port.sendTimingReq(pkt)) {
-            retryPkt = pkt;
-            retryPktTick = curTick();
+
+        // suppress packets that are not destined for a memory, such as
+        // device accesses that could be part of a trace
+        if (system->isMemAddr(pkt->getAddr())) {
+            numPackets++;
+            if (!port.sendTimingReq(pkt)) {
+                retryPkt = pkt;
+                retryPktTick = curTick();
+            }
+        } else {
+            DPRINTF(TrafficGen, "Suppressed packet %s 0x%x\n",
+                    pkt->cmdString(), pkt->getAddr());
         }
     }
 
@@ -215,6 +229,8 @@ TrafficGen::parseConfig()
         fatal("Traffic generator %s config file not found at %s\n",
               name(), configFile);
     }
+
+    bool init_state_set = false;
 
     // read line by line and determine the action based on the first
     // keyword
@@ -250,7 +266,8 @@ TrafficGen::parseConfig()
                 } else if (mode == "IDLE") {
                     states[id] = new IdleGen(name(), masterID, duration);
                     DPRINTF(TrafficGen, "State: %d IdleGen\n", id);
-                } else if (mode == "LINEAR" || mode == "RANDOM") {
+                } else if (mode == "LINEAR" || mode == "RANDOM" ||
+                           mode == "DRAM") {
                     uint32_t read_percent;
                     Addr start_addr;
                     Addr end_addr;
@@ -270,7 +287,7 @@ TrafficGen::parseConfig()
 
                     if (blocksize > system->cacheLineSize())
                         fatal("TrafficGen %s block size (%d) is larger than "
-                              "system block size (%d)\n", name(),
+                              "cache line size (%d)\n", name(),
                               blocksize, system->cacheLineSize());
 
                     if (read_percent > 100)
@@ -293,6 +310,54 @@ TrafficGen::parseConfig()
                                                    min_period, max_period,
                                                    read_percent, data_limit);
                         DPRINTF(TrafficGen, "State: %d RandomGen\n", id);
+                    } else if (mode == "DRAM") {
+                        // stride size (bytes) of the request for achieving
+                        // required hit length
+                        unsigned int stride_size;
+                        unsigned int page_size;
+                        unsigned int nbr_of_banks_DRAM;
+                        unsigned int nbr_of_banks_util;
+                        unsigned int addr_mapping;
+
+                        is >> stride_size >> page_size >> nbr_of_banks_DRAM >>
+                            nbr_of_banks_util >> addr_mapping;
+
+                        if (stride_size > page_size)
+                            warn("DRAM generator stride size (%d) is greater "
+                                 "than page size (%d)  of the memory\n",
+                                 blocksize, page_size);
+
+                        if (nbr_of_banks_util > nbr_of_banks_DRAM)
+                            fatal("Attempting to use more banks (%) than "
+                                  "what is available (%)\n",
+                                  nbr_of_banks_util, nbr_of_banks_DRAM);
+
+                        if (nbr_of_banks_util > nbr_of_banks_DRAM)
+                            fatal("Attempting to use more banks (%) than "
+                                  "what is available (%)\n",
+                                  nbr_of_banks_util, nbr_of_banks_DRAM);
+
+                        // count the number of sequential packets to
+                        // generate
+                        unsigned int num_seq_pkts = 1;
+
+                        if (stride_size > blocksize) {
+                            num_seq_pkts = divCeil(stride_size, blocksize);
+                            DPRINTF(TrafficGen, "stride size: %d "
+                                    "block size: %d, num_seq_pkts: %d\n",
+                                    stride_size, blocksize, num_seq_pkts);
+                        }
+
+                        states[id] = new DramGen(name(), masterID,
+                                                 duration, start_addr,
+                                                 end_addr, blocksize,
+                                                 min_period, max_period,
+                                                 read_percent, data_limit,
+                                                 num_seq_pkts, page_size,
+                                                 nbr_of_banks_DRAM,
+                                                 nbr_of_banks_util,
+                                                 addr_mapping);
+                        DPRINTF(TrafficGen, "State: %d DramGen\n", id);
                     }
                 } else {
                     fatal("%s: Unknown traffic generator mode: %s",
@@ -311,10 +376,16 @@ TrafficGen::parseConfig()
                 // set the initial state as the active state
                 is >> currState;
 
+                init_state_set = true;
+
                 DPRINTF(TrafficGen, "Initial state: %d\n", currState);
             }
         }
     }
+
+    if (!init_state_set)
+        fatal("%s: initial state not specified (add 'INIT <id>' line "
+              "to the config file)\n", name());
 
     // resize and populate state transition matrix
     transitionMatrix.resize(states.size());
@@ -352,7 +423,7 @@ TrafficGen::transition()
     states[currState]->exit();
 
     // determine next state
-    double p = random_mt.gen_real1();
+    double p = random_mt.random<double>();
     assert(currState < transitionMatrix.size());
     double cumulative = 0.0;
     size_t i = 0;

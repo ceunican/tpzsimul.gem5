@@ -1,9 +1,9 @@
 gem5 Simulator System.  http://gem5.org
 gem5 is copyrighted software; use the --copyright option for details.
 
-gem5 compiled Oct  1 2013 21:55:52
-gem5 started Oct  1 2013 22:49:39
-gem5 executing on steam
+gem5 compiled Jan 22 2014 17:10:34
+gem5 started Jan 22 2014 22:11:10
+gem5 executing on u200540-lin
 command line: build/X86/gem5.opt -d build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic -re tests/run.py build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic
 Couldn't unlink  build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic/smred.sav
 Couldn't unlink  build/X86/tests/opt/long/se/70.twolf/x86/linux/simple-atomic/smred.sv2
