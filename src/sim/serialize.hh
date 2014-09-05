@@ -49,6 +49,7 @@ class IniFile;
 class Serializable;
 class Checkpoint;
 class SimObject;
+class EventQueue;
 
 /** The current version of the checkpoint format.
  * This should be incremented by 1 and only 1 for every new version, where a new
@@ -57,7 +58,7 @@ class SimObject;
  * SimObject shouldn't cause the version number to increase, only changes to
  * existing objects such as serializing/unserializing more state, changing sizes
  * of serialized arrays, etc. */
-static const uint64_t gem5CheckpointVersion = 0x0000000000000006;
+static const uint64_t gem5CheckpointVersion = 0x000000000000000d;
 
 template <class T>
 void paramOut(std::ostream &os, const std::string &name, const T &param);

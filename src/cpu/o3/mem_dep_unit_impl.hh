@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012, 2014 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -39,6 +39,9 @@
  *
  * Authors: Kevin Lim
  */
+
+#ifndef __CPU_O3_MEM_DEP_UNIT_IMPL_HH__
+#define __CPU_O3_MEM_DEP_UNIT_IMPL_HH__
 
 #include <map>
 
@@ -367,7 +370,7 @@ MemDepUnit<MemDepPred, Impl>::reschedule(DynInstPtr &inst)
 
 template <class MemDepPred, class Impl>
 void
-MemDepUnit<MemDepPred, Impl>::replay(DynInstPtr &inst)
+MemDepUnit<MemDepPred, Impl>::replay()
 {
     DynInstPtr temp_inst;
 
@@ -594,3 +597,5 @@ MemDepUnit<MemDepPred, Impl>::dumpLists()
     cprintf("Memory dependence entries: %i\n", MemDepEntry::memdep_count);
 #endif
 }
+
+#endif//__CPU_O3_MEM_DEP_UNIT_IMPL_HH__

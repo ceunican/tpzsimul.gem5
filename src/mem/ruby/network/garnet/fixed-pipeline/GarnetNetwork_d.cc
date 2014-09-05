@@ -32,17 +32,14 @@
 
 #include "base/cast.hh"
 #include "base/stl_helpers.hh"
-#include "mem/protocol/MachineType.hh"
-#include "mem/ruby/buffers/MessageBuffer.hh"
+#include "mem/ruby/common/Global.hh"
 #include "mem/ruby/common/NetDest.hh"
-#include "mem/ruby/network/garnet/BaseGarnetNetwork.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/CreditLink_d.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/GarnetLink_d.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/GarnetNetwork_d.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/NetworkInterface_d.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/NetworkLink_d.hh"
 #include "mem/ruby/network/garnet/fixed-pipeline/Router_d.hh"
-#include "mem/ruby/network/Topology.hh"
 
 using namespace std;
 using m5::stl_helpers::deletePointers;
@@ -63,6 +60,17 @@ GarnetNetwork_d::GarnetNetwork_d(const Params *p)
          i != p->routers.end(); ++i) {
         Router_d* router = safe_cast<Router_d*>(*i);
         m_routers.push_back(router);
+
+        // initialize the router's network pointers
+        router->init_net_ptr(this);
+    }
+
+    // record the network interfaces
+    for (vector<ClockedObject*>::const_iterator i = p->netifs.begin();
+         i != p->netifs.end(); ++i) {
+        NetworkInterface_d *ni = safe_cast<NetworkInterface_d *>(*i);
+        m_nis.push_back(ni);
+        ni->init_net_ptr(this);
     }
 }
 
@@ -71,31 +79,14 @@ GarnetNetwork_d::init()
 {
     BaseGarnetNetwork::init();
 
-    // initialize the router's network pointers
-    for (vector<Router_d*>::const_iterator i = m_routers.begin();
-         i != m_routers.end(); ++i) {
-        Router_d* router = safe_cast<Router_d*>(*i);
-        router->init_net_ptr(this);
+    for (int i=0; i < m_nodes; i++) {
+        m_nis[i]->addNode(m_toNetQueues[i], m_fromNetQueues[i]);
     }
 
     // The topology pointer should have already been initialized in the
     // parent network constructor
     assert(m_topology_ptr != NULL);
-
-    for (int i=0; i < m_nodes; i++) {
-        NetworkInterface_d *ni = new NetworkInterface_d(i, m_virtual_networks,
-                                                        this);
-        ni->addNode(m_toNetQueues[i], m_fromNetQueues[i]);
-        m_nis.push_back(ni);
-    }
     m_topology_ptr->createLinks(this);
-
-    // initialize the link's network pointers
-   for (vector<NetworkLink_d*>::const_iterator i = m_links.begin();
-         i != m_links.end(); ++i) {
-        NetworkLink_d* net_link = safe_cast<NetworkLink_d*>(*i);
-        net_link->init_net_ptr(this);
-    }
 
     // FaultModel: declare each router to the fault model
     if(isFaultModelEnabled()){
@@ -117,15 +108,10 @@ GarnetNetwork_d::init()
 
 GarnetNetwork_d::~GarnetNetwork_d()
 {
-    for (int i = 0; i < m_nodes; i++) {
-        deletePointers(m_toNetQueues[i]);
-        deletePointers(m_fromNetQueues[i]);
-    }
     deletePointers(m_routers);
     deletePointers(m_nis);
     deletePointers(m_links);
     deletePointers(m_creditlinks);
-    delete m_topology_ptr;
 }
 
 /*
@@ -285,8 +271,9 @@ GarnetNetwork_d::collateLinkStats()
 void
 GarnetNetwork_d::collatePowerStats()
 {
+    double sim_cycles = (double)(curCycle() - g_ruby_start);
     for (int i = 0; i < m_links.size(); i++) {
-        m_links[i]->calculate_power();
+        m_links[i]->calculate_power(sim_cycles);
         m_dynamic_link_power += m_links[i]->get_dynamic_power();
         m_static_link_power += m_links[i]->get_static_power();
     }

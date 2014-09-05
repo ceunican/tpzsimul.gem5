@@ -96,26 +96,26 @@ output header {{
 }};
 
 output exec {{
-    void getThrRegExValues(%(CPU_exec_context)s *xc,
+    void getThrRegExValues(CPU_EXEC_CONTEXT *xc,
             VPEConf0Reg &vpe_conf0, TCBindReg &tc_bind_mt,
             TCBindReg &tc_bind, VPEControlReg &vpe_control,
             MVPConf0Reg &mvp_conf0)
     {
         vpe_conf0 = xc->readMiscReg(MISCREG_VPE_CONF0);
-        tc_bind_mt = xc->readRegOtherThread(MISCREG_TC_BIND + Ctrl_Base_DepTag);
+        tc_bind_mt = xc->readRegOtherThread(MISCREG_TC_BIND + Misc_Reg_Base);
         tc_bind = xc->readMiscReg(MISCREG_TC_BIND);
         vpe_control = xc->readMiscReg(MISCREG_VPE_CONTROL);
         mvp_conf0 = xc->readMiscReg(MISCREG_MVP_CONF0);
     }
 
-    void getMTExValues(%(CPU_exec_context)s *xc, Config3Reg &config3)
+    void getMTExValues(CPU_EXEC_CONTEXT *xc, Config3Reg &config3)
     {
         config3 = xc->readMiscReg(MISCREG_CONFIG3);
     }
 }};
 
 def template ThreadRegisterExecute {{
-        Fault %(class_name)s::execute(%(CPU_exec_context)s *xc, Trace::InstRecord *traceData) const
+        Fault %(class_name)s::execute(CPU_EXEC_CONTEXT *xc, Trace::InstRecord *traceData) const
         {
             Fault fault = NoFault;
             int64_t data M5_VAR_USED;
@@ -153,7 +153,7 @@ def template ThreadRegisterExecute {{
 }};
 
 def template MTExecute{{
-        Fault %(class_name)s::execute(%(CPU_exec_context)s *xc, Trace::InstRecord *traceData) const
+        Fault %(class_name)s::execute(CPU_EXEC_CONTEXT *xc, Trace::InstRecord *traceData) const
         {
                 Fault fault = NoFault;
                 %(op_decl)s;

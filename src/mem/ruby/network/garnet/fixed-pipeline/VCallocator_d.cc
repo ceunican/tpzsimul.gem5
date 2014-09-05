@@ -124,7 +124,7 @@ VCallocator_d::is_invc_candidate(int inport_iter, int invc_iter)
 {
     int outport = m_input_unit[inport_iter]->get_route(invc_iter);
     int vnet = get_vnet(invc_iter);
-    int t_enqueue_time =
+    Cycles t_enqueue_time =
         m_input_unit[inport_iter]->get_enqueue_time(invc_iter);
 
     int invc_base = vnet*m_vc_per_vnet;
@@ -256,10 +256,11 @@ VCallocator_d::get_vnet(int invc)
 void
 VCallocator_d::check_for_wakeup()
 {
+    Cycles nextCycle = m_router->curCycle() + Cycles(1);
+
     for (int i = 0; i < m_num_inports; i++) {
         for (int j = 0; j < m_num_vcs; j++) {
-            if (m_input_unit[i]->need_stage_nextcycle(j, VC_AB_, VA_,
-                   m_router->curCycle())) {
+            if (m_input_unit[i]->need_stage(j, VC_AB_, VA_, nextCycle)) {
                 scheduleEvent(Cycles(1));
                 return;
             }

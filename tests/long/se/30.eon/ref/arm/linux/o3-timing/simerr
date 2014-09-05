@@ -1,5 +1,4 @@
 warn: Sockets disabled, not accepting gdb connections
-warn: CP14 unimplemented crn[15], opc1[7], crm[4], opc2[6]
 getting pixel output filename pixels_out.cook
 opening control file chair.control.cook
 opening camera file chair.camera
@@ -46,4 +45,3 @@ Writing to chair.cook.ppm
 12  8  14
 13  8  14
 14  8  14
-hack: be nice to actually delete the event here

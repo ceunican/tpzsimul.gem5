@@ -28,6 +28,9 @@
  * Authors: Kevin Lim
  */
 
+#ifndef __CPU_OZONE_LW_LSQ_IMPL_HH__
+#define __CPU_OZONE_LW_LSQ_IMPL_HH__
+
 #include "base/str.hh"
 #include "config/the_isa.hh"
 #include "cpu/checker/cpu.hh"
@@ -574,10 +577,7 @@ OzoneLWLSQ<Impl>::writebackStores()
         memcpy(inst->memData, (uint8_t *)&(*sq_it).data,
                req->getSize());
 
-        MemCmd command =
-            req->isSwap() ? MemCmd::SwapReq :
-            (req->isLLSC() ? MemCmd::WriteReq : MemCmd::StoreCondReq);
-        PacketPtr data_pkt = new Packet(req, command);
+        PacketPtr data_pkt = Packet::createWrite(req);
         data_pkt->dataStatic(inst->memData);
 
         LSQSenderState *state = new LSQSenderState;
@@ -961,3 +961,5 @@ OzoneLWLSQ<Impl>::takeOverFrom(ThreadContext *old_tc)
 
     blockedLoadSeqNum = 0;
 }
+
+#endif//__CPU_OZONE_LW_LSQ_IMPL_HH__

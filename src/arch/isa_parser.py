@@ -1,4 +1,17 @@
+# Copyright (c) 2014 ARM Limited
+# All rights reserved
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
+#
 # Copyright (c) 2003-2005 The Regents of The University of Michigan
+# Copyright (c) 2013 Advanced Micro Devices, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,6 +39,7 @@
 #
 # Authors: Steve Reinhardt
 
+from __future__ import with_statement
 import os
 import sys
 import re
@@ -312,27 +326,29 @@ class GenCode(object):
         self.parser = parser
         self.header_output = parser.expandCpuSymbolsToString(header_output)
         self.decoder_output = parser.expandCpuSymbolsToString(decoder_output)
-        if isinstance(exec_output, dict):
-            self.exec_output = exec_output
-        elif isinstance(exec_output, str):
-            # If the exec_output arg is a single string, we replicate
-            # it for each of the CPU models, substituting and
-            # %(CPU_foo)s params appropriately.
-            self.exec_output = parser.expandCpuSymbolsToDict(exec_output)
-        self.decode_block = parser.expandCpuSymbolsToString(decode_block)
+        self.exec_output = exec_output
+        self.decode_block = decode_block
         self.has_decode_default = has_decode_default
+
+    # Write these code chunks out to the filesystem.  They will be properly
+    # interwoven by the write_top_level_files().
+    def emit(self):
+        if self.header_output:
+            self.parser.get_file('header').write(self.header_output)
+        if self.decoder_output:
+            self.parser.get_file('decoder').write(self.decoder_output)
+        if self.exec_output:
+            self.parser.get_file('exec').write(self.exec_output)
+        if self.decode_block:
+            self.parser.get_file('decode_block').write(self.decode_block)
 
     # Override '+' operator: generate a new GenCode object that
     # concatenates all the individual strings in the operands.
     def __add__(self, other):
-        exec_output = {}
-        for cpu in self.parser.cpuModels:
-            n = cpu.name
-            exec_output[n] = self.exec_output[n] + other.exec_output[n]
         return GenCode(self.parser,
                        self.header_output + other.header_output,
                        self.decoder_output + other.decoder_output,
-                       exec_output,
+                       self.exec_output + other.exec_output,
                        self.decode_block + other.decode_block,
                        self.has_decode_default or other.has_decode_default)
 
@@ -341,8 +357,7 @@ class GenCode(object):
         self.header_output = pre + self.header_output
         self.decoder_output  = pre + self.decoder_output
         self.decode_block = pre + self.decode_block
-        for cpu in self.parser.cpuModels:
-            self.exec_output[cpu.name] = pre + self.exec_output[cpu.name]
+        self.exec_output  = pre + self.exec_output
 
     # Wrap the decode block in a pair of strings (e.g., 'case foo:'
     # and 'break;').  Used to build the big nested switch statement.
@@ -497,6 +512,9 @@ class Operand(object):
     def isIntReg(self):
         return 0
 
+    def isCCReg(self):
+        return 0
+
     def isControlReg(self):
         return 0
 
@@ -610,12 +628,12 @@ class FloatRegOperand(Operand):
         c_dest = ''
 
         if self.is_src:
-            c_src = '\n\t_srcRegIdx[_numSrcRegs++] = %s + FP_Base_DepTag;' % \
+            c_src = '\n\t_srcRegIdx[_numSrcRegs++] = %s + FP_Reg_Base;' % \
                     (self.reg_spec)
 
         if self.is_dest:
             c_dest = \
-              '\n\t_destRegIdx[_numDestRegs++] = %s + FP_Base_DepTag;' % \
+              '\n\t_destRegIdx[_numDestRegs++] = %s + FP_Reg_Base;' % \
               (self.reg_spec)
             c_dest += '\n\t_numFPDestRegs++;'
 
@@ -660,6 +678,79 @@ class FloatRegOperand(Operand):
         }''' % (self.ctype, self.base_name, wp)
         return wb
 
+class CCRegOperand(Operand):
+    def isReg(self):
+        return 1
+
+    def isCCReg(self):
+        return 1
+
+    def makeConstructor(self, predRead, predWrite):
+        c_src = ''
+        c_dest = ''
+
+        if self.is_src:
+            c_src = '\n\t_srcRegIdx[_numSrcRegs++] = %s + CC_Reg_Base;' % \
+                     (self.reg_spec)
+            if self.hasReadPred():
+                c_src = '\n\tif (%s) {%s\n\t}' % \
+                        (self.read_predicate, c_src)
+
+        if self.is_dest:
+            c_dest = \
+              '\n\t_destRegIdx[_numDestRegs++] = %s + CC_Reg_Base;' % \
+              (self.reg_spec)
+            c_dest += '\n\t_numCCDestRegs++;'
+            if self.hasWritePred():
+                c_dest = '\n\tif (%s) {%s\n\t}' % \
+                         (self.write_predicate, c_dest)
+
+        return c_src + c_dest
+
+    def makeRead(self, predRead):
+        if (self.ctype == 'float' or self.ctype == 'double'):
+            error('Attempt to read condition-code register as FP')
+        if self.read_code != None:
+            return self.buildReadCode('readCCRegOperand')
+
+        int_reg_val = ''
+        if predRead:
+            int_reg_val = 'xc->readCCRegOperand(this, _sourceIndex++)'
+            if self.hasReadPred():
+                int_reg_val = '(%s) ? %s : 0' % \
+                              (self.read_predicate, int_reg_val)
+        else:
+            int_reg_val = 'xc->readCCRegOperand(this, %d)' % self.src_reg_idx
+
+        return '%s = %s;\n' % (self.base_name, int_reg_val)
+
+    def makeWrite(self, predWrite):
+        if (self.ctype == 'float' or self.ctype == 'double'):
+            error('Attempt to write condition-code register as FP')
+        if self.write_code != None:
+            return self.buildWriteCode('setCCRegOperand')
+
+        if predWrite:
+            wp = 'true'
+            if self.hasWritePred():
+                wp = self.write_predicate
+
+            wcond = 'if (%s)' % (wp)
+            windex = '_destIndex++'
+        else:
+            wcond = ''
+            windex = '%d' % self.dest_reg_idx
+
+        wb = '''
+        %s
+        {
+            %s final_val = %s;
+            xc->setCCRegOperand(this, %s, final_val);\n
+            if (traceData) { traceData->setData(final_val); }
+        }''' % (wcond, self.ctype, self.base_name, windex)
+
+        return wb
+
 class ControlRegOperand(Operand):
     def isReg(self):
         return 1
@@ -673,12 +764,12 @@ class ControlRegOperand(Operand):
 
         if self.is_src:
             c_src = \
-              '\n\t_srcRegIdx[_numSrcRegs++] = %s + Ctrl_Base_DepTag;' % \
+              '\n\t_srcRegIdx[_numSrcRegs++] = %s + Misc_Reg_Base;' % \
               (self.reg_spec)
 
         if self.is_dest:
             c_dest = \
-              '\n\t_destRegIdx[_numDestRegs++] = %s + Ctrl_Base_DepTag;' % \
+              '\n\t_destRegIdx[_numDestRegs++] = %s + Misc_Reg_Base;' % \
               (self.reg_spec)
 
         return c_src + c_dest
@@ -815,6 +906,7 @@ class OperandList(object):
         self.numDestRegs = 0
         self.numFPDestRegs = 0
         self.numIntDestRegs = 0
+        self.numCCDestRegs = 0
         self.numMiscDestRegs = 0
         self.memOperand = None
 
@@ -835,6 +927,8 @@ class OperandList(object):
                         self.numFPDestRegs += 1
                     elif op_desc.isIntReg():
                         self.numIntDestRegs += 1
+                    elif op_desc.isCCReg():
+                        self.numCCDestRegs += 1
                     elif op_desc.isControlReg():
                         self.numMiscDestRegs += 1
             elif op_desc.isMem():
@@ -1030,23 +1124,14 @@ class InstObjParams(object):
         header += '\n\t_numDestRegs = 0;'
         header += '\n\t_numFPDestRegs = 0;'
         header += '\n\t_numIntDestRegs = 0;'
+        header += '\n\t_numCCDestRegs = 0;'
 
         self.constructor = header + \
                            self.operands.concatAttrStrings('constructor')
 
         self.flags = self.operands.concatAttrLists('flags')
 
-        # Make a basic guess on the operand class (function unit type).
-        # These are good enough for most cases, and can be overridden
-        # later otherwise.
-        if 'IsStore' in self.flags:
-            self.op_class = 'MemWriteOp'
-        elif 'IsLoad' in self.flags or 'IsPrefetch' in self.flags:
-            self.op_class = 'MemReadOp'
-        elif 'IsFloating' in self.flags:
-            self.op_class = 'FloatAddOp'
-        else:
-            self.op_class = 'IntAluOp'
+        self.op_class = None
 
         # Optional arguments are assumed to be either StaticInst flags
         # or an OpClass value.  To avoid having to import a complete
@@ -1060,6 +1145,18 @@ class InstObjParams(object):
             else:
                 error('InstObjParams: optional arg "%s" not recognized '
                       'as StaticInst::Flag or OpClass.' % oa)
+
+        # Make a basic guess on the operand class if not set.
+        # These are good enough for most cases.
+        if not self.op_class:
+            if 'IsStore' in self.flags:
+                self.op_class = 'MemWriteOp'
+            elif 'IsLoad' in self.flags or 'IsPrefetch' in self.flags:
+                self.op_class = 'MemReadOp'
+            elif 'IsFloating' in self.flags:
+                self.op_class = 'FloatAddOp'
+            else:
+                self.op_class = 'IntAluOp'
 
         # add flag initialization to contructor here to include
         # any flags added via opt_args
@@ -1090,58 +1187,46 @@ class Stack(list):
 
 #######################
 #
-# Output file template
+# ISA Parser
+#   parses ISA DSL and emits C++ headers and source
 #
 
-file_template = '''
-/*
- * DO NOT EDIT THIS FILE!!!
- *
- * It was automatically generated from the ISA description in %(filename)s
- */
-
-%(includes)s
-
-%(global_output)s
-
-namespace %(namespace)s {
-
-%(namespace_output)s
-
-} // namespace %(namespace)s
-
-%(decode_function)s
-'''
-
-max_inst_regs_template = '''
-/*
- * DO NOT EDIT THIS FILE!!!
- *
- * It was automatically generated from the ISA description in %(filename)s
- */
-
-namespace %(namespace)s {
-
-    const int MaxInstSrcRegs = %(MaxInstSrcRegs)d;
-    const int MaxInstDestRegs = %(MaxInstDestRegs)d;
-    const int MaxMiscDestRegs = %(MaxMiscDestRegs)d;
-
-} // namespace %(namespace)s
-
-'''
-
 class ISAParser(Grammar):
-    def __init__(self, output_dir, cpu_models):
+    class CpuModel(object):
+        def __init__(self, name, filename, includes, strings):
+            self.name = name
+            self.filename = filename
+            self.includes = includes
+            self.strings = strings
+
+    def __init__(self, output_dir):
         super(ISAParser, self).__init__()
         self.output_dir = output_dir
 
-        self.cpuModels = cpu_models
+        self.filename = None # for output file watermarking/scaremongering
+
+        self.cpuModels = [
+            ISAParser.CpuModel('ExecContext',
+                               'generic_cpu_exec.cc',
+                               '#include "cpu/exec_context.hh"',
+                               { "CPU_exec_context" : "ExecContext" }),
+            ]
 
         # variable to hold templates
         self.templateMap = {}
 
         # This dictionary maps format name strings to Format objects.
         self.formatMap = {}
+
+        # Track open files and, if applicable, how many chunks it has been
+        # split into so far.
+        self.files = {}
+        self.splits = {}
+
+        # isa_name / namespace identifier from namespace declaration.
+        # before the namespace declaration, None.
+        self.isa_name = None
+        self.namespace = None
 
         # The format stack.
         self.formatStack = Stack(NoFormat())
@@ -1161,6 +1246,181 @@ class ISAParser(Grammar):
         self.maxInstSrcRegs = 0
         self.maxInstDestRegs = 0
         self.maxMiscDestRegs = 0
+
+    def __getitem__(self, i):    # Allow object (self) to be
+        return getattr(self, i)  # passed to %-substitutions
+
+    # Change the file suffix of a base filename:
+    #   (e.g.) decoder.cc -> decoder-g.cc.inc for 'global' outputs
+    def suffixize(self, s, sec):
+        extn = re.compile('(\.[^\.]+)$') # isolate extension
+        if self.namespace:
+            return extn.sub(r'-ns\1.inc', s) # insert some text on either side
+        else:
+            return extn.sub(r'-g\1.inc', s)
+
+    # Get the file object for emitting code into the specified section
+    # (header, decoder, exec, decode_block).
+    def get_file(self, section):
+        if section == 'decode_block':
+            filename = 'decode-method.cc.inc'
+        else:
+            if section == 'header':
+                file = 'decoder.hh'
+            else:
+                file = '%s.cc' % section
+            filename = self.suffixize(file, section)
+        try:
+            return self.files[filename]
+        except KeyError: pass
+
+        f = self.open(filename)
+        self.files[filename] = f
+
+        # The splittable files are the ones with many independent
+        # per-instruction functions - the decoder's instruction constructors
+        # and the instruction execution (execute()) methods. These both have
+        # the suffix -ns.cc.inc, meaning they are within the namespace part
+        # of the ISA, contain object-emitting C++ source, and are included
+        # into other top-level files. These are the files that need special
+        # #define's to allow parts of them to be compiled separately. Rather
+        # than splitting the emissions into separate files, the monolithic
+        # output of the ISA parser is maintained, but the value (or lack
+        # thereof) of the __SPLIT definition during C preprocessing will
+        # select the different chunks. If no 'split' directives are used,
+        # the cpp emissions have no effect.
+        if re.search('-ns.cc.inc$', filename):
+            print >>f, '#if !defined(__SPLIT) || (__SPLIT == 1)'
+            self.splits[f] = 1
+        # ensure requisite #include's
+        elif filename in ['decoder-g.cc.inc', 'exec-g.cc.inc']:
+            print >>f, '#include "decoder.hh"'
+        elif filename == 'decoder-g.hh.inc':
+            print >>f, '#include "base/bitfield.hh"'
+
+        return f
+
+    # Weave together the parts of the different output sections by
+    # #include'ing them into some very short top-level .cc/.hh files.
+    # These small files make it much clearer how this tool works, since
+    # you directly see the chunks emitted as files that are #include'd.
+    def write_top_level_files(self):
+        dep = self.open('inc.d', bare=True)
+
+        # decoder header - everything depends on this
+        file = 'decoder.hh'
+        with self.open(file) as f:
+            inc = []
+
+            fn = 'decoder-g.hh.inc'
+            assert(fn in self.files)
+            f.write('#include "%s"\n' % fn)
+            inc.append(fn)
+
+            fn = 'decoder-ns.hh.inc'
+            assert(fn in self.files)
+            f.write('namespace %s {\n#include "%s"\n}\n'
+                    % (self.namespace, fn))
+            inc.append(fn)
+
+            print >>dep, file+':', ' '.join(inc)
+
+        # decoder method - cannot be split
+        file = 'decoder.cc'
+        with self.open(file) as f:
+            inc = []
+
+            fn = 'decoder-g.cc.inc'
+            assert(fn in self.files)
+            f.write('#include "%s"\n' % fn)
+            inc.append(fn)
+
+            fn = 'decode-method.cc.inc'
+            # is guaranteed to have been written for parse to complete
+            f.write('#include "%s"\n' % fn)
+            inc.append(fn)
+
+            inc.append("decoder.hh")
+            print >>dep, file+':', ' '.join(inc)
+
+        extn = re.compile('(\.[^\.]+)$')
+
+        # instruction constructors
+        splits = self.splits[self.get_file('decoder')]
+        file_ = 'inst-constrs.cc'
+        for i in range(1, splits+1):
+            if splits > 1:
+                file = extn.sub(r'-%d\1' % i, file_)
+            else:
+                file = file_
+            with self.open(file) as f:
+                inc = []
+
+                fn = 'decoder-g.cc.inc'
+                assert(fn in self.files)
+                f.write('#include "%s"\n' % fn)
+                inc.append(fn)
+
+                fn = 'decoder-ns.cc.inc'
+                assert(fn in self.files)
+                print >>f, 'namespace %s {' % self.namespace
+                if splits > 1:
+                    print >>f, '#define __SPLIT %u' % i
+                print >>f, '#include "%s"' % fn
+                print >>f, '}'
+                inc.append(fn)
+
+                inc.append("decoder.hh")
+                print >>dep, file+':', ' '.join(inc)
+
+        # instruction execution per-CPU model
+        splits = self.splits[self.get_file('exec')]
+        for cpu in self.cpuModels:
+            for i in range(1, splits+1):
+                if splits > 1:
+                    file = extn.sub(r'_%d\1' % i, cpu.filename)
+                else:
+                    file = cpu.filename
+                with self.open(file) as f:
+                    inc = []
+
+                    fn = 'exec-g.cc.inc'
+                    assert(fn in self.files)
+                    f.write('#include "%s"\n' % fn)
+                    inc.append(fn)
+
+                    f.write(cpu.includes+"\n")
+
+                    fn = 'exec-ns.cc.inc'
+                    assert(fn in self.files)
+                    print >>f, 'namespace %s {' % self.namespace
+                    print >>f, '#define CPU_EXEC_CONTEXT %s' \
+                               % cpu.strings['CPU_exec_context']
+                    if splits > 1:
+                        print >>f, '#define __SPLIT %u' % i
+                    print >>f, '#include "%s"' % fn
+                    print >>f, '}'
+                    inc.append(fn)
+
+                    inc.append("decoder.hh")
+                    print >>dep, file+':', ' '.join(inc)
+
+        # max_inst_regs.hh
+        self.update('max_inst_regs.hh',
+                    '''namespace %(namespace)s {
+    const int MaxInstSrcRegs = %(maxInstSrcRegs)d;
+    const int MaxInstDestRegs = %(maxInstDestRegs)d;
+    const int MaxMiscDestRegs = %(maxMiscDestRegs)d;\n}\n''' % self)
+        print >>dep, 'max_inst_regs.hh:'
+
+        dep.close()
+
+
+    scaremonger_template ='''// DO NOT EDIT
+// This file was automatically generated from an ISA description:
+//   %(filename)s
+
+''';
 
     #####################################################################
     #
@@ -1183,7 +1443,7 @@ class ISAParser(Grammar):
     reserved = (
         'BITFIELD', 'DECODE', 'DECODER', 'DEFAULT', 'DEF', 'EXEC', 'FORMAT',
         'HEADER', 'LET', 'NAMESPACE', 'OPERAND_TYPES', 'OPERANDS',
-        'OUTPUT', 'SIGNED', 'TEMPLATE'
+        'OUTPUT', 'SIGNED', 'SPLIT', 'TEMPLATE'
         )
 
     # List of tokens.  The lex module requires this.
@@ -1336,59 +1596,81 @@ class ISAParser(Grammar):
     # after will be inside.  The decoder function is always inside the
     # namespace.
     def p_specification(self, t):
-        'specification : opt_defs_and_outputs name_decl opt_defs_and_outputs decode_block'
-        global_code = t[1]
-        isa_name = t[2]
-        namespace = isa_name + "Inst"
-        # wrap the decode block as a function definition
-        t[4].wrap_decode_block('''
-StaticInstPtr
-%(isa_name)s::Decoder::decodeInst(%(isa_name)s::ExtMachInst machInst)
-{
-    using namespace %(namespace)s;
-''' % vars(), '}')
-        # both the latter output blocks and the decode block are in
-        # the namespace
-        namespace_code = t[3] + t[4]
-        # pass it all back to the caller of yacc.parse()
-        t[0] = (isa_name, namespace, global_code, namespace_code)
+        'specification : opt_defs_and_outputs top_level_decode_block'
 
-    # ISA name declaration looks like "namespace <foo>;"
-    def p_name_decl(self, t):
-        'name_decl : NAMESPACE ID SEMI'
-        t[0] = t[2]
+        for f in self.splits.iterkeys():
+            f.write('\n#endif\n')
 
-    # 'opt_defs_and_outputs' is a possibly empty sequence of
-    # def and/or output statements.
+        for f in self.files.itervalues(): # close ALL the files;
+            f.close() # not doing so can cause compilation to fail
+
+        self.write_top_level_files()
+
+        t[0] = True
+
+    # 'opt_defs_and_outputs' is a possibly empty sequence of def and/or
+    # output statements. Its productions do the hard work of eventually
+    # instantiating a GenCode, which are generally emitted (written to disk)
+    # as soon as possible, except for the decode_block, which has to be
+    # accumulated into one large function of nested switch/case blocks.
     def p_opt_defs_and_outputs_0(self, t):
         'opt_defs_and_outputs : empty'
-        t[0] = GenCode(self)
 
     def p_opt_defs_and_outputs_1(self, t):
         'opt_defs_and_outputs : defs_and_outputs'
-        t[0] = t[1]
 
     def p_defs_and_outputs_0(self, t):
         'defs_and_outputs : def_or_output'
-        t[0] = t[1]
 
     def p_defs_and_outputs_1(self, t):
         'defs_and_outputs : defs_and_outputs def_or_output'
-        t[0] = t[1] + t[2]
 
     # The list of possible definition/output statements.
+    # They are all processed as they are seen.
     def p_def_or_output(self, t):
-        '''def_or_output : def_format
+        '''def_or_output : name_decl
+                         | def_format
                          | def_bitfield
                          | def_bitfield_struct
                          | def_template
                          | def_operand_types
                          | def_operands
-                         | output_header
-                         | output_decoder
-                         | output_exec
-                         | global_let'''
+                         | output
+                         | global_let
+                         | split'''
+
+    # Utility function used by both invocations of splitting - explicit
+    # 'split' keyword and split() function inside "let {{ }};" blocks.
+    def split(self, sec, write=False):
+        assert(sec != 'header' and "header cannot be split")
+
+        f = self.get_file(sec)
+        self.splits[f] += 1
+        s = '\n#endif\n#if __SPLIT == %u\n' % self.splits[f]
+        if write:
+            f.write(s)
+        else:
+            return s
+
+    # split output file to reduce compilation time
+    def p_split(self, t):
+        'split : SPLIT output_type SEMI'
+        assert(self.isa_name and "'split' not allowed before namespace decl")
+
+        self.split(t[2], True)
+
+    def p_output_type(self, t):
+        '''output_type : DECODER
+                       | HEADER
+                       | EXEC'''
         t[0] = t[1]
+
+    # ISA name declaration looks like "namespace <foo>;"
+    def p_name_decl(self, t):
+        'name_decl : NAMESPACE ID SEMI'
+        assert(self.isa_name == None and "Only 1 namespace decl permitted")
+        self.isa_name = t[2]
+        self.namespace = t[2] + 'Inst'
 
     # Output blocks 'output <foo> {{...}}' (C++ code blocks) are copied
     # directly to the appropriate output section.
@@ -1404,17 +1686,10 @@ StaticInstPtr
         s = self.protectCpuSymbols(s)
         return substBitOps(s % self.templateMap)
 
-    def p_output_header(self, t):
-        'output_header : OUTPUT HEADER CODELIT SEMI'
-        t[0] = GenCode(self, header_output = self.process_output(t[3]))
-
-    def p_output_decoder(self, t):
-        'output_decoder : OUTPUT DECODER CODELIT SEMI'
-        t[0] = GenCode(self, decoder_output = self.process_output(t[3]))
-
-    def p_output_exec(self, t):
-        'output_exec : OUTPUT EXEC CODELIT SEMI'
-        t[0] = GenCode(self, exec_output = self.process_output(t[3]))
+    def p_output(self, t):
+        'output : OUTPUT output_type CODELIT SEMI'
+        kwargs = { t[2]+'_output' : self.process_output(t[3]) }
+        GenCode(self, **kwargs).emit()
 
     # global let blocks 'let {{...}}' (Python code blocks) are
     # executed directly when seen.  Note that these execute in a
@@ -1422,22 +1697,40 @@ StaticInstPtr
     # from polluting this script's namespace.
     def p_global_let(self, t):
         'global_let : LET CODELIT SEMI'
+        def _split(sec):
+            return self.split(sec)
         self.updateExportContext()
         self.exportContext["header_output"] = ''
         self.exportContext["decoder_output"] = ''
         self.exportContext["exec_output"] = ''
         self.exportContext["decode_block"] = ''
+        self.exportContext["split"] = _split
+        split_setup = '''
+def wrap(func):
+    def split(sec):
+        globals()[sec + '_output'] += func(sec)
+    return split
+split = wrap(split)
+del wrap
+'''
+        # This tricky setup (immediately above) allows us to just write
+        # (e.g.) "split('exec')" in the Python code and the split #ifdef's
+        # will automatically be added to the exec_output variable. The inner
+        # Python execution environment doesn't know about the split points,
+        # so we carefully inject and wrap a closure that can retrieve the
+        # next split's #define from the parser and add it to the current
+        # emission-in-progress.
         try:
-            exec fixPythonIndentation(t[2]) in self.exportContext
+            exec split_setup+fixPythonIndentation(t[2]) in self.exportContext
         except Exception, exc:
             if debug:
                 raise
             error(t, 'error: %s in global let block "%s".' % (exc, t[2]))
-        t[0] = GenCode(self,
-                       header_output=self.exportContext["header_output"],
-                       decoder_output=self.exportContext["decoder_output"],
-                       exec_output=self.exportContext["exec_output"],
-                       decode_block=self.exportContext["decode_block"])
+        GenCode(self,
+                header_output=self.exportContext["header_output"],
+                decoder_output=self.exportContext["decoder_output"],
+                exec_output=self.exportContext["exec_output"],
+                decode_block=self.exportContext["decode_block"]).emit()
 
     # Define the mapping from operand type extensions to C++ types and
     # bit widths (stored in operandTypeMap).
@@ -1450,7 +1743,6 @@ StaticInstPtr
                 raise
             error(t,
                   'error: %s in def operand_types block "%s".' % (exc, t[3]))
-        t[0] = GenCode(self) # contributes nothing to the output C++ file
 
     # Define the mapping from operand names to operand classes and
     # other traits.  Stored in operandNameMap.
@@ -1465,7 +1757,6 @@ StaticInstPtr
                 raise
             error(t, 'error: %s in def operands block "%s".' % (exc, t[3]))
         self.buildOperandNameMap(user_dict, t.lexer.lineno)
-        t[0] = GenCode(self) # contributes nothing to the output C++ file
 
     # A bitfield definition looks like:
     # 'def [signed] bitfield <ID> [<first>:<last>]'
@@ -1476,7 +1767,7 @@ StaticInstPtr
         if (t[2] == 'signed'):
             expr = 'sext<%d>(%s)' % (t[6] - t[8] + 1, expr)
         hash_define = '#undef %s\n#define %s\t%s\n' % (t[4], t[4], expr)
-        t[0] = GenCode(self, header_output=hash_define)
+        GenCode(self, header_output=hash_define).emit()
 
     # alternate form for single bit: 'def [signed] bitfield <ID> [<bit>]'
     def p_def_bitfield_1(self, t):
@@ -1485,7 +1776,7 @@ StaticInstPtr
         if (t[2] == 'signed'):
             expr = 'sext<%d>(%s)' % (1, expr)
         hash_define = '#undef %s\n#define %s\t%s\n' % (t[4], t[4], expr)
-        t[0] = GenCode(self, header_output=hash_define)
+        GenCode(self, header_output=hash_define).emit()
 
     # alternate form for structure member: 'def bitfield <ID> <ID>'
     def p_def_bitfield_struct(self, t):
@@ -1494,7 +1785,7 @@ StaticInstPtr
             error(t, 'error: structure bitfields are always unsigned.')
         expr = 'machInst.%s' % t[5]
         hash_define = '#undef %s\n#define %s\t%s\n' % (t[4], t[4], expr)
-        t[0] = GenCode(self, header_output=hash_define)
+        GenCode(self, header_output=hash_define).emit()
 
     def p_id_with_dot_0(self, t):
         'id_with_dot : ID'
@@ -1514,8 +1805,9 @@ StaticInstPtr
 
     def p_def_template(self, t):
         'def_template : DEF TEMPLATE ID CODELIT SEMI'
+        if t[3] in self.templateMap:
+            print "warning: template %s already defined" % t[3]
         self.templateMap[t[3]] = Template(self, t[4])
-        t[0] = GenCode(self)
 
     # An instruction format definition looks like
     # "def format <fmt>(<params>) {{...}};"
@@ -1523,7 +1815,6 @@ StaticInstPtr
         'def_format : DEF FORMAT ID LPAREN param_list RPAREN CODELIT SEMI'
         (id, params, code) = (t[3], t[5], t[7])
         self.defFormat(id, params, code, t.lexer.lineno)
-        t[0] = GenCode(self)
 
     # The formal parameter list for an instruction format is a
     # possibly empty list of comma-separated parameters.  Positional
@@ -1594,6 +1885,18 @@ StaticInstPtr
     # A decode block looks like:
     #       decode <field1> [, <field2>]* [default <inst>] { ... }
     #
+    def p_top_level_decode_block(self, t):
+        'top_level_decode_block : decode_block'
+        codeObj = t[1]
+        codeObj.wrap_decode_block('''
+StaticInstPtr
+%(isa_name)s::Decoder::decodeInst(%(isa_name)s::ExtMachInst machInst)
+{
+    using namespace %(namespace)s;
+''' % self, '}')
+
+        codeObj.emit()
+
     def p_decode_block(self, t):
         'decode_block : DECODE ID opt_default LBRACE decode_stmt_list RBRACE'
         default_defaults = self.defaultStack.pop()
@@ -2008,28 +2311,21 @@ StaticInstPtr
         else:
             return s
 
-    def update_if_needed(self, file, contents):
-        '''Update the output file only if the new contents are
-        different from the current contents.  Minimizes the files that
-        need to be rebuilt after minor changes.'''
+    def open(self, name, bare=False):
+        '''Open the output file for writing and include scary warning.'''
+        filename = os.path.join(self.output_dir, name)
+        f = open(filename, 'w')
+        if f:
+            if not bare:
+                f.write(ISAParser.scaremonger_template % self)
+        return f
 
-        file = os.path.join(self.output_dir, file)
-        update = False
-        if os.access(file, os.R_OK):
-            f = open(file, 'r')
-            old_contents = f.read()
-            f.close()
-            if contents != old_contents:
-                os.remove(file) # in case it's write-protected
-                update = True
-            else:
-                print 'File', file, 'is unchanged'
-        else:
-            update = True
-        if update:
-            f = open(file, 'w')
-            f.write(contents)
-            f.close()
+    def update(self, file, contents):
+        '''Update the output file only.  Scons should handle the case when
+        the new contents are unchanged using its built-in hash feature.'''
+        f = self.open(file)
+        f.write(contents)
+        f.close()
 
     # This regular expression matches '##include' directives
     includeRE = re.compile(r'^\s*##include\s+"(?P<filename>[^"]*)".*$',
@@ -2067,8 +2363,24 @@ StaticInstPtr
         self.fileNameStack.pop()
         return contents
 
+    AlreadyGenerated = {}
+
     def _parse_isa_desc(self, isa_desc_file):
         '''Read in and parse the ISA description.'''
+
+        # The build system can end up running the ISA parser twice: once to
+        # finalize the build dependencies, and then to actually generate
+        # the files it expects (in src/arch/$ARCH/generated). This code
+        # doesn't do anything different either time, however; the SCons
+        # invocations just expect different things. Since this code runs
+        # within SCons, we can just remember that we've already run and
+        # not perform a completely unnecessary run, since the ISA parser's
+        # effect is idempotent.
+        if isa_desc_file in ISAParser.AlreadyGenerated:
+            return
+
+        # grab the last three path components of isa_desc_file
+        self.filename = '/'.join(isa_desc_file.split('/')[-3:])
 
         # Read file and (recursively) all included files into a string.
         # PLY requires that the input be in a single string so we have to
@@ -2078,47 +2390,10 @@ StaticInstPtr
         # Initialize filename stack with outer file.
         self.fileNameStack.push((isa_desc_file, 0))
 
-        # Parse it.
-        (isa_name, namespace, global_code, namespace_code) = \
-                   self.parse_string(isa_desc)
+        # Parse.
+        self.parse_string(isa_desc)
 
-        # grab the last three path components of isa_desc_file to put in
-        # the output
-        filename = '/'.join(isa_desc_file.split('/')[-3:])
-
-        # generate decoder.hh
-        includes = '#include "base/bitfield.hh" // for bitfield support'
-        global_output = global_code.header_output
-        namespace_output = namespace_code.header_output
-        decode_function = ''
-        self.update_if_needed('decoder.hh', file_template % vars())
-
-        # generate decoder.cc
-        includes = '#include "decoder.hh"'
-        global_output = global_code.decoder_output
-        namespace_output = namespace_code.decoder_output
-        # namespace_output += namespace_code.decode_block
-        decode_function = namespace_code.decode_block
-        self.update_if_needed('decoder.cc', file_template % vars())
-
-        # generate per-cpu exec files
-        for cpu in self.cpuModels:
-            includes = '#include "decoder.hh"\n'
-            includes += cpu.includes
-            global_output = global_code.exec_output[cpu.name]
-            namespace_output = namespace_code.exec_output[cpu.name]
-            decode_function = ''
-            self.update_if_needed(cpu.filename, file_template % vars())
-
-        # The variable names here are hacky, but this will creat local
-        # variables which will be referenced in vars() which have the
-        # value of the globals.
-        MaxInstSrcRegs = self.maxInstSrcRegs
-        MaxInstDestRegs = self.maxInstDestRegs
-        MaxMiscDestRegs = self.maxMiscDestRegs
-        # max_inst_regs.hh
-        self.update_if_needed('max_inst_regs.hh',
-                              max_inst_regs_template % vars())
+        ISAParser.AlreadyGenerated[isa_desc_file] = None
 
     def parse_isa_desc(self, *args, **kwargs):
         try:
@@ -2127,8 +2402,6 @@ StaticInstPtr
             e.exit(self.fileNameStack)
 
 # Called as script: get args from command line.
-# Args are: <path to cpu_models.py> <isa desc file> <output dir> <cpu models>
+# Args are: <isa desc file> <output dir>
 if __name__ == '__main__':
-    execfile(sys.argv[1])  # read in CpuModel definitions
-    cpu_models = [CpuModel.dict[cpu] for cpu in sys.argv[4:]]
-    ISAParser(sys.argv[3], cpu_models).parse_isa_desc(sys.argv[2])
+    ISAParser(sys.argv[2]).parse_isa_desc(sys.argv[1])

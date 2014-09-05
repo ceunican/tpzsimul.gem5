@@ -44,6 +44,8 @@
 
 #include "arch/registers.hh"
 #include "config/the_isa.hh"
+#include "cpu/base.hh"
+#include "cpu/thread_context.hh"
 #include "debug/LLSC.hh"
 #include "debug/MemoryAccess.hh"
 #include "mem/abstract_mem.hh"
@@ -260,6 +262,12 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
             if (i->addr == paddr) {
                 DPRINTF(LLSC, "Erasing lock record: context %d addr %#x\n",
                         i->contextId, paddr);
+                // For ARM, a spinlock would typically include a Wait
+                // For Event (WFE) to conserve energy. The ARMv8
+                // architecture specifies that an event is
+                // automatically generated when clearing the exclusive
+                // monitor to wake up the processor in WFE.
+                system()->getThreadContext(i->contextId)->getCpuPtr()->wakeup();
                 i = lockedAddrList.erase(i);
             } else {
                 i++;
@@ -273,10 +281,12 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
 
 #if TRACING_ON
 
-#define CASE(A, T)                                                      \
-  case sizeof(T):                                                       \
-    DPRINTF(MemoryAccess,"%s of size %i on address 0x%x data 0x%x\n",   \
-            A, pkt->getSize(), pkt->getAddr(), pkt->get<T>());          \
+#define CASE(A, T)                                                        \
+  case sizeof(T):                                                         \
+    DPRINTF(MemoryAccess,"%s from %s of size %i on address 0x%x data " \
+            "0x%x %c\n", A, system()->getMasterName(pkt->req->masterId()),\
+            pkt->getSize(), pkt->getAddr(), pkt->get<T>(),                \
+            pkt->req->isUncacheable() ? 'U' : 'C');                       \
   break
 
 
@@ -288,10 +298,12 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
           CASE(A, uint16_t);                                            \
           CASE(A, uint8_t);                                             \
           default:                                                      \
-            DPRINTF(MemoryAccess, "%s of size %i on address 0x%x\n",    \
-                    A, pkt->getSize(), pkt->getAddr());                 \
-            DDUMP(MemoryAccess, pkt->getPtr<uint8_t>(), pkt->getSize());\
-        }                                                               \
+            DPRINTF(MemoryAccess, "%s from %s of size %i on address 0x%x %c\n",\
+                    A, system()->getMasterName(pkt->req->masterId()),          \
+                    pkt->getSize(), pkt->getAddr(),                            \
+                    pkt->req->isUncacheable() ? 'U' : 'C');                    \
+            DDUMP(MemoryAccess, pkt->getPtr<uint8_t>(), pkt->getSize());       \
+        }                                                                      \
     } while (0)
 
 #else

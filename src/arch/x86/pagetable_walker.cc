@@ -63,23 +63,6 @@
 
 namespace X86ISA {
 
-// Unfortunately, the placement of the base field in a page table entry is
-// very erratic and would make a mess here. It might be moved here at some
-// point in the future.
-BitUnion64(PageTableEntry)
-    Bitfield<63> nx;
-    Bitfield<11, 9> avl;
-    Bitfield<8> g;
-    Bitfield<7> ps;
-    Bitfield<6> d;
-    Bitfield<5> a;
-    Bitfield<4> pcd;
-    Bitfield<3> pwt;
-    Bitfield<2> u;
-    Bitfield<1> w;
-    Bitfield<0> p;
-EndBitUnion(PageTableEntry)
-
 Fault
 Walker::start(ThreadContext * _tc, BaseTLB::Translation *_translation,
               RequestPtr _req, BaseTLB::Mode _mode)
@@ -165,8 +148,18 @@ Walker::recvRetry()
 
 bool Walker::sendTiming(WalkerState* sendingState, PacketPtr pkt)
 {
-    pkt->pushSenderState(new WalkerSenderState(sendingState));
-    return port.sendTimingReq(pkt);
+    WalkerSenderState* walker_state = new WalkerSenderState(sendingState);
+    pkt->pushSenderState(walker_state);
+    if (port.sendTimingReq(pkt)) {
+        return true;
+    } else {
+        // undo the adding of the sender state and delete it, as we
+        // will do it again the next time we attempt to send it
+        pkt->popSenderState();
+        delete walker_state;
+        return false;
+    }
+
 }
 
 BaseMasterPort &
@@ -223,7 +216,7 @@ Fault
 Walker::WalkerState::startWalk()
 {
     Fault fault = NoFault;
-    assert(started == false);
+    assert(!started);
     started = true;
     setupWalk(req->getVaddr());
     if (timing) {
@@ -252,7 +245,7 @@ Fault
 Walker::WalkerState::startFunctional(Addr &addr, unsigned &logBytes)
 {
     Fault fault = NoFault;
-    assert(started == false);
+    assert(!started);
     started = true;
     setupWalk(addr);
 
@@ -598,9 +591,11 @@ Walker::WalkerState::recvPacket(PacketPtr pkt)
     assert(pkt->isResponse());
     assert(inflight);
     assert(state == Waiting);
-    assert(!read);
     inflight--;
     if (pkt->isRead()) {
+        // should not have a pending read it we also had one outstanding
+        assert(!read);
+
         // @todo someone should pay for this
         pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
 

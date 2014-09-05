@@ -36,10 +36,12 @@ class RubyController(ClockedObject):
     cxx_header = "mem/ruby/slicc_interface/AbstractController.hh"
     abstract = True
     version = Param.Int("")
-    cntrl_id = Param.Int("")
+    cluster_id = Param.UInt32(0, "Id of this controller's cluster")
+
     transitions_per_cycle = \
         Param.Int(32, "no. of  SLICC state machine transitions per cycle")
-    buffer_size = Param.Int(0, "max buffer size 0 means infinite")
+    buffer_size = Param.UInt32(0, "max buffer size 0 means infinite")
+
     recycle_latency = Param.Cycles(10, "")
     number_of_TBEs = Param.Int(256, "")
     ruby_system = Param.RubySystem("")

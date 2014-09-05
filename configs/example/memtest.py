@@ -83,6 +83,10 @@ parser.add_option("--progress", type="int", default=1000,
                   metavar="NLOADS",
                   help="Progress message interval "
                   "[default: %default]")
+parser.add_option("--sys-clock", action="store", type="string",
+                  default='1GHz',
+                  help = """Top-level clock for blocks running at system
+                  speed""")
 
 (options, args) = parser.parse_args()
 
@@ -110,7 +114,7 @@ if len(treespec) < 1:
 
 # define prototype L1 cache
 proto_l1 = BaseCache(size = '32kB', assoc = 4,
-                     hit_latency = '1ns', response_latency = '1ns',
+                     hit_latency = 1, response_latency = 1,
                      tgts_per_mshr = 8)
 
 if options.blocking:
@@ -135,7 +139,8 @@ for scale in treespec[:-2]:
      prev = prototypes[0]
      next = prev()
      next.size = prev.size * scale
-     next.latency = prev.latency * 10
+     next.hit_latency = prev.hit_latency * 10
+     next.response_latency = prev.response_latency * 10
      next.assoc = prev.assoc * scale
      next.mshrs = prev.mshrs * scale
      prototypes.insert(0, next)
@@ -145,7 +150,12 @@ system = System(funcmem = SimpleMemory(in_addr_map = False),
                 funcbus = NoncoherentBus(),
                 physmem = SimpleMemory(latency = "100ns"),
                 cache_line_size = block_size)
-system.clk_domain = SrcClockDomain(clock =  options.sys_clock)
+
+
+system.voltage_domain = VoltageDomain(voltage = '1V')
+
+system.clk_domain = SrcClockDomain(clock =  options.sys_clock,
+                        voltage_domain = system.voltage_domain)
 
 def make_level(spec, prototypes, attach_obj, attach_port):
      fanout = spec[0]

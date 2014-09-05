@@ -70,18 +70,30 @@ namespace X86ISA
         void setMiscReg(int miscReg, MiscReg val, ThreadContext *tc);
 
         int
-        flattenIntIndex(int reg)
+        flattenIntIndex(int reg) const
         {
             return reg & ~IntFoldBit;
         }
 
         int
-        flattenFloatIndex(int reg)
+        flattenFloatIndex(int reg) const
         {
             if (reg >= NUM_FLOATREGS) {
                 reg = FLOATREG_STACK(reg - NUM_FLOATREGS,
                                      regVal[MISCREG_X87_TOP]);
             }
+            return reg;
+        }
+
+        int
+        flattenCCIndex(int reg) const
+        {
+            return reg;
+        }
+
+        int
+        flattenMiscIndex(int reg) const
+        {
             return reg;
         }
 

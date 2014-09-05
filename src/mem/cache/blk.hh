@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2014 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -70,7 +70,12 @@ enum CacheBlkStatusBits {
     /** block was referenced */
     BlkReferenced =     0x10,
     /** block was a hardware prefetch yet unaccessed*/
-    BlkHWPrefetched =   0x20
+    BlkHWPrefetched =   0x20,
+    /** block holds data from the secure memory space */
+    BlkSecure =         0x40,
+    /** can the block transition to E? (hasn't been shared with another cache)
+      * used to close a timing gap when handling WriteInvalidate packets */
+    BlkCanGoExclusive = 0x80
 };
 
 /**
@@ -80,6 +85,9 @@ enum CacheBlkStatusBits {
 class CacheBlk
 {
   public:
+    /** Task Id associated with this block */
+    uint32_t task_id;
+
     /** The address space ID of this block. */
     int asid;
     /** Data block tag value. */
@@ -118,6 +126,8 @@ class CacheBlk
 
     /** holds the source requestor ID for this block. */
     int srcMasterId;
+
+    Tick tickInserted;
 
   protected:
     /**
@@ -162,9 +172,11 @@ class CacheBlk
   public:
 
     CacheBlk()
-        : asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
+        : task_id(ContextSwitchTaskId::Unknown),
+          asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
           set(-1), isTouched(false), refCount(0),
-          srcMasterId(Request::invldMasterId)
+          srcMasterId(Request::invldMasterId),
+          tickInserted(0)
     {}
 
     /**
@@ -182,6 +194,7 @@ class CacheBlk
         whenReady = rhs.whenReady;
         set = rhs.set;
         refCount = rhs.refCount;
+        task_id = rhs.task_id;
         return *this;
     }
 
@@ -255,6 +268,15 @@ class CacheBlk
     }
 
     /**
+     * Check if this block holds data from the secure memory space.
+     * @return True if the block holds data from the secure memory space.
+     */
+    bool isSecure() const
+    {
+        return (status & BlkSecure) != 0;
+    }
+
+    /**
      * Track the fact that a local locked was issued to the block.  If
      * multiple LLs get issued from the same context we could have
      * redundant records on the list, but that's OK, as they'll all
@@ -320,8 +342,8 @@ class CacheBlk
           default:    s = 'T'; break; // @TODO add other types
         }
         return csprintf("state: %x (%c) valid: %d writable: %d readable: %d "
-                        "dirty: %d tag: %x data: %x", status, s, isValid(),
-                        isWritable(), isReadable(), isDirty(), tag, *data);
+                        "dirty: %d tag: %x", status, s, isValid(),
+                        isWritable(), isReadable(), isDirty(), tag);
     }
 
     /**

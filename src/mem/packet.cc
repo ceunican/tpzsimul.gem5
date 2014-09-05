@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2014 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -98,11 +98,11 @@ MemCmd::commandInfo[] =
     /* HardPFResp */
     { SET4(IsRead, IsResponse, IsHWPrefetch, HasData),
             InvalidCmd, "HardPFResp" },
-    /* WriteInvalidateReq (currently unused, see packet.hh) */
+    /* WriteInvalidateReq */
     { SET6(IsWrite, NeedsExclusive, IsInvalidate,
            IsRequest, HasData, NeedsResponse),
             WriteInvalidateResp, "WriteInvalidateReq" },
-    /* WriteInvalidateResp (currently unused, see packet.hh) */
+    /* WriteInvalidateResp */
     { SET3(IsWrite, NeedsExclusive, IsResponse),
             InvalidCmd, "WriteInvalidateResp" },
     /* UpgradeReq */
@@ -115,12 +115,13 @@ MemCmd::commandInfo[] =
     /* UpgradeResp */
     { SET3(NeedsExclusive, IsUpgrade, IsResponse),
             InvalidCmd, "UpgradeResp" },
-    /* SCUpgradeFailReq: generates UpgradeFailResp ASAP */
-    { SET5(IsInvalidate, NeedsExclusive, IsLlsc,
-           IsRequest, NeedsResponse),
+    /* SCUpgradeFailReq: generates UpgradeFailResp but still gets the data */
+    { SET6(IsRead, NeedsExclusive, IsInvalidate,
+           IsLlsc, IsRequest, NeedsResponse),
             UpgradeFailResp, "SCUpgradeFailReq" },
-    /* UpgradeFailResp */
-    { SET2(NeedsExclusive, IsResponse),
+    /* UpgradeFailResp - Behaves like a ReadExReq, but notifies an SC
+     * that it has failed, acquires line as Dirty*/
+    { SET4(IsRead, NeedsExclusive, IsResponse, HasData),
             InvalidCmd, "UpgradeFailResp" },
     /* ReadExReq */
     { SET5(IsRead, NeedsExclusive, IsInvalidate, IsRequest, NeedsResponse),
@@ -136,7 +137,7 @@ MemCmd::commandInfo[] =
     { SET6(IsWrite, NeedsExclusive, IsLlsc,
            IsRequest, NeedsResponse, HasData),
             StoreCondResp, "StoreCondReq" },
-    /* StoreCondFailReq: generates failing StoreCondResp ASAP */
+    /* StoreCondFailReq: generates failing StoreCondResp */
     { SET6(IsWrite, NeedsExclusive, IsLlsc,
            IsRequest, NeedsResponse, HasData),
             StoreCondResp, "StoreCondFailReq" },
@@ -172,14 +173,16 @@ MemCmd::commandInfo[] =
 };
 
 bool
-Packet::checkFunctional(Printable *obj, Addr addr, int size, uint8_t *data)
+Packet::checkFunctional(Printable *obj, Addr addr, bool is_secure, int size,
+                        uint8_t *data)
 {
     Addr func_start = getAddr();
     Addr func_end   = getAddr() + getSize() - 1;
     Addr val_start  = addr;
     Addr val_end    = val_start + size - 1;
 
-    if (func_start > val_end || val_start > func_end) {
+    if (is_secure != _isSecure || func_start > val_end ||
+        val_start > func_end) {
         // no intersection
         return false;
     }

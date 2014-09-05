@@ -39,6 +39,7 @@
 #include "arch/alpha/types.hh"
 #include "base/types.hh"
 #include "sim/sim_object.hh"
+#include "sim/system.hh"
 
 struct AlphaISAParams;
 class BaseCPU;
@@ -55,6 +56,9 @@ namespace AlphaISA
         typedef AlphaISAParams Params;
 
       protected:
+        // Parent system
+        System *system;
+
         uint64_t fpcr;       // floating point condition codes
         uint64_t uniq;       // process-unique register
         bool lock_flag;      // lock flag for LL/SC
@@ -92,13 +96,26 @@ namespace AlphaISA
         void unserialize(Checkpoint *cp, const std::string &section);
 
         int
-        flattenIntIndex(int reg)
+        flattenIntIndex(int reg) const
         {
             return reg;
         }
 
         int
-        flattenFloatIndex(int reg)
+        flattenFloatIndex(int reg) const
+        {
+            return reg;
+        }
+
+        // dummy
+        int
+        flattenCCIndex(int reg) const
+        {
+            return reg;
+        }
+
+        int
+        flattenMiscIndex(int reg) const
         {
             return reg;
         }

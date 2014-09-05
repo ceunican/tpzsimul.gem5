@@ -60,7 +60,9 @@ BasePrefetcher::BasePrefetcher(const Params *p)
     : ClockedObject(p), size(p->size), latency(p->latency), degree(p->degree),
       useMasterId(p->use_master_id), pageStop(!p->cross_pages),
       serialSquash(p->serial_squash), onlyData(p->data_accesses_only),
-      system(p->sys), masterId(system->getMasterId(name()))
+      onMissOnly(p->on_miss_only), onReadOnly(p->on_read_only),
+      onPrefetch(p->on_prefetch), system(p->sys),
+      masterId(system->getMasterId(name()))
 {
 }
 
@@ -122,9 +124,9 @@ BasePrefetcher::regStats()
 }
 
 inline bool
-BasePrefetcher::inCache(Addr addr)
+BasePrefetcher::inCache(Addr addr, bool is_secure)
 {
-    if (cache->inCache(addr)) {
+    if (cache->inCache(addr, is_secure)) {
         pfCacheHit++;
         return true;
     }
@@ -132,9 +134,9 @@ BasePrefetcher::inCache(Addr addr)
 }
 
 inline bool
-BasePrefetcher::inMissQueue(Addr addr)
+BasePrefetcher::inMissQueue(Addr addr, bool is_secure)
 {
-    if (cache->inMissQueue(addr)) {
+    if (cache->inMissQueue(addr, is_secure)) {
         pfMSHRHit++;
         return true;
     }
@@ -157,12 +159,14 @@ BasePrefetcher::getPacket()
         pf.pop_front();
 
         Addr blk_addr = pkt->getAddr() & ~(Addr)(blkSize-1);
+        bool is_secure = pkt->isSecure();
 
-        if (!inCache(blk_addr) && !inMissQueue(blk_addr))
+        if (!inCache(blk_addr, is_secure) && !inMissQueue(blk_addr, is_secure))
             // we found a prefetch, return it
             break;
 
-        DPRINTF(HWPrefetch, "addr 0x%x in cache, skipping\n", pkt->getAddr());
+        DPRINTF(HWPrefetch, "addr 0x%x (%s) in cache, skipping\n",
+                pkt->getAddr(), is_secure ? "s" : "ns");
         delete pkt->req;
         delete pkt;
 
@@ -174,7 +178,8 @@ BasePrefetcher::getPacket()
 
     pfIssued++;
     assert(pkt != NULL);
-    DPRINTF(HWPrefetch, "returning 0x%x\n", pkt->getAddr());
+    DPRINTF(HWPrefetch, "returning 0x%x (%s)\n", pkt->getAddr(),
+            pkt->isSecure() ? "s" : "ns");
     return pkt;
 }
 
@@ -182,15 +187,25 @@ BasePrefetcher::getPacket()
 Tick
 BasePrefetcher::notify(PacketPtr &pkt, Tick tick)
 {
-    if (!pkt->req->isUncacheable() && !(pkt->req->isInstFetch() && onlyData)) {
+    // Don't consult the prefetcher if any of the following conditons are true
+    // 1) The request is uncacheable
+    // 2) The request is a fetch, but we are only prefeching data
+    // 3) The request is a cache hit, but we are only training on misses
+    // 4) THe request is a write, but we are only training on reads
+    if (!pkt->req->isUncacheable() && !(pkt->req->isInstFetch() && onlyData) &&
+        !(onMissOnly && inCache(pkt->getAddr(), true)) &&
+        !(onReadOnly && !pkt->isRead())) {
         // Calculate the blk address
         Addr blk_addr = pkt->getAddr() & ~(Addr)(blkSize-1);
+        bool is_secure = pkt->isSecure();
 
         // Check if miss is in pfq, if so remove it
-        std::list<DeferredPacket>::iterator iter = inPrefetch(blk_addr);
+        std::list<DeferredPacket>::iterator iter = inPrefetch(blk_addr,
+                                                              is_secure);
         if (iter != pf.end()) {
             DPRINTF(HWPrefetch, "Saw a miss to a queued prefetch addr: "
-                    "0x%x, removing it\n", blk_addr);
+                    "0x%x (%s), removing it\n", blk_addr,
+                    is_secure ? "s" : "ns");
             pfRemovedMSHR++;
             delete iter->pkt->req;
             delete iter->pkt;
@@ -239,7 +254,7 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick tick)
                     addr, *delayIter, time);
 
             // Check if it is already in the pf buffer
-            if (inPrefetch(addr) != pf.end()) {
+            if (inPrefetch(addr, is_secure) != pf.end()) {
                 pfBufferHit++;
                 DPRINTF(HWPrefetch, "Prefetch addr already in pf buffer\n");
                 continue;
@@ -247,11 +262,19 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick tick)
 
             // create a prefetch memreq
             Request *prefetchReq = new Request(*addrIter, blkSize, 0, masterId);
+            if (is_secure)
+                prefetchReq->setFlags(Request::SECURE);
+            prefetchReq->taskId(ContextSwitchTaskId::Prefetcher);
             PacketPtr prefetch =
                 new Packet(prefetchReq, MemCmd::HardPFReq);
             prefetch->allocate();
             prefetch->req->setThreadContext(pkt->req->contextId(),
                                             pkt->req->threadId());
+
+            // Tag orefetch reqeuests with corresponding PC to train lower
+            // cache-level prefetchers
+            if (onPrefetch && pkt->req->hasPC())
+                prefetch->req->setPC(pkt->req->getPC());
 
             // We just remove the head if we are full
             if (pf.size() == size) {
@@ -273,12 +296,13 @@ BasePrefetcher::notify(PacketPtr &pkt, Tick tick)
 }
 
 std::list<BasePrefetcher::DeferredPacket>::iterator
-BasePrefetcher::inPrefetch(Addr address)
+BasePrefetcher::inPrefetch(Addr address, bool is_secure)
 {
     // Guaranteed to only be one match, we always check before inserting
     std::list<DeferredPacket>::iterator iter;
     for (iter = pf.begin(); iter != pf.end(); iter++) {
-        if ((iter->pkt->getAddr() & ~(Addr)(blkSize-1)) == address) {
+        if (((*iter).pkt->getAddr() & ~(Addr)(blkSize-1)) == address &&
+            (*iter).pkt->isSecure() == is_secure) {
             return iter;
         }
     }
@@ -288,7 +312,7 @@ BasePrefetcher::inPrefetch(Addr address)
 bool
 BasePrefetcher::samePage(Addr a, Addr b)
 {
-    return roundDown(a, TheISA::VMPageSize) == roundDown(b, TheISA::VMPageSize);
+    return roundDown(a, TheISA::PageBytes) == roundDown(b, TheISA::PageBytes);
 }
 
 

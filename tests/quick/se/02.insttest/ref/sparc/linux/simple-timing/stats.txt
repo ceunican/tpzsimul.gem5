@@ -4,13 +4,15 @@ sim_seconds                                  0.000041                       # Nu
 sim_ticks                                    41368000                       # Number of ticks simulated
 final_tick                                   41368000                       # Number of ticks from beginning of simulation (restored from checkpoints and never reset)
 sim_freq                                 1000000000000                       # Frequency of simulated ticks
-host_inst_rate                                 554996                       # Simulator instruction rate (inst/s)
-host_op_rate                                   554737                       # Simulator op (including micro ops) rate (op/s)
-host_tick_rate                             1512828488                       # Simulator tick rate (ticks/s)
-host_mem_usage                                 230824                       # Number of bytes of host memory used
-host_seconds                                     0.03                       # Real time elapsed on the host
+host_inst_rate                                 324057                       # Simulator instruction rate (inst/s)
+host_op_rate                                   323947                       # Simulator op (including micro ops) rate (op/s)
+host_tick_rate                              883591781                       # Simulator tick rate (ticks/s)
+host_mem_usage                                 269720                       # Number of bytes of host memory used
+host_seconds                                     0.05                       # Real time elapsed on the host
 sim_insts                                       15162                       # Number of instructions simulated
 sim_ops                                         15162                       # Number of ops (including micro ops) simulated
+system.voltage_domain.voltage                       1                       # Voltage in Volts
+system.clk_domain.clock                          1000                       # Clock period in ticks
 system.physmem.bytes_read::cpu.inst             17792                       # Number of bytes read from this memory
 system.physmem.bytes_read::cpu.data              8832                       # Number of bytes read from this memory
 system.physmem.bytes_read::total                26624                       # Number of bytes read from this memory
@@ -42,6 +44,7 @@ system.membus.reqLayer0.occupancy              416000                       # La
 system.membus.reqLayer0.utilization               1.0                       # Layer utilization (%)
 system.membus.respLayer1.occupancy            3744000                       # Layer occupancy (ticks)
 system.membus.respLayer1.utilization              9.1                       # Layer utilization (%)
+system.cpu_clk_domain.clock                       500                       # Clock period in ticks
 system.cpu.workload.num_syscalls                   18                       # Number of system calls
 system.cpu.numCycles                            82736                       # number of cpu cycles simulated
 system.cpu.numWorkItemsStarted                      0                       # number of work items this cpu started
@@ -65,6 +68,42 @@ system.cpu.num_idle_cycles                          0                       # Nu
 system.cpu.num_busy_cycles                      82736                       # Number of busy cycles
 system.cpu.not_idle_fraction                        1                       # Percentage of non-idle cycles
 system.cpu.idle_fraction                            0                       # Percentage of idle cycles
+system.cpu.Branches                              3363                       # Number of branches fetched
+system.cpu.op_class::No_OpClass                   726      4.77%      4.77% # Class of executed instruction
+system.cpu.op_class::IntAlu                     10798     71.01%     75.78% # Class of executed instruction
+system.cpu.op_class::IntMult                        0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::IntDiv                         0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatAdd                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatCmp                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatCvt                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatMult                      0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatDiv                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::FloatSqrt                      0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdAdd                        0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdAddAcc                     0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdAlu                        0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdCmp                        0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdCvt                        0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdMisc                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdMult                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdMultAcc                    0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdShift                      0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdShiftAcc                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdSqrt                       0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatAdd                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatAlu                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatCmp                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatCvt                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatDiv                   0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatMisc                  0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatMult                  0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatMultAcc               0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::SimdFloatSqrt                  0      0.00%     75.78% # Class of executed instruction
+system.cpu.op_class::MemRead                     2231     14.67%     90.45% # Class of executed instruction
+system.cpu.op_class::MemWrite                    1452      9.55%    100.00% # Class of executed instruction
+system.cpu.op_class::IprAccess                      0      0.00%    100.00% # Class of executed instruction
+system.cpu.op_class::InstPrefetch                   0      0.00%    100.00% # Class of executed instruction
+system.cpu.op_class::total                      15207                       # Class of executed instruction
 system.cpu.icache.tags.replacements                 0                       # number of replacements
 system.cpu.icache.tags.tagsinuse           153.782734                       # Cycle average of tags in use
 system.cpu.icache.tags.total_refs               14928                       # Total number of references to valid blocks.
@@ -74,6 +113,12 @@ system.cpu.icache.tags.warmup_cycle                 0                       # Cy
 system.cpu.icache.tags.occ_blocks::cpu.inst   153.782734                       # Average occupied blocks per requestor
 system.cpu.icache.tags.occ_percent::cpu.inst     0.075089                       # Average percentage of cache occupancy
 system.cpu.icache.tags.occ_percent::total     0.075089                       # Average percentage of cache occupancy
+system.cpu.icache.tags.occ_task_id_blocks::1024          280                       # Occupied blocks per task id
+system.cpu.icache.tags.age_task_id_blocks_1024::0           46                       # Occupied blocks per task id
+system.cpu.icache.tags.age_task_id_blocks_1024::1          234                       # Occupied blocks per task id
+system.cpu.icache.tags.occ_task_id_percent::1024     0.136719                       # Percentage of cache occupancy per task id
+system.cpu.icache.tags.tag_accesses             30696                       # Number of tag accesses
+system.cpu.icache.tags.data_accesses            30696                       # Number of data accesses
 system.cpu.icache.ReadReq_hits::cpu.inst        14928                       # number of ReadReq hits
 system.cpu.icache.ReadReq_hits::total           14928                       # number of ReadReq hits
 system.cpu.icache.demand_hits::cpu.inst         14928                       # number of demand (read+write) hits
@@ -154,6 +199,12 @@ system.cpu.l2cache.tags.occ_blocks::cpu.data    31.521152                       
 system.cpu.l2cache.tags.occ_percent::cpu.inst     0.004673                       # Average percentage of cache occupancy
 system.cpu.l2cache.tags.occ_percent::cpu.data     0.000962                       # Average percentage of cache occupancy
 system.cpu.l2cache.tags.occ_percent::total     0.005635                       # Average percentage of cache occupancy
+system.cpu.l2cache.tags.occ_task_id_blocks::1024          331                       # Occupied blocks per task id
+system.cpu.l2cache.tags.age_task_id_blocks_1024::0           56                       # Occupied blocks per task id
+system.cpu.l2cache.tags.age_task_id_blocks_1024::1          275                       # Occupied blocks per task id
+system.cpu.l2cache.tags.occ_task_id_percent::1024     0.010101                       # Percentage of cache occupancy per task id
+system.cpu.l2cache.tags.tag_accesses             3760                       # Number of tag accesses
+system.cpu.l2cache.tags.data_accesses            3760                       # Number of data accesses
 system.cpu.l2cache.ReadReq_hits::cpu.inst            2                       # number of ReadReq hits
 system.cpu.l2cache.ReadReq_hits::total              2                       # number of ReadReq hits
 system.cpu.l2cache.demand_hits::cpu.inst            2                       # number of demand (read+write) hits
@@ -277,6 +328,12 @@ system.cpu.dcache.tags.warmup_cycle                 0                       # Cy
 system.cpu.dcache.tags.occ_blocks::cpu.data    97.994344                       # Average occupied blocks per requestor
 system.cpu.dcache.tags.occ_percent::cpu.data     0.023924                       # Average percentage of cache occupancy
 system.cpu.dcache.tags.occ_percent::total     0.023924                       # Average percentage of cache occupancy
+system.cpu.dcache.tags.occ_task_id_blocks::1024          138                       # Occupied blocks per task id
+system.cpu.dcache.tags.age_task_id_blocks_1024::0           11                       # Occupied blocks per task id
+system.cpu.dcache.tags.age_task_id_blocks_1024::1          127                       # Occupied blocks per task id
+system.cpu.dcache.tags.occ_task_id_percent::1024     0.033691                       # Percentage of cache occupancy per task id
+system.cpu.dcache.tags.tag_accesses              7484                       # Number of tag accesses
+system.cpu.dcache.tags.data_accesses             7484                       # Number of data accesses
 system.cpu.dcache.ReadReq_hits::cpu.data         2172                       # number of ReadReq hits
 system.cpu.dcache.ReadReq_hits::total            2172                       # number of ReadReq hits
 system.cpu.dcache.WriteReq_hits::cpu.data         1357                       # number of WriteReq hits

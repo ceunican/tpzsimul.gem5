@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2011-2012 ARM Limited
+ * Copyright (c) 2011-2012, 2014 ARM Limited
+ * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -40,6 +41,9 @@
  * Authors: Korey Sewell
  */
 
+#ifndef __CPU_O3_LSQ_IMPL_HH__
+#define __CPU_O3_LSQ_IMPL_HH__
+
 #include <algorithm>
 #include <list>
 #include <string>
@@ -58,8 +62,7 @@ LSQ<Impl>::LSQ(O3CPU *cpu_ptr, IEW *iew_ptr, DerivO3CPUParams *params)
     : cpu(cpu_ptr), iewStage(iew_ptr),
       LQEntries(params->LQEntries),
       SQEntries(params->SQEntries),
-      numThreads(params->numThreads),
-      retryTid(-1)
+      numThreads(params->numThreads)
 {
     assert(numThreads > 0 && numThreads <= Impl::MaxThreads);
 
@@ -168,11 +171,6 @@ LSQ<Impl>::isDrained() const
 
     if (!sqEmpty()) {
         DPRINTF(Drain, "Not drained, SQ not empty.\n");
-        drained = false;
-    }
-
-    if (retryTid != InvalidThreadID) {
-        DPRINTF(Drain, "Not drained, the LSQ has blocked the caches.\n");
         drained = false;
     }
 
@@ -334,16 +332,11 @@ template <class Impl>
 void
 LSQ<Impl>::recvRetry()
 {
-    if (retryTid == InvalidThreadID)
-    {
-        //Squashed, so drop it
-        return;
+    iewStage->cacheUnblocked();
+
+    for (ThreadID tid : *activeThreads) {
+        thread[tid].recvRetry();
     }
-    int curr_retry_tid = retryTid;
-    // Speculatively clear the retry Tid.  This will get set again if
-    // the LSQUnit was unable to complete its access.
-    retryTid = -1;
-    thread[curr_retry_tid].recvRetry();
 }
 
 template <class Impl>
@@ -430,7 +423,7 @@ LSQ<Impl>::numStores()
 
 template<class Impl>
 unsigned
-LSQ<Impl>::numFreeEntries()
+LSQ<Impl>::numFreeLoadEntries()
 {
     unsigned total = 0;
 
@@ -440,7 +433,7 @@ LSQ<Impl>::numFreeEntries()
     while (threads != end) {
         ThreadID tid = *threads++;
 
-        total += thread[tid].numFreeEntries();
+        total += thread[tid].numFreeLoadEntries();
     }
 
     return total;
@@ -448,12 +441,34 @@ LSQ<Impl>::numFreeEntries()
 
 template<class Impl>
 unsigned
-LSQ<Impl>::numFreeEntries(ThreadID tid)
+LSQ<Impl>::numFreeStoreEntries()
 {
-    //if (lsqPolicy == Dynamic)
-    //return numFreeEntries();
-    //else
-        return thread[tid].numFreeEntries();
+    unsigned total = 0;
+
+    list<ThreadID>::iterator threads = activeThreads->begin();
+    list<ThreadID>::iterator end = activeThreads->end();
+
+    while (threads != end) {
+        ThreadID tid = *threads++;
+
+        total += thread[tid].numFreeStoreEntries();
+    }
+
+    return total;
+}
+
+template<class Impl>
+unsigned
+LSQ<Impl>::numFreeLoadEntries(ThreadID tid)
+{
+        return thread[tid].numFreeLoadEntries();
+}
+
+template<class Impl>
+unsigned
+LSQ<Impl>::numFreeStoreEntries(ThreadID tid)
+{
+        return thread[tid].numFreeStoreEntries();
 }
 
 template<class Impl>
@@ -658,3 +673,5 @@ LSQ<Impl>::dumpInsts() const
         thread[tid].dumpInsts();
     }
 }
+
+#endif//__CPU_O3_LSQ_IMPL_HH__

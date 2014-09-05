@@ -31,10 +31,11 @@
 #include "mem/ruby/system/System.hh"
 
 AbstractController::AbstractController(const Params *p)
-    : ClockedObject(p), Consumer(this), m_fully_busy_cycles(0),
-    m_request_count(0)
+    : ClockedObject(p), Consumer(this)
 {
     m_version = p->version;
+    m_clusterID = p->cluster_id;
+
     m_transitions_per_cycle = p->transitions_per_cycle;
     m_buffer_size = p->buffer_size;
     m_recycle_latency = p->recycle_latency;
@@ -52,51 +53,39 @@ void
 AbstractController::init()
 {
     params()->ruby_system->registerAbstractController(this);
-}
-
-void
-AbstractController::clearStats()
-{
-    m_requestProfileMap.clear();
-    m_request_count = 0;
-
-    m_delayHistogram.clear();
-
+    m_delayHistogram.init(10);
     uint32_t size = Network::getNumberOfVirtualNetworks();
-    m_delayVCHistogram.resize(size);
     for (uint32_t i = 0; i < size; i++) {
-        m_delayVCHistogram[i].clear();
-    }
-
-    Sequencer *seq = getSequencer();
-    if (seq != NULL) {
-        seq->clearStats();
+        m_delayVCHistogram.push_back(new Stats::Histogram());
+        m_delayVCHistogram[i]->init(10);
     }
 }
 
 void
-AbstractController::profileRequest(const std::string &request)
+AbstractController::resetStats()
 {
-    m_request_count++;
+    m_delayHistogram.reset();
+    uint32_t size = Network::getNumberOfVirtualNetworks();
+    for (uint32_t i = 0; i < size; i++) {
+        m_delayVCHistogram[i]->reset();
+    }
+}
 
-    // if it doesn't exist, conveniently, it will be created with the
-    // default value which is 0
-    m_requestProfileMap[request]++;
+void
+AbstractController::regStats()
+{
+    m_fully_busy_cycles
+        .name(name() + ".fully_busy_cycles")
+        .desc("cycles for which number of transistions == max transitions")
+        .flags(Stats::nozero);
 }
 
 void
 AbstractController::profileMsgDelay(uint32_t virtualNetwork, Cycles delay)
 {
     assert(virtualNetwork < m_delayVCHistogram.size());
-    m_delayHistogram.add(delay);
-    m_delayVCHistogram[virtualNetwork].add(delay);
-}
-
-void
-AbstractController::connectWithPeer(AbstractController *c)
-{
-    getQueuesFromPeer(c);
-    c->getQueuesFromPeer(this);
+    m_delayHistogram.sample(delay);
+    m_delayVCHistogram[virtualNetwork]->sample(delay);
 }
 
 void
@@ -104,10 +93,10 @@ AbstractController::stallBuffer(MessageBuffer* buf, Address addr)
 {
     if (m_waiting_buffers.count(addr) == 0) {
         MsgVecType* msgVec = new MsgVecType;
-        msgVec->resize(m_max_in_port_rank, NULL);
+        msgVec->resize(m_in_ports, NULL);
         m_waiting_buffers[addr] = msgVec;
     }
-    (*(m_waiting_buffers[addr]))[m_cur_in_port_rank] = buf;
+    (*(m_waiting_buffers[addr]))[m_cur_in_port] = buf;
 }
 
 void
@@ -118,7 +107,7 @@ AbstractController::wakeUpBuffers(Address addr)
         // Wake up all possible lower rank (i.e. lower priority) buffers that could
         // be waiting on this message.
         //
-        for (int in_port_rank = m_cur_in_port_rank - 1;
+        for (int in_port_rank = m_cur_in_port - 1;
              in_port_rank >= 0;
              in_port_rank--) {
             if ((*(m_waiting_buffers[addr]))[in_port_rank] != NULL) {
@@ -138,7 +127,7 @@ AbstractController::wakeUpAllBuffers(Address addr)
         // Wake up all possible lower rank (i.e. lower priority) buffers that could
         // be waiting on this message.
         //
-        for (int in_port_rank = m_max_in_port_rank - 1;
+        for (int in_port_rank = m_in_ports - 1;
              in_port_rank >= 0;
              in_port_rank--) {
             if ((*(m_waiting_buffers[addr]))[in_port_rank] != NULL) {

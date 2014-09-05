@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2013 ARM Limited
+ * Copyright (c) 2010-2014 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -45,6 +45,9 @@
  *          Ron Dreslinski
  *          Andreas Sandberg
  */
+
+#ifndef __MEM_CACHE_CACHE_IMPL_HH__
+#define __MEM_CACHE_CACHE_IMPL_HH__
 
 /**
  * @file
@@ -163,8 +166,12 @@ Cache<TagStore>::satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
     } else if (pkt->isWrite()) {
         if (blk->checkWrite(pkt)) {
             pkt->writeDataToBlock(blk->data, blkSize);
-            blk->status |= BlkDirty;
         }
+        // Always mark the line as dirty even if we are a failed
+        // StoreCond so we supply data to any snoops that have
+        // appended themselves to this cache before knowing the store
+        // will fail.
+        blk->status |= BlkDirty;
     } else if (pkt->isRead()) {
         if (pkt->isLLSC()) {
             blk->trackLoadLocked(pkt);
@@ -180,8 +187,8 @@ Cache<TagStore>::satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
                     pkt->assertMemInhibit();
                 }
                 // on ReadExReq we give up our copy unconditionally
-                assert(blk != tempBlock);
-                tags->invalidate(blk);
+                if (blk != tempBlock)
+                    tags->invalidate(blk);
                 blk->invalidate();
             } else if (blk->isWritable() && !pending_downgrade
                       && !pkt->sharedAsserted() && !pkt->req->isInstFetch()) {
@@ -298,53 +305,72 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
     }
 
     int id = pkt->req->hasContextId() ? pkt->req->contextId() : -1;
-    blk = tags->accessBlock(pkt->getAddr(), lat, id);
+    blk = tags->accessBlock(pkt->getAddr(), pkt->isSecure(), lat, id);
 
-    DPRINTF(Cache, "%s%s %x %s %s\n", pkt->cmdString(),
+    DPRINTF(Cache, "%s%s %x (%s) %s %s\n", pkt->cmdString(),
             pkt->req->isInstFetch() ? " (ifetch)" : "",
-            pkt->getAddr(), blk ? "hit" : "miss", blk ? blk->print() : "");
-
-    if (blk != NULL) {
-
-        if (pkt->needsExclusive() ? blk->isWritable() : blk->isReadable()) {
-            // OK to satisfy access
-            incHitCount(pkt);
-            satisfyCpuSideRequest(pkt, blk);
-            return true;
-        }
-    }
-
-    // Can't satisfy access normally... either no block (blk == NULL)
-    // or have block but need exclusive & only have shared.
+            pkt->getAddr(), pkt->isSecure() ? "s" : "ns",
+            blk ? "hit" : "miss", blk ? blk->print() : "");
 
     // Writeback handling is special case.  We can write the block
     // into the cache without having a writeable copy (or any copy at
-    // all).
-    if (pkt->cmd == MemCmd::Writeback) {
+    // all).  Like writebacks, we write into the cache upon initial
+    // receipt of a write-invalidate packets as well.
+    if ((pkt->cmd == MemCmd::Writeback) ||
+       ((pkt->cmd == MemCmd::WriteInvalidateReq) && isTopLevel)) {
         assert(blkSize == pkt->getSize());
         if (blk == NULL) {
             // need to do a replacement
-            blk = allocateBlock(pkt->getAddr(), writebacks);
+            blk = allocateBlock(pkt->getAddr(), pkt->isSecure(), writebacks);
             if (blk == NULL) {
                 // no replaceable block available, give up.
-                // writeback will be forwarded to next level.
+                // Writeback will be forwarded to next level,
+                // WriteInvalidate will be retried.
                 incMissCount(pkt);
                 return false;
             }
             tags->insertBlock(pkt, blk);
-            blk->status = BlkValid | BlkReadable;
+
+            blk->status = (BlkValid | BlkReadable);
+            if (pkt->isSecure()) {
+                blk->status |= BlkSecure;
+            }
         }
         std::memcpy(blk->data, pkt->getPtr<uint8_t>(), blkSize);
-        blk->status |= BlkDirty;
-        if (pkt->isSupplyExclusive()) {
-            blk->status |= BlkWritable;
+        if (pkt->cmd == MemCmd::Writeback) {
+            blk->status |= BlkDirty;
+            if (pkt->isSupplyExclusive()) {
+                blk->status |= BlkWritable;
+            }
+            // nothing else to do; writeback doesn't expect response
+            assert(!pkt->needsResponse());
+        } else if (pkt->cmd == MemCmd::WriteInvalidateReq) {
+            assert(blk->isReadable()); // implicitly checks for Valid bit also
+            blk->status |= (BlkDirty | BlkCanGoExclusive);
+            blk->status &= ~BlkWritable;
+            ++fastWrites;
         }
-        // nothing else to do; writeback doesn't expect response
-        assert(!pkt->needsResponse());
         DPRINTF(Cache, "%s new state is %s\n", __func__, blk->print());
         incHitCount(pkt);
         return true;
+    } else if ((pkt->cmd == MemCmd::WriteInvalidateReq) && !isTopLevel) {
+        if (blk != NULL) {
+            assert(blk != tempBlock);
+            tags->invalidate(blk);
+            blk->invalidate();
+        }
+        return true;
+    } else if ((blk != NULL) &&
+               (pkt->needsExclusive() ? blk->isWritable()
+                                      : blk->isReadable())) {
+        // OK to satisfy access
+        incHitCount(pkt);
+        satisfyCpuSideRequest(pkt, blk);
+        return true;
     }
+
+    // Can't satisfy access normally... either no block (blk == NULL)
+    // or have block but need exclusive & only have shared.
 
     incMissCount(pkt);
 
@@ -387,8 +413,8 @@ Cache<TagStore>::recvTimingSnoopResp(PacketPtr pkt)
         assert(pkt->cmd == MemCmd::HardPFResp);
         // Check if it's a prefetch response and handle it. We shouldn't
         // get any other kinds of responses without FRRs.
-        DPRINTF(Cache, "Got prefetch response from above for addr %#x\n",
-                pkt->getAddr());
+        DPRINTF(Cache, "Got prefetch response from above for addr %#x (%s)\n",
+                pkt->getAddr(), pkt->isSecure() ? "s" : "ns");
         recvTimingResp(pkt);
         return;
     }
@@ -399,6 +425,19 @@ Cache<TagStore>::recvTimingSnoopResp(PacketPtr pkt)
     // @todo someone should pay for this
     pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
     memSidePort->schedTimingSnoopResp(pkt, time);
+}
+
+template<class TagStore>
+void
+Cache<TagStore>::promoteWholeLineWrites(PacketPtr pkt)
+{
+    // Cache line clearing instructions
+    if (doFastWrites && (pkt->cmd == MemCmd::WriteReq) &&
+        (pkt->getSize() == blkSize) && (pkt->getOffset(blkSize) == 0)) {
+        pkt->cmd = MemCmd::WriteInvalidateReq;
+        DPRINTF(Cache, "packet promoted from Write to WriteInvalidate\n");
+        assert(isTopLevel); // should only happen at L1 or I/O cache
+    }
 }
 
 template<class TagStore>
@@ -427,9 +466,11 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
         return true;
     }
 
+    promoteWholeLineWrites(pkt);
+
     if (pkt->memInhibitAsserted()) {
-        DPRINTF(Cache, "mem inhibited on 0x%x: not responding\n",
-                pkt->getAddr());
+        DPRINTF(Cache, "mem inhibited on 0x%x (%s): not responding\n",
+                pkt->getAddr(), pkt->isSecure() ? "s" : "ns");
         assert(!pkt->req->isUncacheable());
         // Special tweak for multilevel coherence: snoop downward here
         // on invalidates since there may be other caches below here
@@ -461,8 +502,15 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
         // @todo: someone should pay for this
         pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
 
-        // writes go in write buffer, reads use MSHR
-        if (pkt->isWrite() && !pkt->isRead()) {
+        // writes go in write buffer, reads use MSHR,
+        // prefetches are acknowledged (responded to) and dropped
+        if (pkt->cmd.isPrefetch()) {
+            // prefetching (cache loading) uncacheable data is nonsensical
+            pkt->makeTimingResponse();
+            std::memset(pkt->getPtr<uint8_t>(), 0xFF, pkt->getSize());
+            cpuSidePort->schedTimingResp(pkt, clockEdge(hitLatency));
+            return true;
+        } else if (pkt->isWrite() && !pkt->isRead()) {
             allocateWriteBuffer(pkt, time, true);
         } else {
             allocateUncachedReadBuffer(pkt, time, true);
@@ -477,38 +525,33 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
 
     bool satisfied = access(pkt, blk, lat, writebacks);
 
-#if 0
-    /** @todo make the fast write alloc (wh64) work with coherence. */
-
-    // If this is a block size write/hint (WH64) allocate the block here
-    // if the coherence protocol allows it.
-    if (!blk && pkt->getSize() >= blkSize && coherence->allowFastWrites() &&
-        (pkt->cmd == MemCmd::WriteReq
-         || pkt->cmd == MemCmd::WriteInvalidateReq) ) {
-        // not outstanding misses, can do this
-        MSHR *outstanding_miss = mshrQueue.findMatch(pkt->getAddr());
-        if (pkt->cmd == MemCmd::WriteInvalidateReq || !outstanding_miss) {
-            if (outstanding_miss) {
-                warn("WriteInv doing a fastallocate"
-                     "with an outstanding miss to the same address\n");
-            }
-            blk = handleFill(NULL, pkt, BlkValid | BlkWritable,
-                                   writebacks);
-            ++fastWrites;
-        }
-    }
-#endif
-
     // track time of availability of next prefetch, if any
     Tick next_pf_time = 0;
 
     bool needsResponse = pkt->needsResponse();
 
+    if (pkt->cmd == MemCmd::WriteInvalidateReq) {
+        if (!satisfied && isTopLevel) {
+            // access() tried to allocate a block but it could not; abort.
+            setBlocked(Blocked_PendingWriteInvalidate);
+            return false;
+        }
+        satisfied = false;
+        // we need to take the miss path (allocate MSHR, etc.) for
+        // WriteInvalidates because they always need to propagate
+        // throughout the memory system
+    }
+
     if (satisfied) {
+        // hit (for all other request types)
+
         if (prefetcher && (prefetchOnAccess || (blk && blk->wasPrefetched()))) {
             if (blk)
                 blk->status &= ~BlkHWPrefetched;
-            next_pf_time = prefetcher->notify(pkt, time);
+
+            // Don't notify on SWPrefetch
+            if (!pkt->cmd.isSWPrefetch())
+                next_pf_time = prefetcher->notify(pkt, time);
         }
 
         if (needsResponse) {
@@ -528,8 +571,56 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
         // @todo: Make someone pay for this
         pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
 
+        if (blk && blk->isValid() && (blk->status & BlkCanGoExclusive) &&
+            pkt->isWrite() && (pkt->cmd != MemCmd::WriteInvalidateReq)) {
+            // Packet is a Write (needs exclusive) should be delayed because
+            // a WriteInvalidate is pending.  Instead of going the MSHR route,
+            // the Packet should be replayed, since if the block transitions
+            // to Exclusive the write can complete immediately.
+            setBlocked(Blocked_PendingWriteInvalidate);
+            return false;
+        }
+
         Addr blk_addr = blockAlign(pkt->getAddr());
-        MSHR *mshr = mshrQueue.findMatch(blk_addr);
+        MSHR *mshr = mshrQueue.findMatch(blk_addr, pkt->isSecure());
+
+        // Software prefetch handling:
+        // To keep the core from waiting on data it won't look at
+        // anyway, send back a response with dummy data. Miss handling
+        // will continue asynchronously. Unfortunately, the core will
+        // insist upon freeing original Packet/Request, so we have to
+        // create a new pair with a different lifecycle. Note that this
+        // processing happens before any MSHR munging on the behalf of
+        // this request because this new Request will be the one stored
+        // into the MSHRs, not the original.
+        if (pkt->cmd.isSWPrefetch() && isTopLevel) {
+            assert(needsResponse);
+            assert(pkt->req->hasPaddr());
+
+            // There's no reason to add a prefetch as an additional target
+            // to an existing MSHR.  If an outstanding request is already
+            // in progress, there is nothing for the prefetch to do.
+            // If this is the case, we don't even create a request at all.
+            PacketPtr pf = mshr ? NULL : new Packet(pkt);
+
+            if (pf) {
+                pf->req = new Request(pkt->req->getPaddr(),
+                                      pkt->req->getSize(),
+                                      pkt->req->getFlags(),
+                                      pkt->req->masterId());
+                // The core will clean up prior senderState; we need our own.
+                pf->senderState = NULL;
+            }
+
+            pkt->makeTimingResponse();
+            // for debugging, set all the bits in the response data
+            // (also keeps valgrind from complaining when debugging settings
+            //  print out instruction results)
+            std::memset(pkt->getPtr<uint8_t>(), 0xFF, pkt->getSize());
+            cpuSidePort->schedTimingResp(pkt, clockEdge(lat));
+
+            pkt = pf;
+        }
 
         if (mshr) {
             /// MSHR hit
@@ -537,19 +628,36 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
             /// for any conflicting requests to the same block
 
             //@todo remove hw_pf here
-            assert(pkt->req->masterId() < system->maxMasters());
-            mshr_hits[pkt->cmdToIndex()][pkt->req->masterId()]++;
-            if (mshr->threadNum != 0/*pkt->req->threadId()*/) {
-                mshr->threadNum = -1;
-            }
-            mshr->allocateTarget(pkt, time, order++);
-            if (mshr->getNumTargets() == numTarget) {
-                noTargetMSHR = mshr;
-                setBlocked(Blocked_NoTargets);
-                // need to be careful with this... if this mshr isn't
-                // ready yet (i.e. time > curTick()_, we don't want to
-                // move it ahead of mshrs that are ready
-                // mshrQueue.moveToFront(mshr);
+
+            // Coalesce unless it was a software prefetch (see above).
+            if (pkt) {
+                assert(pkt->req->masterId() < system->maxMasters());
+                mshr_hits[pkt->cmdToIndex()][pkt->req->masterId()]++;
+                if (mshr->threadNum != 0/*pkt->req->threadId()*/) {
+                    mshr->threadNum = -1;
+                }
+                mshr->allocateTarget(pkt, time, order++);
+                if (mshr->getNumTargets() == numTarget) {
+                    noTargetMSHR = mshr;
+                    setBlocked(Blocked_NoTargets);
+                    // need to be careful with this... if this mshr isn't
+                    // ready yet (i.e. time > curTick()), we don't want to
+                    // move it ahead of mshrs that are ready
+                    // mshrQueue.moveToFront(mshr);
+                }
+
+                // We should call the prefetcher reguardless if the request is
+                // satisfied or not, reguardless if the request is in the MSHR or
+                // not.  The request could be a ReadReq hit, but still not
+                // satisfied (potentially because of a prior write to the same
+                // cache line.  So, even when not satisfied, tehre is an MSHR
+                // already allocated for this, we need to let the prefetcher know
+                // about the request
+                if (prefetcher) {
+                    // Don't notify on SWPrefetch
+                    if (!pkt->cmd.isSWPrefetch())
+                        next_pf_time = prefetcher->notify(pkt, time);
+                }
             }
         } else {
             // no MSHR
@@ -561,7 +669,10 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
             if (pkt->cmd == MemCmd::Writeback) {
                 allocateWriteBuffer(pkt, time, true);
             } else {
-                if (blk && blk->isValid()) {
+                if (pkt->cmd == MemCmd::WriteInvalidateReq) {
+                    // a WriteInvalidate is not a normal write miss;
+                    // the assertions below are not applicable.
+                } else if (blk && blk->isValid()) {
                     // If we have a write miss to a valid block, we
                     // need to mark the block non-readable.  Otherwise
                     // if we allow reads while there's an outstanding
@@ -577,7 +688,8 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
                     // internally, and have a sufficiently weak memory
                     // model, this is probably unnecessary, but at some
                     // point it must have seemed like we needed it...
-                    assert(pkt->needsExclusive() && !blk->isWritable());
+                    assert(pkt->needsExclusive());
+                    assert(!blk->isWritable());
                     blk->status &= ~BlkReadable;
                 }
 
@@ -585,7 +697,9 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
             }
 
             if (prefetcher) {
-                next_pf_time = prefetcher->notify(pkt, time);
+                // Don't notify on SWPrefetch
+                if (!pkt->cmd.isSWPrefetch())
+                    next_pf_time = prefetcher->notify(pkt, time);
             }
         }
     }
@@ -617,6 +731,12 @@ Cache<TagStore>::getBusPacket(PacketPtr cpu_pkt, BlkType *blk,
         return NULL;
     }
 
+    // WriteInvalidates for cache line clearing instructions don't
+    // require a read; just send directly to the bus.
+    if (cpu_pkt->cmd == MemCmd::WriteInvalidateReq) {
+        return NULL;
+    }
+
     if (!blkValid &&
         (cpu_pkt->cmd == MemCmd::Writeback || cpu_pkt->isUpgrade())) {
         // Writebacks that weren't allocated in access() and upgrades
@@ -636,8 +756,16 @@ Cache<TagStore>::getBusPacket(PacketPtr cpu_pkt, BlkType *blk,
     if (blkValid && useUpgrades) {
         // only reason to be here is that blk is shared
         // (read-only) and we need exclusive
-        assert(needsExclusive && !blk->isWritable());
+        assert(needsExclusive);
+        assert(!blk->isWritable());
         cmd = cpu_pkt->isLLSC() ? MemCmd::SCUpgradeReq : MemCmd::UpgradeReq;
+    } else if (cpu_pkt->cmd == MemCmd::SCUpgradeFailReq ||
+               cpu_pkt->cmd == MemCmd::StoreCondFailReq) {
+        // Even though this SC will fail, we still need to send out the
+        // request and get the data to supply it to other snoopers in the case
+        // where the determination the StoreCond fails is delayed due to
+        // all caches not being on the same local bus.
+        cmd = MemCmd::SCUpgradeFailReq;
     } else {
         // block is invalid
         cmd = needsExclusive ? MemCmd::ReadExReq : MemCmd::ReadReq;
@@ -664,21 +792,26 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
     if (system->bypassCaches())
         return ticksToCycles(memSidePort->sendAtomic(pkt));
 
+    promoteWholeLineWrites(pkt);
+
     if (pkt->memInhibitAsserted()) {
         assert(!pkt->req->isUncacheable());
         // have to invalidate ourselves and any lower caches even if
         // upper cache will be responding
         if (pkt->isInvalidate()) {
-            BlkType *blk = tags->findBlock(pkt->getAddr());
+            BlkType *blk = tags->findBlock(pkt->getAddr(), pkt->isSecure());
             if (blk && blk->isValid()) {
                 tags->invalidate(blk);
                 blk->invalidate();
-                DPRINTF(Cache, "rcvd mem-inhibited %s on 0x%x: invalidating\n",
-                        pkt->cmdString(), pkt->getAddr());
+                DPRINTF(Cache, "rcvd mem-inhibited %s on 0x%x (%s):"
+                        " invalidating\n",
+                        pkt->cmdString(), pkt->getAddr(),
+                        pkt->isSecure() ? "s" : "ns");
             }
             if (!last_level_cache) {
-                DPRINTF(Cache, "forwarding mem-inhibited %s on 0x%x\n",
-                        pkt->cmdString(), pkt->getAddr());
+                DPRINTF(Cache, "forwarding mem-inhibited %s on 0x%x (%s)\n",
+                        pkt->cmdString(), pkt->getAddr(),
+                        pkt->isSecure() ? "s" : "ns");
                 lat += ticksToCycles(memSidePort->sendAtomic(pkt));
             }
         } else {
@@ -698,6 +831,10 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
 
     if (!access(pkt, blk, lat, writebacks)) {
         // MISS
+
+        // WriteInvalidates should never fail an access() in Atomic mode
+        assert(pkt->cmd != MemCmd::WriteInvalidateReq);
+
         PacketPtr bus_pkt = getBusPacket(pkt, blk, pkt->needsExclusive());
 
         bool is_forward = (bus_pkt == NULL);
@@ -708,8 +845,9 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
             bus_pkt = pkt;
         }
 
-        DPRINTF(Cache, "Sending an atomic %s for %x\n",
-                bus_pkt->cmdString(), bus_pkt->getAddr());
+        DPRINTF(Cache, "Sending an atomic %s for %x (%s)\n",
+                bus_pkt->cmdString(), bus_pkt->getAddr(),
+                bus_pkt->isSecure() ? "s" : "ns");
 
 #if TRACING_ON
         CacheBlk::State old_state = blk ? blk->status : 0;
@@ -717,8 +855,10 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
 
         lat += ticksToCycles(memSidePort->sendAtomic(bus_pkt));
 
-        DPRINTF(Cache, "Receive response: %s for addr %x in state %i\n",
-                bus_pkt->cmdString(), bus_pkt->getAddr(), old_state);
+        DPRINTF(Cache, "Receive response: %s for addr %x (%s) in state %i\n",
+                bus_pkt->cmdString(), bus_pkt->getAddr(),
+                bus_pkt->isSecure() ? "s" : "ns",
+                old_state);
 
         // If packet was a forward, the response (if any) is already
         // in place in the bus_pkt == pkt structure, so we don't need
@@ -765,7 +905,25 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
         delete wbPkt;
     }
 
-    // We now have the block one way or another (hit or completed miss)
+    // We now have the block one way or another (hit or completed miss),
+    // except for Request types that perform an invalidate, where the point
+    // is to make sure there is no block.
+
+    if (pkt->cmd == MemCmd::WriteInvalidateReq) {
+        memSidePort->sendAtomic(pkt); // complete writeback
+        if (isTopLevel) {
+            // top level caches allocate and write the data
+            assert(blk->isDirty());
+            assert(!blk->isWritable());
+            assert(blk->status & BlkCanGoExclusive);
+            blk->status &= ~(BlkDirty | BlkCanGoExclusive); // and mark clean
+            blk->status |= BlkWritable;                     // i.e. O(+cgE) -> E
+        } else {
+            // other caches invalidate.
+            // if the block was found, it was invalidated.
+            assert(!blk || !blk->isValid());
+        }
+    }
 
     if (pkt->needsResponse()) {
         pkt->makeAtomicResponse();
@@ -791,8 +949,9 @@ Cache<TagStore>::functionalAccess(PacketPtr pkt, bool fromCpuSide)
     }
 
     Addr blk_addr = blockAlign(pkt->getAddr());
-    BlkType *blk = tags->findBlock(pkt->getAddr());
-    MSHR *mshr = mshrQueue.findMatch(blk_addr);
+    bool is_secure = pkt->isSecure();
+    BlkType *blk = tags->findBlock(pkt->getAddr(), is_secure);
+    MSHR *mshr = mshrQueue.findMatch(blk_addr, is_secure);
 
     pkt->pushLabel(name());
 
@@ -805,7 +964,8 @@ Cache<TagStore>::functionalAccess(PacketPtr pkt, bool fromCpuSide)
 
     // see if we have data at all (owned or otherwise)
     bool have_data = blk && blk->isValid()
-        && pkt->checkFunctional(&cbpw, blk_addr, blkSize, blk->data);
+        && pkt->checkFunctional(&cbpw, blk_addr, is_secure, blkSize,
+                                blk->data);
 
     // data we have is dirty if marked as such or if valid & ownership
     // pending due to outstanding UpgradeReq
@@ -819,8 +979,8 @@ Cache<TagStore>::functionalAccess(PacketPtr pkt, bool fromCpuSide)
         || writeBuffer.checkFunctional(pkt, blk_addr)
         || memSidePort->checkFunctional(pkt);
 
-    DPRINTF(Cache, "functional %s %x %s%s%s\n",
-            pkt->cmdString(), pkt->getAddr(),
+    DPRINTF(Cache, "functional %s %x (%s) %s%s%s\n",
+            pkt->cmdString(), pkt->getAddr(), is_secure ? "s" : "ns",
             (blk && blk->isValid()) ? "valid " : "",
             have_data ? "data " : "", done ? "done " : "");
 
@@ -863,12 +1023,13 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
     assert(mshr);
 
     if (is_error) {
-        DPRINTF(Cache, "Cache received packet with error for address %x, "
-                "cmd: %s\n", pkt->getAddr(), pkt->cmdString());
+        DPRINTF(Cache, "Cache received packet with error for address %x (%s), "
+                "cmd: %s\n", pkt->getAddr(), pkt->isSecure() ? "s" : "ns",
+                pkt->cmdString());
     }
 
-    DPRINTF(Cache, "Handling response to %s for address %x\n",
-            pkt->cmdString(), pkt->getAddr());
+    DPRINTF(Cache, "Handling response to %s for address %x (%s)\n",
+            pkt->cmdString(), pkt->getAddr(), pkt->isSecure() ? "s" : "ns");
 
     MSHRQueue *mq = mshr->queue;
     bool wasFull = mq->isFull();
@@ -881,7 +1042,7 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
 
     // Initial target is used just for stats
     MSHR::Target *initial_tgt = mshr->getTarget();
-    BlkType *blk = tags->findBlock(pkt->getAddr());
+    BlkType *blk = tags->findBlock(pkt->getAddr(), pkt->isSecure());
     int stats_cmd_idx = initial_tgt->pkt->cmdToIndex();
     Tick miss_latency = curTick() - initial_tgt->recvTime;
     PacketList writebacks;
@@ -923,6 +1084,17 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
         switch (target->source) {
           case MSHR::Target::FromCPU:
             Tick completion_time;
+
+            // Software prefetch handling for cache closest to core
+            if (target->pkt->cmd.isSWPrefetch() && isTopLevel) {
+                // a software prefetch would have already been ack'd immediately
+                // with dummy data so the core would be able to retire it.
+                // this request completes right here, so we deallocate it.
+                delete target->pkt->req;
+                delete target->pkt;
+                break; // skip response
+            }
+
             if (is_fill) {
                 satisfyCpuSideRequest(target->pkt, blk,
                                       true, mshr->hasPostDowngrade());
@@ -957,6 +1129,38 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
                 completion_time = clockEdge(responseLatency) +
                     pkt->busLastWordDelay;
                 target->pkt->req->setExtraData(0);
+            } else if (pkt->cmd == MemCmd::WriteInvalidateResp) {
+                if (blk) {
+                    assert(blk->isDirty() && !blk->isWritable());
+                    // The block, having been written back, is no longer dirty,
+                    // nor do we have any reason to see if it was snooped in the
+                    // meantime (which CanGoExclusive tracks).  If it can go
+                    // exclusive, we put it in that state, and otherwise S.
+                    // In short: O(+cgE) -> E, O(-cgE) -> S
+                    if (blk->status & BlkCanGoExclusive) {
+                        blk->status |= BlkWritable;
+                    }
+                    blk->status &= ~(BlkDirty | BlkCanGoExclusive);
+                }
+                if (isTopLevel) {
+                    // makeTimingResponse() will turn it into a WriteResp
+                    target->pkt->cmd = MemCmd::WriteReq;
+                    // Writes may have been blocked - quite rare case, but
+                    // it does happen. Prevent deadlock by telling the core
+                    if (isBlocked()) { // to retry.
+                        clearBlocked(Blocked_PendingWriteInvalidate);
+                    }
+                }
+                // If the block managed to get evicted before its own
+                // writeback (e.g. by a Read/Upgrade (from O(-cgE)/S to
+                // I/E) or ReadExclusive (direct to I/E); either way a
+                // cache-to-cache ownership transfer) completed, that's
+                // OK, we just ignore this response. If the new owner
+                // doesn't actually modify it, a superfluous writeback
+                // will occur for its impatience (since it will think it
+                // has dirty data), but it really can't be helped.
+                completion_time = clockEdge(responseLatency) +
+                    pkt->busLastWordDelay;
             } else {
                 // not a cache fill, just forwarding response
                 // responseLatency is the latency of the return path
@@ -1071,6 +1275,13 @@ Cache<TagStore>::writebackBlk(BlkType *blk)
     Request *writebackReq =
         new Request(tags->regenerateBlkAddr(blk->tag, blk->set), blkSize, 0,
                 Request::wbMasterId);
+    if (blk->isSecure())
+        writebackReq->setFlags(Request::SECURE);
+
+    writebackReq->taskId(blk->task_id);
+    blk->task_id= ContextSwitchTaskId::Unknown;
+    blk->tickInserted = curTick();
+
     PacketPtr writeback = new Packet(writebackReq, MemCmd::Writeback);
     if (blk->isWritable()) {
         writeback->setSupplyExclusive();
@@ -1117,6 +1328,7 @@ Cache<TagStore>::writebackVisitor(BlkType &blk)
 
         Request request(tags->regenerateBlkAddr(blk.tag, blk.set),
                         blkSize, 0, Request::funcMasterId);
+        request.taskId(blk.task_id);
 
         Packet packet(&request, MemCmd::WriteReq);
         packet.dataStatic(blk.data);
@@ -1157,7 +1369,7 @@ Cache<TagStore>::uncacheableFlush(PacketPtr pkt)
     if (pkt->req->isClearLL())
         tags->clearLocks();
 
-    BlkType *blk(tags->findBlock(pkt->getAddr()));
+    BlkType *blk(tags->findBlock(pkt->getAddr(), pkt->isSecure()));
     if (blk) {
         writebackVisitor(*blk);
         invalidateVisitor(*blk);
@@ -1167,24 +1379,27 @@ Cache<TagStore>::uncacheableFlush(PacketPtr pkt)
 
 template<class TagStore>
 typename Cache<TagStore>::BlkType*
-Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
+Cache<TagStore>::allocateBlock(Addr addr, bool is_secure,
+                               PacketList &writebacks)
 {
-    BlkType *blk = tags->findVictim(addr, writebacks);
+    BlkType *blk = tags->findVictim(addr);
 
     if (blk->isValid()) {
         Addr repl_addr = tags->regenerateBlkAddr(blk->tag, blk->set);
-        MSHR *repl_mshr = mshrQueue.findMatch(repl_addr);
+        MSHR *repl_mshr = mshrQueue.findMatch(repl_addr, blk->isSecure());
         if (repl_mshr) {
-            // must be an outstanding upgrade request on block
-            // we're about to replace...
-            assert(!blk->isWritable());
+            // must be an outstanding upgrade request (common case)
+            // or WriteInvalidate pending writeback (very uncommon case)
+            // on a block we're about to replace...
+            assert(!blk->isWritable() || blk->isDirty());
             assert(repl_mshr->needsExclusive());
             // too hard to replace block with transient state
             // allocation failed, block not inserted
             return NULL;
         } else {
-            DPRINTF(Cache, "replacement: replacing %x with %x: %s\n",
-                    repl_addr, addr,
+            DPRINTF(Cache, "replacement: replacing %x (%s) with %x (%s): %s\n",
+                    repl_addr, blk->isSecure() ? "s" : "ns",
+                    addr, is_secure ? "s" : "ns",
                     blk->isDirty() ? "writeback" : "clean");
 
             if (blk->isDirty()) {
@@ -1209,6 +1424,7 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
                             PacketList &writebacks)
 {
     Addr addr = pkt->getAddr();
+    bool is_secure = pkt->isSecure();
 #if TRACING_ON
     CacheBlk::State old_state = blk ? blk->status : 0;
 #endif
@@ -1217,7 +1433,7 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
         // better have read new data...
         assert(pkt->hasData());
         // need to do a replacement
-        blk = allocateBlock(addr, writebacks);
+        blk = allocateBlock(addr, is_secure, writebacks);
         if (blk == NULL) {
             // No replaceable block... just use temporary storage to
             // complete the current request and then get rid of it
@@ -1225,7 +1441,9 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
             blk = tempBlock;
             tempBlock->set = tags->extractSet(addr);
             tempBlock->tag = tags->extractTag(addr);
-            DPRINTF(Cache, "using temp block for %x\n", addr);
+            // @todo: set security state as well...
+            DPRINTF(Cache, "using temp block for %x (%s)\n", addr,
+                    is_secure ? "s" : "ns");
         } else {
             tags->insertBlock(pkt, blk);
         }
@@ -1241,6 +1459,8 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
         // don't want to lose that
     }
 
+    if (is_secure)
+        blk->status |= BlkSecure;
     blk->status |= BlkValid | BlkReadable;
 
     if (!pkt->sharedAsserted()) {
@@ -1256,8 +1476,13 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
             blk->status |= BlkDirty;
     }
 
-    DPRINTF(Cache, "Block addr %x moving from state %x to %s\n",
-            addr, old_state, blk->print());
+    if (pkt->cmd == MemCmd::WriteInvalidateReq) {
+        // a block written immediately, all at once, pre-writeback is dirty
+        blk->status |= BlkDirty;
+    }
+
+    DPRINTF(Cache, "Block addr %x (%s) moving from state %x to %s\n",
+            addr, is_secure ? "s" : "ns", old_state, blk->print());
 
     // if we got new data, copy it in
     if (pkt->isRead()) {
@@ -1354,6 +1579,12 @@ Cache<TagStore>::handleSnoop(PacketPtr pkt, BlkType *blk,
             if (snoopPkt.sharedAsserted()) {
                 pkt->assertShared();
             }
+            // If this request is a prefetch and an
+            // upper level squashes the prefetch request,
+            // make sure to propogate the squash to the requester.
+            if (snoopPkt.prefetchSquashed()) {
+                pkt->setPrefetchSquashed();
+            }
         } else {
             cpuSidePort->sendAtomicSnoop(pkt);
             if (!alreadyResponded && pkt->memInhibitAsserted()) {
@@ -1364,26 +1595,42 @@ Cache<TagStore>::handleSnoop(PacketPtr pkt, BlkType *blk,
         }
     }
 
-     if (!blk || !blk->isValid()) {
-         DPRINTF(Cache, "%s snoop miss for %s address %x size %d\n",
-                 __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize());
-         return;
-     } else {
-        DPRINTF(Cache, "%s snoop hit for %s for address %x size %d, "
-                "old state is %s\n", __func__, pkt->cmdString(),
-                pkt->getAddr(), pkt->getSize(), blk->print());
-     }
+    if (!blk || !blk->isValid()) {
+        DPRINTF(Cache, "%s snoop miss for %s address %x size %d\n",
+                __func__, pkt->cmdString(), pkt->getAddr(), pkt->getSize());
+        return;
+    } else {
+       DPRINTF(Cache, "%s snoop hit for %s for address %x size %d, "
+               "old state is %s\n", __func__, pkt->cmdString(),
+               pkt->getAddr(), pkt->getSize(), blk->print());
+    }
 
     // we may end up modifying both the block state and the packet (if
     // we respond in atomic mode), so just figure out what to do now
-    // and then do it later
-    bool respond = blk->isDirty() && pkt->needsResponse();
+    // and then do it later.  If we find dirty data while snooping for a
+    // WriteInvalidate, we don't care, since no merging needs to take place.
+    // We need the eviction to happen as normal, but the data needn't be
+    // sent anywhere, nor should the writeback be inhibited at the memory
+    // controller for any reason.
+    bool respond = blk->isDirty() && pkt->needsResponse()
+                                  && (pkt->cmd != MemCmd::WriteInvalidateReq);
     bool have_exclusive = blk->isWritable();
+
+    // Invalidate any prefetch's from below that would strip write permissions
+    // MemCmd::HardPFReq is only observed by upstream caches.  After missing
+    // above and in it's own cache, a new MemCmd::ReadReq is created that
+    // downstream caches observe.
+    if (pkt->cmd == MemCmd::HardPFReq) {
+        DPRINTF(Cache, "Squashing prefetch from lower cache %#x\n",
+                pkt->getAddr());
+        pkt->setPrefetchSquashed();
+        return;
+    }
 
     if (pkt->isRead() && !invalidate) {
         assert(!needs_exclusive);
         pkt->assertShared();
-        int bits_to_clear = BlkWritable;
+        int bits_to_clear = BlkWritable | BlkCanGoExclusive;
         const bool haveOwnershipState = true; // for now
         if (!haveOwnershipState) {
             // if we don't support pure ownership (dirty && !writable),
@@ -1416,8 +1663,8 @@ Cache<TagStore>::handleSnoop(PacketPtr pkt, BlkType *blk,
     // Do this last in case it deallocates block data or something
     // like that
     if (invalidate) {
-        assert(blk != tempBlock);
-        tags->invalidate(blk);
+        if (blk != tempBlock)
+            tags->invalidate(blk);
         blk->invalidate();
     }
 
@@ -1435,25 +1682,48 @@ Cache<TagStore>::recvTimingSnoopReq(PacketPtr pkt)
     // Snoops shouldn't happen when bypassing caches
     assert(!system->bypassCaches());
 
+    // check if the packet is for an address range covered by this
+    // cache, partly to not waste time looking for it, but also to
+    // ensure that we only forward the snoop upwards if it is within
+    // our address ranges
+    bool in_range = false;
+    for (AddrRangeList::const_iterator r = addrRanges.begin();
+         r != addrRanges.end(); ++r) {
+        if (r->contains(pkt->getAddr())) {
+            in_range = true;
+            break;
+        }
+    }
+
     // Note that some deferred snoops don't have requests, since the
     // original access may have already completed
     if ((pkt->req && pkt->req->isUncacheable()) ||
-        pkt->cmd == MemCmd::Writeback) {
+        pkt->cmd == MemCmd::Writeback || !in_range) {
         //Can't get a hit on an uncacheable address
         //Revisit this for multi level coherence
         return;
     }
 
-    BlkType *blk = tags->findBlock(pkt->getAddr());
+    bool is_secure = pkt->isSecure();
+    BlkType *blk = tags->findBlock(pkt->getAddr(), is_secure);
 
     Addr blk_addr = blockAlign(pkt->getAddr());
-    MSHR *mshr = mshrQueue.findMatch(blk_addr);
+    MSHR *mshr = mshrQueue.findMatch(blk_addr, is_secure);
+
+    // Squash any prefetch requests from below on MSHR hits
+    if (mshr && pkt->cmd == MemCmd::HardPFReq) {
+        DPRINTF(Cache, "Squashing prefetch from lower cache on mshr hit %#x\n",
+                pkt->getAddr());
+        pkt->setPrefetchSquashed();
+        return;
+    }
 
     // Let the MSHR itself track the snoop and decide whether we want
     // to go ahead and do the regular cache snoop
     if (mshr && mshr->handleSnoop(pkt, order++)) {
-        DPRINTF(Cache, "Deferring snoop on in-service MSHR to blk %x."
-                "mshrs: %s\n", blk_addr, mshr->print());
+        DPRINTF(Cache, "Deferring snoop on in-service MSHR to blk %x (%s)."
+                "mshrs: %s\n", blk_addr, is_secure ? "s" : "ns",
+                mshr->print());
 
         if (mshr->getNumTargets() > numTarget)
             warn("allocating bonus target for snoop"); //handle later
@@ -1462,9 +1732,9 @@ Cache<TagStore>::recvTimingSnoopReq(PacketPtr pkt)
 
     //We also need to check the writeback buffers and handle those
     std::vector<MSHR *> writebacks;
-    if (writeBuffer.findMatches(blk_addr, writebacks)) {
-        DPRINTF(Cache, "Snoop hit in writeback to addr: %x\n",
-                pkt->getAddr());
+    if (writeBuffer.findMatches(blk_addr, is_secure, writebacks)) {
+        DPRINTF(Cache, "Snoop hit in writeback to addr: %x (%s)\n",
+                pkt->getAddr(), is_secure ? "s" : "ns");
 
         //Look through writebacks for any non-uncachable writes, use that
         if (writebacks.size()) {
@@ -1529,7 +1799,7 @@ Cache<TagStore>::recvAtomicSnoop(PacketPtr pkt)
         return 0;
     }
 
-    BlkType *blk = tags->findBlock(pkt->getAddr());
+    BlkType *blk = tags->findBlock(pkt->getAddr(), pkt->isSecure());
     handleSnoop(pkt, blk, false, false, false);
     return hitLatency * clockPeriod();
 }
@@ -1558,7 +1828,8 @@ Cache<TagStore>::getNextMSHR()
             // Write buffer is full, so we'd like to issue a write;
             // need to search MSHR queue for conflicting earlier miss.
             MSHR *conflict_mshr =
-                mshrQueue.findPending(write_mshr->addr, write_mshr->size);
+                mshrQueue.findPending(write_mshr->addr, write_mshr->size,
+                                      write_mshr->isSecure);
 
             if (conflict_mshr && conflict_mshr->order < write_mshr->order) {
                 // Service misses in order until conflict is cleared.
@@ -1572,7 +1843,8 @@ Cache<TagStore>::getNextMSHR()
         // Write buffer isn't full, but need to check it for
         // conflicting earlier writeback
         MSHR *conflict_mshr =
-            writeBuffer.findPending(miss_mshr->addr, miss_mshr->size);
+            writeBuffer.findPending(miss_mshr->addr, miss_mshr->size,
+                                    miss_mshr->isSecure);
         if (conflict_mshr) {
             // not sure why we don't check order here... it was in the
             // original code but commented out.
@@ -1600,8 +1872,9 @@ Cache<TagStore>::getNextMSHR()
         PacketPtr pkt = prefetcher->getPacket();
         if (pkt) {
             Addr pf_addr = blockAlign(pkt->getAddr());
-            if (!tags->findBlock(pf_addr) && !mshrQueue.findMatch(pf_addr) &&
-                                             !writeBuffer.findMatch(pf_addr)) {
+            if (!tags->findBlock(pf_addr, pkt->isSecure()) &&
+                !mshrQueue.findMatch(pf_addr, pkt->isSecure()) &&
+                !writeBuffer.findMatch(pf_addr, pkt->isSecure())) {
                 // Update statistic on number of prefetches issued
                 // (hwpf_mshr_misses)
                 assert(pkt->req->masterId() < system->maxMasters());
@@ -1637,23 +1910,12 @@ Cache<TagStore>::getTimingPacket()
     DPRINTF(CachePort, "%s %s for address %x size %d\n", __func__,
             tgt_pkt->cmdString(), tgt_pkt->getAddr(), tgt_pkt->getSize());
 
-    if (tgt_pkt->cmd == MemCmd::SCUpgradeFailReq ||
-        tgt_pkt->cmd == MemCmd::StoreCondFailReq) {
-        // SCUpgradeReq or StoreCondReq saw invalidation while queued
-        // in MSHR, so now that we are getting around to processing
-        // it, just treat it as if we got a failure response
-        pkt = new Packet(tgt_pkt);
-        pkt->cmd = MemCmd::UpgradeFailResp;
-        pkt->senderState = mshr;
-        pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
-        recvTimingResp(pkt);
-        return NULL;
-    } else if (mshr->isForwardNoResponse()) {
+    if (mshr->isForwardNoResponse()) {
         // no response expected, just forward packet as it is
-        assert(tags->findBlock(mshr->addr) == NULL);
+        assert(tags->findBlock(mshr->addr, mshr->isSecure) == NULL);
         pkt = tgt_pkt;
     } else {
-        BlkType *blk = tags->findBlock(mshr->addr);
+        BlkType *blk = tags->findBlock(mshr->addr, mshr->isSecure);
 
         if (tgt_pkt->cmd == MemCmd::HardPFReq) {
             // It might be possible for a writeback to arrive between
@@ -1672,10 +1934,25 @@ Cache<TagStore>::getTimingPacket()
             snoop_pkt.senderState = mshr;
             cpuSidePort->sendTimingSnoopReq(&snoop_pkt);
 
+            // Check to see if the prefetch was squashed by an upper cache
+            if (snoop_pkt.prefetchSquashed()) {
+                DPRINTF(Cache, "Prefetch squashed by upper cache.  "
+                               "Deallocating mshr target %#x.\n", mshr->addr);
+
+                // Deallocate the mshr target
+                if (mshr->queue->forceDeallocateTarget(mshr)) {
+                    // Clear block if this deallocation resulted freed an
+                    // mshr when all had previously been utilized
+                    clearBlocked((BlockedCause)(mshr->queue->index));
+                }
+                return NULL;
+            }
+
             if (snoop_pkt.memInhibitAsserted()) {
                 markInService(mshr, &snoop_pkt);
-                DPRINTF(Cache, "Upward snoop of prefetch for addr %#x hit\n",
-                        tgt_pkt->getAddr());
+                DPRINTF(Cache, "Upward snoop of prefetch for addr"
+                        " %#x (%s) hit\n",
+                        tgt_pkt->getAddr(), tgt_pkt->isSecure()? "s": "ns");
                 return NULL;
             }
         }
@@ -1768,16 +2045,27 @@ template<class TagStore>
 bool
 Cache<TagStore>::CpuSidePort::recvTimingReq(PacketPtr pkt)
 {
-    // always let inhibited requests through even if blocked
-    if (!pkt->memInhibitAsserted() && blocked) {
-        assert(!cache->system->bypassCaches());
-        DPRINTF(Cache,"Scheduling a retry while blocked\n");
-        mustSendRetry = true;
-        return false;
+    assert(!cache->system->bypassCaches());
+
+    bool success = false;
+
+    // always let inhibited requests through, even if blocked
+    if (pkt->memInhibitAsserted()) {
+        // this should always succeed
+        success = cache->recvTimingReq(pkt);
+        assert(success);
+    } else if (blocked || mustSendRetry) {
+        // either already committed to send a retry, or blocked
+        success = false;
+    } else {
+        // pass it on to the cache, and let the cache decide if we
+        // have to retry or not
+        success = cache->recvTimingReq(pkt);
     }
 
-    cache->recvTimingReq(pkt);
-    return true;
+    // remember if we have to retry
+    mustSendRetry = !success;
+    return success;
 }
 
 template<class TagStore>
@@ -1899,3 +2187,5 @@ MemSidePort::MemSidePort(const std::string &_name, Cache<TagStore> *_cache,
       _queue(*_cache, *this, _label), cache(_cache)
 {
 }
+
+#endif//__MEM_CACHE_CACHE_IMPL_HH__

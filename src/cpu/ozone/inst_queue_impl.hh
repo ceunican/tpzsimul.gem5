@@ -28,6 +28,9 @@
  * Authors: Kevin Lim
  */
 
+#ifndef __CPU_OZONE_INST_QUEUE_IMPL_HH__
+#define __CPU_OZONE_INST_QUEUE_IMPL_HH__
+
 // Todo:
 // Current ordering allows for 0 cycle added-to-scheduled.  Could maybe fake
 // it; either do in reverse order, or have added instructions put into a
@@ -1098,7 +1101,7 @@ InstQueue<Impl>::addToDependents(DynInstPtr &new_inst)
             // it be added to the dependency graph.
             if (src_reg >= numPhysRegs) {
                 continue;
-            } else if (regScoreboard[src_reg] == false) {
+            } else if (!regScoreboard[src_reg]) {
                 DPRINTF(IQ, "Instruction PC %#x has src reg %i that "
                         "is being added to the dependency chain.\n",
                         new_inst->readPC(), src_reg);
@@ -1342,3 +1345,5 @@ InstQueue<Impl>::dumpInsts()
 */
     }
 }
+
+#define//__CPU_OZONE_INST_QUEUE_IMPL_HH__

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 ARM Limited
+ * Copyright (c) 2012-2013 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -86,10 +86,17 @@ class Request
 {
   public:
     typedef uint32_t FlagsType;
+    typedef uint8_t ArchFlagsType;
     typedef ::Flags<FlagsType> Flags;
 
-    /** ASI information for this request if it exists. */
-    static const FlagsType ASI_BITS                    = 0x000000FF;
+    /**
+     * Architecture specific flags.
+     *
+     * These bits int the flag field are reserved for
+     * architecture-specific code. For example, SPARC uses them to
+     * represent ASIs.
+     */
+    static const FlagsType ARCH_BITS                   = 0x000000FF;
     /** The request was an instruction fetch. */
     static const FlagsType INST_FETCH                  = 0x00000100;
     /** The virtual address is also the physical address. */
@@ -104,6 +111,13 @@ class Request
     static const FlagsType MMAPPED_IPR                  = 0x00002000;
     /** This request is a clear exclusive. */
     static const FlagsType CLEAR_LL                    = 0x00004000;
+    /** This request is made in privileged mode. */
+    static const FlagsType PRIVILEGED                   = 0x00008000;
+
+    /** This is a write that is targeted and zeroing an entire cache block.
+     * There is no need for a read/modify/write
+     */
+    static const FlagsType CACHE_BLOCK_ZERO            = 0x00010000;
 
     /** The request should not cause a memory access. */
     static const FlagsType NO_ACCESS                   = 0x00080000;
@@ -126,6 +140,15 @@ class Request
     static const FlagsType PF_EXCLUSIVE                = 0x02000000;
     /** The request should be marked as LRU. */
     static const FlagsType EVICT_NEXT                  = 0x04000000;
+
+    /** The request should be handled by the generic IPR code (only
+     * valid together with MMAPPED_IPR) */
+    static const FlagsType GENERIC_IPR                 = 0x08000000;
+
+    /** The request targets the secure memory space. */
+    static const FlagsType SECURE                      = 0x10000000;
+    /** The request is a page table walk */
+    static const FlagsType PT_WALK                     = 0x20000000;
 
     /** These flags are *not* cleared when a Request object is reused
        (assigned a new address). */
@@ -206,6 +229,11 @@ class Request
      */
     Tick _time;
 
+    /**
+     * The task id associated with this request
+     */
+    uint32_t _taskId;
+
     /** The address space ID. */
     int _asid;
 
@@ -231,6 +259,8 @@ class Request
      *  default constructor.)
      */
     Request()
+        : _taskId(ContextSwitchTaskId::Unknown),
+        translateDelta(0), accessDelta(0), depth(0)
     {}
 
     /**
@@ -239,16 +269,19 @@ class Request
      * These fields are adequate to perform a request. 
      */
     Request(Addr paddr, int size, Flags flags, MasterID mid)
+        : _taskId(ContextSwitchTaskId::Unknown)
     {
         setPhys(paddr, size, flags, mid);
     }
 
     Request(Addr paddr, int size, Flags flags, MasterID mid, Tick time)
+        : _taskId(ContextSwitchTaskId::Unknown)
     {
         setPhys(paddr, size, flags, mid, time);
     }
 
     Request(Addr paddr, int size, Flags flags, MasterID mid, Tick time, Addr pc)
+        : _taskId(ContextSwitchTaskId::Unknown)
     {
         setPhys(paddr, size, flags, mid, time);
         privateFlags.set(VALID_PC);
@@ -257,6 +290,7 @@ class Request
 
     Request(int asid, Addr vaddr, int size, Flags flags, MasterID mid, Addr pc,
             int cid, ThreadID tid)
+        : _taskId(ContextSwitchTaskId::Unknown)
     {
         setVirt(asid, vaddr, size, flags, mid, pc);
         setThreadContext(cid, tid);
@@ -291,6 +325,9 @@ class Request
         _flags.set(flags);
         privateFlags.clear(~STICKY_PRIVATE_FLAGS);
         privateFlags.set(VALID_PADDR|VALID_SIZE);
+        depth = 0;
+        accessDelta = 0;
+        //translateDelta = 0;
     }
 
     void
@@ -318,6 +355,9 @@ class Request
         _flags.set(flags);
         privateFlags.clear(~STICKY_PRIVATE_FLAGS);
         privateFlags.set(VALID_VADDR|VALID_SIZE|VALID_PC);
+        depth = 0;
+        accessDelta = 0;
+        translateDelta = 0;
     }
 
     /**
@@ -369,6 +409,23 @@ class Request
     }
 
     /**
+     * Time for the TLB/table walker to successfully translate this request.
+     */
+    Tick translateDelta;
+
+    /**
+     * Access latency to complete this memory transaction not including
+     * translation time.
+     */
+    Tick accessDelta;
+
+    /**
+     * Level of the cache hierachy where this request was responded to
+     * (e.g. 0 = L1; 1 = L2).
+     */
+    int depth;
+
+    /**
      *  Accessor for size.
      */
     bool
@@ -418,6 +475,13 @@ class Request
         _flags.set(flags);
     }
 
+    void
+    setArchFlags(Flags flags)
+    {
+        assert(privateFlags.isSet(VALID_PADDR|VALID_VADDR));
+        _flags.set(flags & ARCH_BITS);
+    }
+
     /** Accessor function for vaddr.*/
     Addr
     getVaddr()
@@ -431,6 +495,17 @@ class Request
     masterId()
     {
         return _masterId;
+    }
+
+    uint32_t
+    taskId() const
+    {
+        return _taskId;
+    }
+
+    void
+    taskId(uint32_t id) {
+        _taskId = id;
     }
 
     /** Accessor function for asid.*/
@@ -448,12 +523,12 @@ class Request
         _asid = asid;
     }
 
-    /** Accessor function for asi.*/
-    uint8_t
-    getAsi()
+    /** Accessor function for architecture-specific flags.*/
+    ArchFlagsType
+    getArchFlags()
     {
-        assert(privateFlags.isSet(VALID_VADDR));
-        return _flags & ASI_BITS;
+        assert(privateFlags.isSet(VALID_PADDR|VALID_VADDR));
+        return _flags & ARCH_BITS;
     }
 
     /** Accessor function to check if sc result is valid. */
@@ -501,6 +576,13 @@ class Request
         return _threadId;
     }
 
+    void
+    setPC(Addr pc)
+    {
+        privateFlags.set(VALID_PC);
+        _pc = pc;
+    }
+
     bool
     hasPC() const
     {
@@ -515,17 +597,40 @@ class Request
         return _pc;
     }
 
+    /**
+     * Increment/Get the depth at which this request is responded to.
+     * This currently happens when the request misses in any cache level.
+     */
+    void incAccessDepth() { depth++; }
+    int getAccessDepth() const { return depth; }
+
+    /**
+     * Set/Get the time taken for this request to be successfully translated.
+     */
+    void setTranslateLatency() { translateDelta = curTick() - _time; }
+    Tick getTranslateLatency() const { return translateDelta; }
+
+    /**
+     * Set/Get the time taken to complete this request's access, not including
+     *  the time to successfully translate the request.
+     */
+    void setAccessLatency() { accessDelta = curTick() - _time - translateDelta; }
+    Tick getAccessLatency() const { return accessDelta; }
+
     /** Accessor functions for flags.  Note that these are for testing
        only; setting flags should be done via setFlags(). */
     bool isUncacheable() const { return _flags.isSet(UNCACHEABLE); }
     bool isInstFetch() const { return _flags.isSet(INST_FETCH); }
     bool isPrefetch() const { return _flags.isSet(PREFETCH); }
     bool isLLSC() const { return _flags.isSet(LLSC); }
+    bool isPriv() const { return _flags.isSet(PRIVILEGED); }
     bool isLocked() const { return _flags.isSet(LOCKED); }
     bool isSwap() const { return _flags.isSet(MEM_SWAP|MEM_SWAP_COND); }
     bool isCondSwap() const { return _flags.isSet(MEM_SWAP_COND); }
     bool isMmappedIpr() const { return _flags.isSet(MMAPPED_IPR); }
     bool isClearLL() const { return _flags.isSet(CLEAR_LL); }
+    bool isSecure() const { return _flags.isSet(SECURE); }
+    bool isPTWalk() const { return _flags.isSet(PT_WALK); }
 };
 
 #endif // __MEM_REQUEST_HH__

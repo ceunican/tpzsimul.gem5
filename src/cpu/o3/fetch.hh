@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 ARM Limited
+ * Copyright (c) 2010-2012, 2014 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -55,6 +55,7 @@
 #include "mem/packet.hh"
 #include "mem/port.hh"
 #include "sim/eventq.hh"
+#include "sim/probe/probe.hh"
 
 struct DerivO3CPUParams;
 
@@ -194,6 +195,9 @@ class DefaultFetch
     /** List that has the threads organized by priority. */
     std::list<ThreadID> priorityList;
 
+    /** Probe points. */
+    ProbePointArg<DynInstPtr> *ppFetch;
+
   public:
     /** DefaultFetch constructor. */
     DefaultFetch(O3CPU *_cpu, DerivO3CPUParams *params);
@@ -203,6 +207,9 @@ class DefaultFetch
 
     /** Registers statistics. */
     void regStats();
+
+    /** Registers probes. */
+    void regProbePoints();
 
     /** Sets the main backwards communication time buffer pointer. */
     void setTimeBuffer(TimeBuffer<TimeStruct> *time_buffer);
@@ -248,6 +255,8 @@ class DefaultFetch
     /** Tells fetch to wake up from a quiesce instruction. */
     void wakeFromQuiesce();
 
+    /** For priority-based fetch policies, need to keep update priorityList */
+    void deactivateThread(ThreadID tid);
   private:
     /** Reset this pipeline stage */
     void resetStage();
@@ -274,9 +283,9 @@ class DefaultFetch
     bool lookupAndUpdateNextPC(DynInstPtr &inst, TheISA::PCState &pc);
 
     /**
-     * Fetches the cache line that contains fetch_PC.  Returns any
+     * Fetches the cache line that contains the fetch PC.  Returns any
      * fault that happened.  Puts the data into the class variable
-     * cacheData.
+     * fetchBuffer, which may not hold the entire fetched cache line.
      * @param vaddr The memory address that is being fetched from.
      * @param ret_fault The fault reference that will be set to the result of
      * the icache access.
@@ -339,10 +348,10 @@ class DefaultFetch
      */
     void fetch(bool &status_change);
 
-    /** Align a PC to the start of an I-cache block. */
-    Addr icacheBlockAlignPC(Addr addr)
+    /** Align a PC to the start of a fetch buffer block. */
+    Addr fetchBufferAlignPC(Addr addr)
     {
-        return (addr & ~(cacheBlkMask));
+        return (addr & ~(fetchBufferMask));
     }
 
     /** The decoder. */
@@ -394,9 +403,6 @@ class DefaultFetch
     /** Wire to get commit's information from backwards time buffer. */
     typename TimeBuffer<TimeStruct>::wire fromCommit;
 
-    /** Internal fetch instruction queue. */
-    TimeBuffer<FetchStruct> *fetchQueue;
-
     //Might be annoying how this name is different than the queue.
     /** Wire used to write any information heading to decode. */
     typename TimeBuffer<FetchStruct>::wire toDecode;
@@ -427,9 +433,6 @@ class DefaultFetch
     /** Source of possible stalls. */
     struct Stalls {
         bool decode;
-        bool rename;
-        bool iew;
-        bool commit;
         bool drain;
     };
 
@@ -451,6 +454,9 @@ class DefaultFetch
     /** The width of fetch in instructions. */
     unsigned fetchWidth;
 
+    /** The width of decode in instructions. */
+    unsigned decodeWidth;
+
     /** Is the cache blocked?  If so no threads can access it. */
     bool cacheBlocked;
 
@@ -463,17 +469,28 @@ class DefaultFetch
     /** Cache block size. */
     unsigned int cacheBlkSize;
 
-    /** Mask to get a cache block's address. */
-    Addr cacheBlkMask;
+    /** The size of the fetch buffer in bytes. The fetch buffer
+     *  itself may be smaller than a cache line.
+     */
+    unsigned fetchBufferSize;
 
-    /** The cache line being fetched. */
-    uint8_t *cacheData[Impl::MaxThreads];
+    /** Mask to align a fetch address to a fetch buffer boundary. */
+    Addr fetchBufferMask;
 
-    /** The PC of the cacheline that has been loaded. */
-    Addr cacheDataPC[Impl::MaxThreads];
+    /** The fetch data that is being fetched and buffered. */
+    uint8_t *fetchBuffer[Impl::MaxThreads];
 
-    /** Whether or not the cache data is valid. */
-    bool cacheDataValid[Impl::MaxThreads];
+    /** The PC of the first instruction loaded into the fetch buffer. */
+    Addr fetchBufferPC[Impl::MaxThreads];
+
+    /** The size of the fetch queue in micro-ops */
+    unsigned fetchQueueSize;
+
+    /** Queue of fetched instructions. Per-thread to prevent HoL blocking. */
+    std::deque<DynInstPtr> fetchQueue[Impl::MaxThreads];
+
+    /** Whether or not the fetch buffer data is valid. */
+    bool fetchBufferValid[Impl::MaxThreads];
 
     /** Size of instructions. */
     int instSize;

@@ -31,7 +31,6 @@
 
 #include <iostream>
 
-#include "base/refcnt.hh"
 #include "mem/protocol/MessageSizeType.hh"
 #include "mem/ruby/common/NetDest.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
@@ -61,7 +60,7 @@ class NetworkMessage : public Message
     const NetDest&
     getInternalDestination() const
     {
-        if (m_internal_dest_valid == false)
+        if (!m_internal_dest_valid)
             return getDestination();
 
         return m_internal_dest;
@@ -70,7 +69,7 @@ class NetworkMessage : public Message
     NetDest&
     getInternalDestination()
     {
-        if (m_internal_dest_valid == false) {
+        if (!m_internal_dest_valid) {
             m_internal_dest = getDestination();
             m_internal_dest_valid = true;
         }

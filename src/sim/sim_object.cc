@@ -39,6 +39,7 @@
 #include "base/trace.hh"
 #include "base/types.hh"
 #include "debug/Checkpoint.hh"
+#include "sim/probe/probe.hh"
 #include "sim/sim_object.hh"
 #include "sim/stats.hh"
 
@@ -60,13 +61,13 @@ SimObject::SimObjectList SimObject::simObjectList;
 // SimObject constructor: used to maintain static simObjectList
 //
 SimObject::SimObject(const Params *p)
-    : EventManager(p->eventq), _params(p)
+    : EventManager(getEventQueue(p->eventq_index)), _params(p)
 {
 #ifdef DEBUG
     doDebugBreak = false;
 #endif
-
     simObjectList.push_back(this);
+    probeManager = new ProbeManager(this);
 }
 
 void
@@ -106,6 +107,28 @@ SimObject::regStats()
 void
 SimObject::resetStats()
 {
+}
+
+/**
+ * No probe points by default, so do nothing in base.
+ */
+void
+SimObject::regProbePoints()
+{
+}
+
+/**
+ * No probe listeners by default, so do nothing in base.
+ */
+void
+SimObject::regProbeListeners()
+{
+}
+
+ProbeManager *
+SimObject::getProbeManager()
+{
+    return probeManager;
 }
 
 //

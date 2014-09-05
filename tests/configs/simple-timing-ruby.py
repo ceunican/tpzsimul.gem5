@@ -79,14 +79,13 @@ system.cpu.clk_domain = SrcClockDomain(clock = '2GHz',
                                        voltage_domain = system.voltage_domain)
 
 system.mem_ranges = AddrRange('256MB')
-
 Ruby.create_system(options, system)
 
 # Create a separate clock for Ruby
 system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
                                         voltage_domain = system.voltage_domain)
 
-assert(len(system.ruby._cpu_ruby_ports) == 1)
+assert(len(system.ruby._cpu_ports) == 1)
 
 # create the interrupt controller
 cpu.createInterruptController()
@@ -95,7 +94,7 @@ cpu.createInterruptController()
 # Tie the cpu cache ports to the ruby cpu ports and
 # physmem, respectively
 #
-cpu.connectAllPorts(system.ruby._cpu_ruby_ports[0])
+cpu.connectAllPorts(system.ruby._cpu_ports[0])
 
 # -----------------------
 # run simulation
