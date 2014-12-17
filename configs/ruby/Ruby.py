@@ -39,7 +39,7 @@
 #
 # Authors: Brad Beckmann
 
-import math
+import math, time, os
 import m5
 from m5.objects import *
 from m5.defines import buildEnv
@@ -85,7 +85,29 @@ def define_options(parser):
     parser.add_option("--random_seed", type="int", default=1234,
                       help="Used for seeding the random number generator")
 
+    parser.add_option("--randomization", type="string", default="True",
+                      help="Enables ruby randomization")
+
     parser.add_option("--ruby_stats", type="string", default="ruby.stats")
+
+    #TOPAZ options
+    parser.add_option("--topaz-init-file", type = "string", default="./TPZSimul.ini",
+                       help="TOPAZ: File that declares <simulation>.sgm,"\
+                            " <network>.sgm and <router>.sgm" )
+
+    parser.add_option("--topaz-network", type = "string", default=False,
+                       help="TOPAZ: simulation listed in <simulation>.sgm to be used by TOPAZ" )
+
+    parser.add_option("--topaz-flit-size", type="int", default=16,
+                      help="TOPAZ: Number of bytes per physical router-to-router wire")
+
+    parser.add_option("--topaz-clock-ratio", type="int", default=1,
+                      help="TOPAZ: memory-network clock multiplier")
+
+    parser.add_option("--topaz-adaptive-interface-threshold",  type = "int", default=0,
+                       help="TOPAZ: Number of messages that has to be transmitted "\
+                             "before to activate TOPAZ" )
+
 
     protocol = buildEnv['PROTOCOL']
     exec "import %s" % protocol
@@ -115,12 +137,16 @@ def create_system(options, system, piobus = None, dma_ports = []):
         InterfaceClass = GarnetNetworkInterface_d
 
     elif options.garnet_network == "flexible":
-        NetworkClass = GarnetNetwork
-        IntLinkClass = GarnetIntLink
-        ExtLinkClass = GarnetExtLink
-        RouterClass = GarnetRouter
-        InterfaceClass = GarnetNetworkInterface
-
+        class NetworkClass(GarnetNetwork): pass
+        class IntLinkClass(GarnetIntLink): pass
+        class ExtLinkClass(GarnetExtLink): pass
+        class RouterClass(GarnetRouter): pass
+    elif options.topaz_network:
+        NetworkClass = TopazNetwork
+        IntLinkClass = SimpleIntLink
+        ExtLinkClass = SimpleExtLink
+        RouterClass = TopazSwitch
+        InterfaceClass = None
     else:
         NetworkClass = SimpleNetwork
         IntLinkClass = SimpleIntLink
@@ -128,7 +154,7 @@ def create_system(options, system, piobus = None, dma_ports = []):
         RouterClass = Switch
         InterfaceClass = None
 
-    # Instantiate the network object so that the controllers can connect to it.
+    # Create the network topology
     network = NetworkClass(ruby_system = ruby, topology = options.topology,
             routers = [], ext_links = [], int_links = [], netifs = [])
     ruby.network = network
@@ -137,7 +163,7 @@ def create_system(options, system, piobus = None, dma_ports = []):
     exec "import %s" % protocol
     try:
         (cpu_sequencers, dir_cntrls, topology) = \
-             eval("%s.create_system(options, system, dma_ports, ruby)"
+          eval("%s.create_system(options, system, dma_ports, ruby)"
                   % protocol)
     except:
         print "Error: could not create sytem for ruby protocol %s" % protocol
@@ -147,7 +173,6 @@ def create_system(options, system, piobus = None, dma_ports = []):
     # independent of the protocol and kept in the protocol-agnostic
     # part (i.e. here).
     sys_port_proxy = RubyPortProxy(ruby_system = ruby)
-
     # Give the system port proxy a SimObject parent without creating a
     # full-fledged controller
     system.sys_port_proxy = sys_port_proxy
@@ -168,12 +193,26 @@ def create_system(options, system, piobus = None, dma_ports = []):
         network.enable_fault_model = True
         network.fault_model = FaultModel()
 
+    #
+    #  TOPAZ INPUT PARAMETERS
+    #
+    if options.topaz_network:
+       #Garnet and Topaz are incompatible
+       assert (not(options.garnet_network !=None))
+       network.topaz_network =  options.topaz_network
+       network.topaz_flit_size =  options.topaz_flit_size
+       network.topaz_clock_ratio = options.topaz_clock_ratio
+       network.topaz_adaptive_interface_threshold = options.topaz_adaptive_interface_threshold
+       network.topaz_init_file = options.topaz_init_file
+
+    #
     # Loop through the directory controlers.
     # Determine the total memory size of the ruby system and verify it is equal
     # to physmem.  However, if Ruby memory is using sparse memory in SE
     # mode, then the system should not back-up the memory state with
     # the Memory Vector and thus the memory size bytes should stay at 0.
     # Also set the numa bits to the appropriate values.
+    #
     total_mem_size = MemorySize('0B')
 
     ruby.block_size_bytes = options.cacheline_size
@@ -208,3 +247,13 @@ def create_system(options, system, piobus = None, dma_ports = []):
     ruby._cpu_ports = cpu_sequencers
     ruby.num_of_sequencers = len(cpu_sequencers)
     ruby.random_seed    = options.random_seed
+
+    if options.random_seed == 1234:
+      if os.environ.has_key('SGE_TASK_ID'):
+        ruby.random_seed = time.gmtime().tm_hour*3600+time.gmtime().tm_min*60+time.gmtime().tm_sec + os.getpid() + int(os.environ['SGE_TASK_ID'])
+      else:
+        ruby.random_seed = time.gmtime().tm_hour*3600+time.gmtime().tm_min*60+time.gmtime().tm_sec + os.getpid()
+    else:
+      ruby.random_seed = options.random_seed
+    ruby.randomization = options.randomization
+

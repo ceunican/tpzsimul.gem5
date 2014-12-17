@@ -606,8 +606,10 @@ if main['GCC']:
         main['LTO_CCFLAGS'] = ['-flto=%d' % GetOption('num_jobs')]
 
         # Use the same amount of jobs for LTO as we are running
-        # scons with
-        main['LTO_LDFLAGS'] = ['-flto=%d' % GetOption('num_jobs')]
+        # scons with, we hardcode the use of the linker plugin
+        # which requires either gold or GNU ld >= 2.21
+        main['LTO_LDFLAGS'] = ['-flto=%d' % GetOption('num_jobs'),
+                               '-fuse-linker-plugin']
 
     main.Append(TCMALLOC_CCFLAGS=['-fno-builtin-malloc', '-fno-builtin-calloc',
                                   '-fno-builtin-realloc', '-fno-builtin-free'])
@@ -746,25 +748,9 @@ if compareVersions(swig_version[2], min_swig_version) < 0:
     print '       Installed version:', swig_version[2]
     Exit(1)
 
-# Check for known incompatibilities. The standard library shipped with
-# gcc >= 4.9 does not play well with swig versions prior to 3.0
-if main['GCC'] and compareVersions(gcc_version, '4.9') >= 0 and \
-        compareVersions(swig_version[2], '3.0') < 0:
-    print termcap.Yellow + termcap.Bold + \
-        'Warning: This combination of gcc and swig have' + \
-        ' known incompatibilities.\n' + \
-        '         If you encounter build problems, please update ' + \
-        'swig to 3.0 or later.' + \
-        termcap.Normal
-
 # Set up SWIG flags & scanner
 swig_flags=Split('-c++ -python -modern -templatereduce $_CPPINCFLAGS')
 main.Append(SWIGFLAGS=swig_flags)
-
-# Check for 'timeout' from GNU coreutils.  If present, regressions
-# will be run with a time limit.
-TIMEOUT_version = readCommand(['timeout', '--version'], exception=False)
-main['TIMEOUT'] = TIMEOUT_version and TIMEOUT_version.find('timeout') == 0
 
 # filter out all existing swig scanners, they mess up the dependency
 # stuff for some reason
@@ -1177,7 +1163,11 @@ main.SConscript('ext/dramsim2/SConscript',
 
 # DRAMPower build is shared across all configs in the build root.
 main.SConscript('ext/drampower/SConscript',
-                variant_dir = joinpath(build_root, 'drampower'))
+                variant_dir = joinpath(build_root, 'drampower')) 
+
+# topaz build is shared across all configs in the build root.
+main.SConscript('ext/TOPAZ/SConscript',
+                variant_dir = joinpath(build_root, 'topaz'))
 
 ###################################################
 #
