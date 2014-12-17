@@ -65,17 +65,19 @@ TopazSwitch::init()
 }
 
 void
-TopazSwitch::addInPort(const map<int, MessageBuffer*>& in)
+TopazSwitch::addInPort(const vector<MessageBuffer*>& in)
 {
     m_perfect_switch_ptr->addInPort(in);
 
     for (auto& it : in) {
-        it.second->setReceiver(this);
+        if (it != nullptr) {
+            it->setReceiver(this);
+        }
     }
 }
 
 void
-TopazSwitch::addOutPort(const map<int, MessageBuffer*>& out,
+TopazSwitch::addOutPort(const vector<MessageBuffer*>& out,
                    const NetDest& routing_table_entry,
                    Cycles link_latency, int bw_multiplier)
 {
@@ -88,10 +90,12 @@ TopazSwitch::addOutPort(const map<int, MessageBuffer*>& out,
     m_throttles.push_back(throttle_ptr);
 
     // Create one buffer per vnet (these are intermediaryQueues)
-    map<int, MessageBuffer*> intermediateBuffers;
+    vector<MessageBuffer*> intermediateBuffers;
 
-    for (auto& it : out) {
-        it.second->setSender(this);
+    for (int i = 0; i < out.size(); ++i) {
+        if (out[i] != nullptr) {
+            out[i]->setSender(this);
+        }
 
         MessageBuffer* buffer_ptr = new MessageBuffer;
         // Make these queues ordered
@@ -100,7 +104,7 @@ TopazSwitch::addOutPort(const map<int, MessageBuffer*>& out,
             buffer_ptr->resize(m_network_ptr->getBufferSize());
         }
 
-        intermediateBuffers[it.first] = buffer_ptr;
+        intermediateBuffers.push_back(buffer_ptr);
         m_buffers_to_free.push_back(buffer_ptr);
 
         buffer_ptr->setSender(this);
