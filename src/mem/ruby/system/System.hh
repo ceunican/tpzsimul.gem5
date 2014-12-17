@@ -79,7 +79,14 @@ class RubySystem : public ClockedObject
     static uint64_t getMemorySizeBytes() { return m_memory_size_bytes; }
     static uint32_t getMemorySizeBits() { return m_memory_size_bits; }
 
-    // Public Methods
+   // Public Methods
+    Network*
+    getNetwork()
+    {
+        assert(m_network != NULL);
+        return m_network;
+    }
+
     Profiler*
     getProfiler()
     {
