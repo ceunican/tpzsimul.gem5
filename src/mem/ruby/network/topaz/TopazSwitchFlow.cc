@@ -33,10 +33,10 @@
 #include "base/cast.hh"
 #include "base/random.hh"
 #include "debug/RubyNetwork.hh"
-#include "mem/ruby/network/topaz/TopazNetwork.hh"
-#include "mem/ruby/network/topaz/TopazSwitch.hh"
-#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
+#include "mem/ruby/network/topaz/TopazNetwork.hh"
+#include "mem/ruby/network/topaz/TopazSwitchFlow.hh"
+#include "mem/ruby/network/topaz/TopazSwitch.hh"
 #include "mem/ruby/profiler/Profiler.hh"
 #include "mem/ruby/slicc_interface/NetworkMessage.hh"
 #include "mem/ruby/system/System.hh"
@@ -69,33 +69,36 @@ TopazSwitchFlow::init(TopazNetwork *network_ptr)
 {
     m_network_ptr = network_ptr;
 
-    for(int i = 0;i < m_virtual_networks;++i)
-    {
+    for(int i = 0;i < m_virtual_networks;++i) {
         m_pending_message_count.push_back(0);
     }
 }
 
 void
-TopazSwitchFlow::addInPort(const map<int, MessageBuffer*>& in)
+TopazSwitchFlow::addInPort(const vector<MessageBuffer*>& in)
 {
     NodeID port = m_in.size();
     m_in.push_back(in);
 
-    for (auto& it : in) {
-        it.second->setConsumer(this);
+    for (int i = 0; i < in.size(); ++i) {
+        if (in[i] != nullptr) {
+            in[i]->setConsumer(this);
 
-        string desc = csprintf("[Queue from port %s %s %s to PerfectSwitch]",
-            to_string(m_switch_id), to_string(port), to_string(it.first));
+            string desc =
+                csprintf("[Queue from port %s %s %s to PerfectSwitch]",
+                         to_string(m_switch_id), to_string(port),
+                         to_string(i));
 
-        it.second->setDescription(desc);
-        it.second->setIncomingLink(port);
-        it.second->setVnet(it.first);
+            in[i]->setDescription(desc);
+            in[i]->setIncomingLink(port);
+            in[i]->setVnet(i);
+        }
     }
 }
 
 void
-TopazSwitchFlow::addOutPort(const map<int, MessageBuffer*>& out,
-    const NetDest& routing_table_entry)
+TopazSwitchFlow::addOutPort(const vector<MessageBuffer*>& out,
+                            const NetDest& routing_table_entry)
 {
     // Setup link order
     LinkOrder l;
@@ -107,7 +110,6 @@ TopazSwitchFlow::addOutPort(const map<int, MessageBuffer*>& out,
     m_out.push_back(out);
     m_routing_table.push_back(routing_table_entry);
 }
-
 
 TopazSwitchFlow::~TopazSwitchFlow()
 {
@@ -234,10 +236,20 @@ void TopazSwitchFlow::wakeup() {
             vector<NetDest> output_link_destinations;
 
             // Is there a message waiting?
-            auto it = m_in[incoming].find(vnet);
-            if (it == m_in[incoming].end())
-                continue;
-            MessageBuffer *buffer = (*it).second;
+            //auto it = m_in[incoming].find(vnet);
+            //if (it == m_in[incoming].end())
+            //    continue;
+
+            //MessageBuffer *buffer = (*it).second;
+
+            if (m_in[incoming].size() <= vnet) {
+                 continue;
+            }
+
+             MessageBuffer *buffer = m_in[incoming][vnet];
+             if (buffer == nullptr) {
+                 continue;
+             }
 
             //If there is packets waiting, we move it to Topaz
             while(buffer->isReady()){
@@ -406,10 +418,14 @@ TopazSwitchFlow::wakeupVnet(int vnet)
             vector<NetDest> output_link_destinations;
 
             // Is there a message waiting?
-            auto it = m_in[incoming].find(vnet);
-            if (it == m_in[incoming].end())
+            if (m_in[incoming].size() <= vnet) {
                 continue;
-            MessageBuffer *buffer = (*it).second;
+            }
+
+            MessageBuffer *buffer = m_in[incoming][vnet];
+            if (buffer == nullptr) {
+                continue;
+            }
 
             while (buffer->isReady()) {
                 DPRINTF(RubyNetwork, "incoming: %d\n", incoming);
